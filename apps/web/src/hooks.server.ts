@@ -3,6 +3,9 @@ import { sequence } from '@sveltejs/kit/hooks';
 import { deLocalizeUrl, getTextDirection } from '$lib/paraglide/runtime';
 import { paraglideMiddleware } from '$lib/paraglide/server';
 import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
+// Side effect: registers the blog's media reference check before any request
+// can delete media (the check lives in the blog server barrel's module init).
+import '$lib/modules/blog/server';
 
 const handleParaglide: Handle = ({ event, resolve }) =>
 	paraglideMiddleware(event.request, ({ request, locale }) => {
