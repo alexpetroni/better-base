@@ -18,9 +18,11 @@
 		"test:e2e": "npm run build && playwright install chromium && playwright test",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
-		"db:seed": "node scripts/seed.ts"
+		"db:seed": "node scripts/seed.ts",
+		"user:create": "node scripts/user-create.ts"
 	},
 	"dependencies": {
+		"better-auth": "^1.6.23",
 		"drizzle-orm": "^0.45.2",
 		"formcomp": "workspace:*",
 		"pg": "^8.16.3"

@@ -13,6 +13,7 @@
 		"test:unit": "pnpm -r --if-present test:unit",
 		"test:e2e": "pnpm --filter web test:e2e",
 		"db:migrate": "pnpm --filter web db:migrate",
-		"db:seed": "pnpm --filter web db:seed"
+		"db:seed": "pnpm --filter web db:seed",
+		"user:create": "pnpm --filter web user:create"
 	}
 }
