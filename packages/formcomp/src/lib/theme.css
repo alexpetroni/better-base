@@ -1,0 +1,40 @@
+/*
+ * formcomp theme tokens.
+ *
+ * Import this file once in your app CSS:
+ *   @import 'formcomp/theme.css';
+ *
+ * Customize by overriding any variable:
+ *   .formcomp { --form-accent: oklch(0.55 0.2 150); --form-radius: 0; }
+ *
+ * Tokens are scoped to `.formcomp`, which MultiStepForm renders on its root
+ * element. When using input components standalone, wrap them in an element
+ * with class="formcomp".
+ */
+.formcomp {
+	--form-accent: oklch(0.208 0.042 265.755);
+	--form-accent-foreground: oklch(0.984 0.003 247.858);
+	--form-bg: oklch(1 0 0);
+	--form-fg: oklch(0.129 0.042 264.695);
+	--form-muted: oklch(0.554 0.046 257.417);
+	--form-border: oklch(0.929 0.013 255.508);
+	--form-error: oklch(0.577 0.245 27.325);
+	--form-radius: 0.625rem;
+
+	color: var(--form-fg);
+}
+
+/*
+ * Dark theme. Applies automatically when a `.dark` class wraps the form
+ * (the common Tailwind class-based dark mode convention). Override or
+ * replace these values the same way as the light ones.
+ */
+.dark .formcomp {
+	--form-accent: oklch(0.929 0.013 255.508);
+	--form-accent-foreground: oklch(0.208 0.042 265.755);
+	--form-bg: oklch(0.208 0.042 265.755);
+	--form-fg: oklch(0.984 0.003 247.858);
+	--form-muted: oklch(0.704 0.04 256.788);
+	--form-border: oklch(1 0 0 / 10%);
+	--form-error: oklch(0.704 0.191 22.216);
+}

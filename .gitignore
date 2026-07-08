@@ -1,0 +1,12 @@
+node_modules/
+.svelte-kit/
+dist/
+build/
+.env
+.env.*
+!.env.example
+test-results/
+playwright-report/
+*.log
+.DS_Store
+BLOCKER.md
