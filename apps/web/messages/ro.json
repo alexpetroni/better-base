@@ -1,4 +1,10 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"hello_world": "Hello, {name} from ro!"
+	"home_tagline": "Ghiduri, teste și produse pentru o viață mai bună.",
+	"home_pillars_heading": "Pilonii noștri",
+	"pillar_placeholder": "În curând: articole, teste și recomandări pentru acest pilon.",
+	"error_not_found": "Pagina căutată nu există.",
+	"error_generic": "A apărut o eroare. Încearcă din nou.",
+	"error_back_home": "Înapoi la prima pagină",
+	"dev_form_heading": "Test de integrare formcomp"
 }

@@ -1,4 +1,10 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"hello_world": "Hello, {name} from en!"
+	"home_tagline": "Guides, quizzes and products for a better life.",
+	"home_pillars_heading": "Our pillars",
+	"pillar_placeholder": "Coming soon: articles, quizzes and recommendations for this pillar.",
+	"error_not_found": "The page you are looking for does not exist.",
+	"error_generic": "Something went wrong. Please try again.",
+	"error_back_home": "Back to the homepage",
+	"dev_form_heading": "formcomp integration test"
 }
