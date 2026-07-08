@@ -17,7 +17,7 @@
 	{#each data.pillars as pillar (pillar.slug)}
 		<li data-testid="pillar-item">
 			<a
-				href={resolve('/sanatate/[pillar]', { pillar: pillar.slug })}
+				href={resolve('/(public)/sanatate/[pillar]', { pillar: pillar.slug })}
 				class="block rounded-lg border border-(--color-brand-soft) bg-white p-4 transition-shadow hover:shadow-md"
 			>
 				<span class="font-semibold text-(--color-brand)">{pillar.name}</span>

@@ -46,7 +46,9 @@ const db = createDb(databaseUrl);
 try {
 	const auth = createAuth({ db, secret, baseURL: process.env.PUBLIC_SITE_URL });
 	const result = await upsertStaffUser(auth, { email, password, role, name });
-	console.log(`${result.status === 'created' ? 'Created' : 'Updated'} ${result.role} user ${result.email} (${result.userId})`);
+	console.log(
+		`${result.status === 'created' ? 'Created' : 'Updated'} ${result.role} user ${result.email} (${result.userId})`
+	);
 } finally {
 	await db.$client.end();
 }

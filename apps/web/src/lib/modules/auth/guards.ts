@@ -6,9 +6,7 @@ export const ADMIN_ONLY_SECTIONS = ['products', 'orders', 'subscribers', 'settin
 export type AdminOnlySection = (typeof ADMIN_ONLY_SECTIONS)[number];
 
 export type AdminGuardDecision =
-	| { kind: 'allow' }
-	| { kind: 'login-redirect' }
-	| { kind: 'forbidden' };
+	{ kind: 'allow' } | { kind: 'login-redirect' } | { kind: 'forbidden' };
 
 export function isStaffRole(value: unknown): value is StaffRole {
 	return value === 'admin' || value === 'editor';
