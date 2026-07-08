@@ -7,11 +7,16 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb } from '../src/lib/db/client.ts';
 import { createAuth } from '../src/lib/modules/auth/auth.ts';
 import { upsertStaffUser } from '../src/lib/modules/auth/staff.ts';
+import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
+import { createStorage } from '../src/lib/modules/media/storage.ts';
 import { E2E_ADMIN, E2E_EDITOR, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
 
 export default async function globalSetup() {
 	const secret = process.env.BETTER_AUTH_SECRET;
 	if (!secret) throw new Error('BETTER_AUTH_SECRET is not set — configure the root .env');
+
+	// A fresh compose stack has no bucket yet (same bootstrap as `pnpm storage:init`).
+	await createStorage(storageConfigFromEnv(process.env)).ensureBucket();
 
 	for (const siteId of Object.keys(SITE_DB_NAMES) as Array<keyof typeof SITE_DB_NAMES>) {
 		const db = createDb(siteDatabaseUrl(siteId));
@@ -21,6 +26,9 @@ export default async function globalSetup() {
 			await upsertStaffUser(auth, { ...E2E_ADMIN, role: 'admin' });
 			await upsertStaffUser(auth, { ...E2E_EDITOR, role: 'editor' });
 			await db.execute(sql`delete from login_attempts`);
+			// Media uploads are created/deleted by the tests themselves; a failed
+			// earlier run must not leave cards behind that break filename filters.
+			await db.execute(sql`delete from media`);
 		} finally {
 			await db.$client.end();
 		}
