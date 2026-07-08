@@ -1,0 +1,18 @@
+{
+	"name": "better-base",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"packageManager": "pnpm@11.10.0",
+	"scripts": {
+		"prepare": "pnpm --filter formcomp package",
+		"dev": "pnpm --filter web dev",
+		"build": "pnpm --filter web build",
+		"lint": "pnpm -r --if-present lint",
+		"check": "pnpm -r --if-present check",
+		"test:unit": "pnpm -r --if-present test:unit",
+		"test:e2e": "pnpm --filter web test:e2e",
+		"db:migrate": "pnpm --filter web db:migrate",
+		"db:seed": "pnpm --filter web db:seed"
+	}
+}
