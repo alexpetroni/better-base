@@ -1,4 +1,7 @@
-# Local development services. Phase 2 adds MinIO + imgproxy as further services.
+# Local development services: Postgres, MinIO (S3-compatible storage) and
+# imgproxy (on-the-fly image transforms, signed URLs, reads from MinIO).
+# All dev credentials/keys below are defaults for local use only; every one of
+# them can be overridden from the environment / root .env.
 services:
   db:
     image: postgres:16
@@ -19,5 +22,49 @@ services:
       timeout: 3s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-better-media}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-better-media-secret}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  imgproxy:
+    image: ghcr.io/imgproxy/imgproxy:v3
+    restart: unless-stopped
+    environment:
+      # Signature is mandatory: without valid key/salt-signed URLs imgproxy 403s.
+      IMGPROXY_KEY: ${IMGPROXY_KEY:-bfd9adf6c395743b3c86b59c5ba7c418986de2ce4f2d6828812a8bf02ae838fb}
+      IMGPROXY_SALT: ${IMGPROXY_SALT:-04efffdcb59e1b8953506cfd05e0f30de80767ef4c5710ecf514f49a6352fec5}
+      # Source images come from the s3:// bucket; inside the compose network
+      # MinIO is reached by service name, not the host-published port.
+      IMGPROXY_USE_S3: 'true'
+      IMGPROXY_S3_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-better-media}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-better-media-secret}
+      AWS_REGION: ${S3_REGION:-us-east-1}
+    ports:
+      - '${IMGPROXY_PORT:-8888}:8080'
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'imgproxy', 'health']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   db-data:
+  minio-data:
