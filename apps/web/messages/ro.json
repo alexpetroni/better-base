@@ -24,5 +24,20 @@
 	"admin_nav_settings": "Setări",
 	"admin_dashboard_heading": "Panou de control",
 	"admin_stub_note": "Disponibil în faza {phase}.",
-	"error_forbidden": "Nu ai acces la această pagină."
+	"error_forbidden": "Nu ai acces la această pagină.",
+	"admin_media_dropzone": "Trage imagini aici sau apasă pentru a alege fișiere",
+	"admin_media_hint": "JPEG, PNG, WebP, AVIF, GIF sau SVG, max. 15 MB",
+	"admin_media_uploading": "Se încarcă…",
+	"admin_media_empty": "Nicio resursă media încă. Încarcă prima imagine mai sus.",
+	"admin_media_alt_label": "Text alternativ",
+	"admin_media_alt_save": "Salvează",
+	"admin_media_alt_saved": "Salvat",
+	"admin_media_delete": "Șterge",
+	"admin_media_upload_failed": "Încărcare eșuată pentru {filename}: {reason}",
+	"admin_media_err_mime": "tip de fișier neacceptat",
+	"admin_media_err_size": "fișierul depășește 15 MB",
+	"admin_media_err_server": "eroare de server",
+	"admin_media_referenced": "Nu se poate șterge: este folosită de {by}.",
+	"admin_media_video_badge": "Video: {provider}",
+	"admin_media_dimensions": "{width}×{height} px"
 }

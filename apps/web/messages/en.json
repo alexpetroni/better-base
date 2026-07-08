@@ -24,5 +24,20 @@
 	"admin_nav_settings": "Settings",
 	"admin_dashboard_heading": "Dashboard",
 	"admin_stub_note": "Coming in phase {phase}.",
-	"error_forbidden": "You do not have access to this page."
+	"error_forbidden": "You do not have access to this page.",
+	"admin_media_dropzone": "Drag images here or click to choose files",
+	"admin_media_hint": "JPEG, PNG, WebP, AVIF, GIF or SVG, max 15 MB",
+	"admin_media_uploading": "Uploading…",
+	"admin_media_empty": "No media yet. Upload your first image above.",
+	"admin_media_alt_label": "Alt text",
+	"admin_media_alt_save": "Save",
+	"admin_media_alt_saved": "Saved",
+	"admin_media_delete": "Delete",
+	"admin_media_upload_failed": "Upload failed for {filename}: {reason}",
+	"admin_media_err_mime": "unsupported file type",
+	"admin_media_err_size": "file exceeds 15 MB",
+	"admin_media_err_server": "server error",
+	"admin_media_referenced": "Cannot delete: it is used by {by}.",
+	"admin_media_video_badge": "Video: {provider}",
+	"admin_media_dimensions": "{width}×{height} px"
 }
