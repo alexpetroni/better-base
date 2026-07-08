@@ -19,12 +19,16 @@
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"db:seed": "node scripts/seed.ts",
+		"storage:init": "node scripts/storage-init.ts",
 		"user:create": "node scripts/user-create.ts"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "^3.1081.0",
+		"@aws-sdk/s3-request-presigner": "^3.1081.0",
 		"better-auth": "^1.6.23",
 		"drizzle-orm": "^0.45.2",
 		"formcomp": "workspace:*",
+		"image-size": "^2.0.2",
 		"pg": "^8.16.3"
 	},
 	"devDependencies": {

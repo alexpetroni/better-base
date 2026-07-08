@@ -42,8 +42,9 @@ export default defineConfig(
 				{
 					patterns: [
 						{
-							group: ['$lib/modules/*/*', '$lib/modules/*/*/**'],
-							message: 'Cross-module imports must go through the module barrel: $lib/modules/<name>'
+							group: ['$lib/modules/*/*', '$lib/modules/*/*/**', '!$lib/modules/*/server'],
+							message:
+								'Cross-module imports must go through a module barrel: $lib/modules/<name> (universal) or $lib/modules/<name>/server (server-only)'
 						}
 					]
 				}
