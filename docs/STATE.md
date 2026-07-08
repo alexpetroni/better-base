@@ -1,4 +1,4 @@
-# STATE — after Phase 1 (Auth & admin shell)
+# STATE — after Phase 2 (Media pipeline)
 
 ## What exists
 
@@ -16,8 +16,13 @@
     non-canonical pillar). Server code gets the active config via
     `getSite()` from `$lib/server/site` (reads `SITE_ID` from `$env/dynamic/private`,
     memoized per process).
-- **Database**: Postgres 16 via root `docker-compose.yml` (service `db`, host port
-  `${DB_PORT:-5433}`; 5432 was taken on this host). A fresh volume auto-creates
+- **Compose stack** (root `docker-compose.yml`): `db` (Postgres 16, host port
+  `${DB_PORT:-5433}`; 5432 was taken on this host), `minio` (S3 API on
+  `${MINIO_PORT:-9000}`, console on `${MINIO_CONSOLE_PORT:-9001}`) and `imgproxy`
+  (host port `${IMGPROXY_PORT:-8888}`, signature required, reads sources from
+  `s3://…` via `http://minio:9000` inside the compose network). All dev
+  credentials/keys have compose defaults matching `.env.example`.
+- **Database**: Postgres 16 (service `db` above). A fresh volume auto-creates
   `better_sleep`, `better_life`, `better_test` (see `docker/postgres-init/`).
   Drizzle: schema barrel `apps/web/src/lib/db/schema/index.ts` (composes future module
   schemas; core has `pillars`), client factory in `db/client.ts`, lazy app client
@@ -80,12 +85,67 @@
   stub pages: media→phase 2, articles→3, quizzes/subscribers→4,
   products/orders→5, settings→7. `admin/login` sits outside the shell group.
 
+## Media (Phase 2)
+
+- **modules/media** (`apps/web/src/lib/modules/media/`), with TWO barrels — this
+  phase introduced the pattern (ESLint now allows both):
+  - `$lib/modules/media` (universal): the `<Img>` component, upload validation
+    (`ALLOWED_IMAGE_MIMES` jpeg/png/webp/avif/gif/svg, `MAX_UPLOAD_BYTES` 15 MB,
+    `validateUpload`, `mediaKeyFor`) and types only.
+  - `$lib/modules/media/server` (server-only): everything that signs or touches
+    storage/db — importing it from client code fails the build by design, because
+    `IMGPROXY_KEY`/`IMGPROXY_SALT` and S3 credentials must never reach the browser.
+- **Schema**: `media` table (migration `0002`) — text id (uuid), `kind`
+  `image | video-embed`, `key` (unique storage path, null for video), filename,
+  mime, size, width, height, `alt` (not null, default ''), `blurhash` (nullable,
+  NOT populated yet — computing it needs pixel decoding, deferred), video
+  provider (`youtube | bunny`) + external id, created_by → users, created_at.
+  A check constraint enforces the image/video column shape.
+- **URL building** (`imgproxy.ts`, pure): `signImgproxyPath` (HMAC-SHA256 over
+  salt+path, base64url), `buildImgUrl(cfg, key, {w,h,fit,format,dpr})`,
+  `buildSrcset` (1x/2x), `imageSources(cfg, row|key, {w,h,fit})` → serializable
+  `ImageSources`. Server-bound shortcuts in the server barrel: `imgUrl()`,
+  `imgSources()`. SVGs are emitted unresized/unconverted. The unit test vector
+  was validated against the live imgproxy container.
+- **Upload flow**: browser → `POST /admin/media/upload` `{op:'presign',
+  filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
+  the file straight to storage (presigned URL signs content-type AND
+  content-length — a mismatching PUT gets 403 from storage; see
+  `signableHeaders` in `storage.ts`) → `{op:'confirm', key, filename}` verifies
+  the object exists, re-validates its real size/mime, reads width/height
+  server-side (`image-size`) and inserts the row.
+- **`<Img>`** (`Img.svelte`): takes a server-built `ImageSources` (`image` prop),
+  renders `<picture>` with avif+webp 1x/2x srcsets and lazy `<img>`; alt comes
+  from the row or the `alt` prop; empty alt without `decorative` logs a dev
+  warning. URLs are signed ONLY in `load`/endpoints — components never see keys.
+- **Admin library** (`/admin/media`, editor-accessible): drag&drop/click upload
+  (multiple files), thumbnail grid via imgproxy, inline alt editing
+  (`?/updateAlt`), delete (`?/delete` — removes object + row). Deletion is
+  refused with 409 while any registered reference check claims the row:
+  `registerMediaReferenceCheck({name, isReferenced})` from the server barrel —
+  content modules of later phases MUST register one per media-referencing table.
+- **Video embeds**: schema + `createVideoEmbed()` service exist and the library
+  grid renders such rows as a provider/id card; there is no admin UI to add
+  them yet (do it in the phase that first embeds video into content).
+- **Storage** (`storage.ts`): `createStorage(cfg)` wraps the AWS SDK v3 client
+  (`forcePathStyle: true`). NO MinIO-specific code paths anywhere — switching to
+  Cloudflare R2 is purely `S3_*` env var changes (verified by reading the code:
+  endpoint/creds/bucket/region all come from config; `ensureBucket` is only used
+  by bootstrap/tests, R2 buckets can pre-exist).
+- **Bootstrap**: `docker compose up -d` then `pnpm storage:init` (idempotent
+  bucket creation; the e2e global-setup also ensures the bucket, and the fresh
+  stack path — volume wiped, `up -d`, `storage:init`, full integration run —
+  was exercised in this phase).
+
 ## Key commands (all from repo root)
 
-- `docker compose up -d db` — start Postgres.
+- `docker compose up -d` — start Postgres + MinIO + imgproxy (`--wait` works, all
+  have healthchecks).
+- `pnpm storage:init` — create the media bucket (idempotent).
 - `pnpm dev` / `pnpm build` — dev server / production build (adapter-node).
 - `pnpm lint && pnpm check && pnpm test:unit` — the phase gate; all green.
-- `pnpm test:e2e` — builds, then runs playwright against two preview servers
+- `pnpm test:e2e` — needs the full compose stack up; builds, then runs playwright
+  against two preview servers
   (port 4173 = `SITE_ID=sleep`, 4174 = `SITE_ID=life`); one build serves both because
   `SITE_ID` is read at runtime.
 - `pnpm user:create -- --email … --password … --role admin|editor` — create/update
@@ -100,8 +160,20 @@
   `TEST_DATABASE_URL`, `PUBLIC_SITE_URL`, `DB_PORT`, `BETTER_AUTH_SECRET` (new in
   Phase 1 — better-auth session secret; generate a real one outside dev). It is loaded by `vite.config.ts`
   (dotenv, never overrides real env), `drizzle.config.ts`, `scripts/seed.ts`, and the
-  vitest setup file. In this agent container all DB hosts are `host.docker.internal`
-  (compose containers are siblings); `.env.example` documents `localhost` for humans.
+  vitest setup file. In this agent container all service hosts are
+  `host.docker.internal` (compose containers are siblings); `.env.example`
+  documents `localhost` for humans.
+- Phase 2 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+  (`better-base-media`), `S3_REGION`, `IMGPROXY_URL`, `IMGPROXY_KEY`,
+  `IMGPROXY_SALT`, plus compose port knobs `MINIO_PORT`, `MINIO_CONSOLE_PORT`,
+  `IMGPROXY_PORT`. **Reachability rule**: `S3_ENDPOINT` and `IMGPROXY_URL` must be
+  reachable by BOTH the server process and the browser (presigned PUTs and <img>
+  fetches go directly from the browser). In this container that is
+  `host.docker.internal:9000/8888` for both, because the app/vitest/playwright's
+  chromium all run in the agent container while minio/imgproxy are siblings with
+  host-published ports; on a human host machine `localhost:9000/8888` serves both
+  roles. A prod split (internal S3 endpoint + public imgproxy domain) would need
+  separate vars — not needed yet.
 - Host port **5433** for Postgres (5432 is occupied by an unrelated container on this
   host). Container port stays 5432.
 - **Playwright in this container**: chromium's system libraries were installed
@@ -125,6 +197,18 @@
   integration specs reset the shared test database.
 - E2E smoke (`e2e/smoke.e2e.ts`): both SITE_IDs — site name in header, exact pillar
   count, active pillar page 200, unknown/inactive pillar 404.
+- Unit: imgproxy signing/URL building (`modules/media/imgproxy.spec.ts` — the
+  known-signature vector was verified live against the container) and upload
+  validation/key slugging (`modules/media/validation.spec.ts`).
+- Integration (`modules/media/media.spec.ts`, needs db+minio+imgproxy up):
+  presign → PUT fixture (320×200 png from `tests/fixtures/`) → confirm records
+  dimensions; wrong-content-type PUT 403s; signed imgproxy URL → 200
+  `image/webp`, unsigned/tampered → 403; alt update; reference-check refusal;
+  delete removes row + object; video-embed rows.
+- E2E media (`e2e/media.e2e.ts`, both SITE_IDs): upload via the library, thumbnail
+  actually renders (naturalWidth > 0, i.e. signed imgproxy URL served bytes to a
+  real browser), alt edit survives reload, delete removes the card. Global setup
+  also creates the bucket and clears the `media` table.
 - E2E admin (`e2e/admin.e2e.ts`, both SITE_IDs): anonymous redirect, wrong
   password ×5 then 6th rate-limited, admin login→dashboard→logout, editor 403 on
   admin-only routes. `e2e/global-setup.ts` migrates BOTH site DBs, seeds
@@ -137,6 +221,15 @@
 - Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
   stub `+page.svelte` (they render `StubPage.svelte`). The sidebar entry already
   exists; nav labels are paraglide messages (`admin_nav_*`).
+- To show an image: build `imgSources(row, { w })` in a `load` function
+  (server barrel) and pass it to `<Img>` (universal barrel). Never import the
+  server barrel from a component.
+- Any table that references `media.id` must register a
+  `registerMediaReferenceCheck` at module init (see the integration spec for the
+  shape) so the library's delete button starts refusing correctly.
+- Module barrels: if your module needs $env/db-touching exports AND
+  component/client exports, split them `index.ts` + `server.ts` like media does
+  (ESLint allows `$lib/modules/<name>/server`).
 - New admin-only sections must be added to `ADMIN_ONLY_SECTIONS` in
   `modules/auth/guards.ts`; everything else under /admin is editor-accessible by
   default.
