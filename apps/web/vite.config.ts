@@ -3,9 +3,14 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { config } from 'dotenv';
+import path from 'node:path';
+
+// The .env lives at the repo root, shared with docker compose and drizzle-kit.
+// Load it into process.env for dev/preview/test; existing env vars win.
+config({ path: path.resolve(import.meta.dirname, '../../.env') });
 
 export default defineConfig({
-	// .env files live at the repo root, shared with docker compose and drizzle-kit.
 	envDir: '../../',
 	plugins: [
 		tailwindcss(),
