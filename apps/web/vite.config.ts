@@ -34,7 +34,10 @@ export default defineConfig({
 					environment: 'node',
 					include: ['src/**/*.{test,spec}.{js,ts}'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}'],
-					setupFiles: ['./tests/vitest-setup.ts']
+					setupFiles: ['./tests/vitest-setup.ts'],
+					// Integration specs reset and re-migrate the shared test database;
+					// running spec files concurrently would have them race each other.
+					fileParallelism: false
 				}
 			}
 		]
