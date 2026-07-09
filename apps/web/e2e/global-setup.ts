@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
-import { seedDemoQuiz, seedPillars } from '../src/lib/db/seed.ts';
+import { seedDemoProducts, seedDemoQuiz, seedPillars } from '../src/lib/db/seed.ts';
 import { createAuth } from '../src/lib/modules/auth/auth.ts';
 import { upsertStaffUser } from '../src/lib/modules/auth/staff.ts';
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
@@ -18,7 +18,8 @@ export default async function globalSetup() {
 	if (!secret) throw new Error('BETTER_AUTH_SECRET is not set — configure the root .env');
 
 	// A fresh compose stack has no bucket yet (same bootstrap as `pnpm storage:init`).
-	await createStorage(storageConfigFromEnv(process.env)).ensureBucket();
+	const storage = createStorage(storageConfigFromEnv(process.env));
+	await storage.ensureBucket();
 
 	for (const siteId of Object.keys(SITE_DB_NAMES) as Array<keyof typeof SITE_DB_NAMES>) {
 		const db = createDb(siteDatabaseUrl(siteId));
@@ -32,14 +33,21 @@ export default async function globalSetup() {
 			await upsertStaffUser(auth, { ...E2E_EDITOR, role: 'editor' });
 			await db.execute(sql`delete from login_attempts`);
 			// Content is created by the tests themselves; leftovers from a failed
-			// earlier run would break slug and filename assumptions. Articles go
-			// first — they reference media (cover FK + the delete-refusal check).
+			// earlier run would break slug and filename assumptions. Articles and
+			// shop rows go first — they reference media (FKs + delete-refusal
+			// checks); order_items reference orders and products.
 			await db.execute(sql`delete from articles`);
+			await db.execute(sql`delete from order_items`);
+			await db.execute(sql`delete from orders`);
+			await db.execute(sql`delete from products`);
 			await db.execute(sql`delete from media`);
 			// Funnel leftovers: results reference subscribers, so they go first.
 			await db.execute(sql`delete from quiz_results`);
 			await db.execute(sql`delete from subscribers`);
 			await db.execute(sql`delete from email_log`);
+			// The shop e2e runs against the seeded demo catalog (idempotent; also
+			// restores stock levels consumed by earlier webhook simulations).
+			await seedDemoProducts(db, storage);
 		} finally {
 			await db.$client.end();
 		}
