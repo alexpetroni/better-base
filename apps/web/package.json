@@ -20,9 +20,11 @@
 		"db:migrate": "drizzle-kit migrate",
 		"db:seed": "node scripts/seed.ts",
 		"storage:init": "node scripts/storage-init.ts",
+		"chat:prune": "node scripts/chat-prune.ts",
 		"user:create": "node scripts/user-create.ts"
 	},
 	"dependencies": {
+		"@anthropic-ai/sdk": "^0.110.0",
 		"@aws-sdk/client-s3": "^3.1081.0",
 		"@aws-sdk/s3-request-presigner": "^3.1081.0",
 		"better-auth": "^1.6.23",
