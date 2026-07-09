@@ -3,11 +3,12 @@
 // requires BOTH EMAIL_DRYRUN=false and a RESEND_API_KEY.
 import { env } from '$env/dynamic/private';
 import { getDb } from '$lib/db';
+import { positiveIntEnv } from '$lib/server/env';
 import { getSite } from '$lib/server/site';
-import { createResendTransport } from './resend.ts';
+import { createResendTransport, RESEND_TIMEOUT_MS_DEFAULT } from './resend.ts';
 import { createEmailSender, type EmailSender } from './service.ts';
 
-export { createResendTransport } from './resend.ts';
+export { createResendTransport, RESEND_TIMEOUT_MS_DEFAULT } from './resend.ts';
 export { emailLog, type EmailLogRow, type EmailStatus } from './schema.ts';
 export {
 	createEmailSender,
@@ -35,7 +36,13 @@ export function getEmailSender(): EmailSender {
 			dryRun,
 			from: `${site.name} <${site.email.from}>`,
 			replyTo: site.email.replyTo,
-			transport: dryRun ? undefined : createResendTransport(env.RESEND_API_KEY!)
+			transport: dryRun
+				? undefined
+				: createResendTransport(
+						env.RESEND_API_KEY!,
+						fetch,
+						positiveIntEnv(env.RESEND_TIMEOUT_MS, RESEND_TIMEOUT_MS_DEFAULT)
+					)
 		});
 	}
 	return senderInstance;

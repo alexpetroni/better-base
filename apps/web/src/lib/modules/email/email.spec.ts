@@ -3,9 +3,16 @@ import path from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
+import { createResendTransport } from './resend.ts';
 import { emailLog } from './schema.ts';
 import { createEmailSender, shouldSkipResend, type EmailMessage } from './service.ts';
 import { renderEmailTemplate } from './templates.ts';
+
+/** A fetch whose request never completes, but that honors its abort signal. */
+const hangingFetch: typeof fetch = (_url, init) =>
+	new Promise((_resolve, reject) => {
+		init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+	});
 
 describe('email templates', () => {
 	it('renders the quiz-result template with ro copy and the result link', () => {
@@ -80,6 +87,24 @@ describe('shouldSkipResend', () => {
 	it('allows retrying failed rows', () => {
 		expect(shouldSkipResend('error')).toBe(false);
 	});
+});
+
+// Audit Theme C (resilience #3): the Resend call must be bounded — a hung
+// socket used to pin the awaiting request forever (the shop webhook awaits
+// the send inline).
+describe('resend transport timeout', () => {
+	it('rejects when the API call exceeds the timeout instead of hanging (hung before the fix)', async () => {
+		const transport = createResendTransport('re_key_not_real', hangingFetch, 50);
+		await expect(
+			transport.send({
+				from: 'a@b.ro',
+				to: 'x@y.ro',
+				subject: 's',
+				html: '<p>h</p>',
+				text: 't'
+			})
+		).rejects.toThrow(/timeout/i);
+	}, 3_000);
 });
 
 // Integration: the sender against the compose Postgres (TEST_DATABASE_URL,
@@ -193,4 +218,18 @@ describe('sendEmail idempotency (integration)', () => {
 		expect(outcome.status).toBe('error');
 		expect((await rowsFor('no-transport-1'))[0].status).toBe('error');
 	});
+
+	it('a hung Resend socket becomes a retryable error row, not a pinned request (hung before the fix)', async () => {
+		const sender = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'a@b.ro',
+			transport: createResendTransport('re_key_not_real', hangingFetch, 50)
+		});
+		const outcome = await sender.send(input('hang-1'));
+		expect(outcome.status).toBe('error');
+		const [row] = await rowsFor('hang-1');
+		expect(row.status).toBe('error');
+		expect(row.error).toMatch(/timeout/i);
+	}, 3_000);
 });
