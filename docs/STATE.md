@@ -1,4 +1,54 @@
-# STATE — after Phase 7 (Hardening & launch readiness)
+# STATE — after FIX-1 (atomic rate limiting + email-endpoint throttling)
+
+## Remediation FIX-1 (audit Themes A & F — after Phase 7)
+
+- **Shared rate-limit core** at `src/lib/server/rate-limit/` (framework-free;
+  import the files relatively from modules/scripts like other shared code):
+  `consumeRateLimit(db, table, key, { max, windowMs }, now?)` runs ONE atomic
+  `INSERT … ON CONFLICT DO UPDATE … RETURNING` — window rollover is decided in
+  SQL and the cap decision comes from the post-increment RETURNING values,
+  never a separate read. Counters are **sliding-window** (aligned fixed
+  windows; the previous window's count decays linearly across the next one),
+  which closes the fixed-window boundary burst. Consequences to remember:
+  refused requests still consume slots, and a maxed-out key regains full
+  budget only after TWO aligned windows, not one. Works against any table
+  with columns (key unique/PK, count, prev_count, window_started_at).
+- **Migration 0010**: generic `rate_limits` table (for throttles without
+  their own table) + `prev_count` column on `login_attempts` and
+  `chat_rate_limits`. Applied to sleep/life/test dbs.
+- **Login limiter** (`modules/auth/rate-limit.ts`): `registerLoginAttempt(db,
+  key)` atomically counts the attempt BEFORE the password check; success
+  still `clearAttempts`. 5 attempts per sliding 15 min per IP+email. The old
+  pure helpers (getAttemptState/recordFailure/saveAttemptState/isRateLimited)
+  are deleted.
+- **Chat limiter**: `chat/rate-limit.ts` is now only `CHAT_RATE_LIMIT`
+  (`{ max: 20, windowMs: 1h }` — shared `RateLimitConfig` shape, the old
+  `maxMessages` field is gone) + key helpers; `service.ts` consumes the
+  session and IP counters atomically via the core.
+- **Public email throttling** (audit H2): the newsletter action and the quiz
+  result `?/email` action call `consumePublicEmailBudget(db, scope, ip)`
+  BEFORE any other work and fail 429 (form errors `rate_limited` /
+  `rate-limited`, ro copy `newsletter_rate_limited` /
+  `quiz_email_rate_limited`). Caps per scope (`newsletter`, `quiz-email`):
+  **10/hour per IP, 200/hour global**, keys in `rate_limits`. A CAPTCHA/
+  proof-of-work check would slot in right before that call — documented hook
+  point in `public-email.ts`, deliberately not wired. Trade-off: a spent
+  global budget refuses ALL signups for up to an hour (deliberate — worse is
+  mailbombing victims and burning Resend reputation). Any NEW public endpoint
+  that emails a visitor-supplied address must reuse this helper with a new
+  scope.
+- **Tests**: `server/rate-limit/core.spec.ts` (pure decision math) and
+  `rate-limit.spec.ts` (integration: 30 parallel consumes return counts
+  exactly 1..30); racing regressions in `auth.spec.ts` (20 parallel login
+  attempts, exactly 5 admitted) and `chat.spec.ts` (25 parallel messages,
+  exactly 20 streams) — both demonstrably FAILED against the pre-fix
+  read-modify-write code; `routes/(public)/public-email-throttle.spec.ts`
+  invokes the REAL route actions. **Vitest gotcha discovered there:** `$env`
+  values are a build-time snapshot — overriding `process.env` in a spec does
+  NOT redirect `getDb()`; mock `$lib/db` (vi.mock + vi.hoisted holder) to
+  point route code at TEST_DATABASE_URL.
+- e2e `global-setup.ts` now also clears `rate_limits` each run (counters
+  outlive a run; the funnel/quiz specs send real signups).
 
 ## What exists
 
