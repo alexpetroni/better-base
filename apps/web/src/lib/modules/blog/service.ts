@@ -101,6 +101,7 @@ export async function updateArticle(
 	if (patch.seoTitle !== undefined) set.seoTitle = patch.seoTitle || null;
 	if (patch.seoDescription !== undefined) set.seoDescription = patch.seoDescription || null;
 
+	let pillarRows: Array<typeof pillars.$inferSelect> | null = null;
 	if (patch.pillarSlugs !== undefined) {
 		const unique = [...new Set(patch.pillarSlugs)];
 		const rows = unique.length
@@ -111,15 +112,24 @@ export async function updateArticle(
 			const missing = unique.filter((s) => !known.has(s));
 			return { ok: false, error: 'unknown-pillar', detail: missing.join(', ') };
 		}
-		await deps.db.delete(articlePillars).where(eq(articlePillars.articleId, id));
-		if (rows.length) {
-			await deps.db
-				.insert(articlePillars)
-				.values(rows.map((p) => ({ articleId: id, pillarId: p.id })));
-		}
+		pillarRows = rows;
 	}
 
-	const [row] = await deps.db.update(articles).set(set).where(eq(articles.id, id)).returning();
+	// Retag + row update commit together: a failure between the join-table
+	// delete and re-insert must not strip the article's tags — that would
+	// silently hide it from every site.
+	const row = await deps.db.transaction(async (tx) => {
+		if (pillarRows !== null) {
+			await tx.delete(articlePillars).where(eq(articlePillars.articleId, id));
+			if (pillarRows.length) {
+				await tx
+					.insert(articlePillars)
+					.values(pillarRows.map((p) => ({ articleId: id, pillarId: p.id })));
+			}
+		}
+		const [updated] = await tx.update(articles).set(set).where(eq(articles.id, id)).returning();
+		return updated;
+	});
 	return { ok: true, value: row };
 }
 

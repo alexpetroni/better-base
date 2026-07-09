@@ -1,16 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { withDbFault } from '../../../../tests/helpers/db-fault.ts';
 import { resolveSiteConfig } from '../../config/index.ts';
 import { createDb, type Db } from '../../db/client.ts';
+import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
 import { users } from '../auth/schema.ts';
 import type { ImgproxyConfig } from '../media/imgproxy.ts';
 import { media } from '../media/schema.ts';
 import { articlesMediaReferenceCheck } from './media-ref.ts';
 import { renderArticleHtml } from './render.ts';
-import type { ArticleRow } from './schema.ts';
+import { articlePillars, type ArticleRow } from './schema.ts';
 import {
 	createArticle,
 	getBySlug,
@@ -121,6 +123,23 @@ describe('pillar visibility follows the site config', () => {
 		const a = await makeArticle('Articol cu pilon inexistent');
 		const result = await updateArticle(deps, a.id, { pillarSlugs: ['inexistent'] });
 		expect(!result.ok && result.error).toBe('unknown-pillar');
+	});
+
+	it('retagging is atomic: a failed re-insert keeps the old pillar tags (audit Theme B)', async () => {
+		const a = await makeArticle('Retag atomic', ['somn']);
+		const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
+
+		const { db: faultyDb, fault } = withDbFault(db, 'insert', articlePillars);
+		fault.arm();
+		await expect(
+			updateArticle({ db: faultyDb }, a.id, { pillarSlugs: ['nutritie'] })
+		).rejects.toThrow('injected insert fault');
+		expect(fault.hits).toBe(1);
+
+		// The delete must have rolled back with the failed insert — otherwise the
+		// article silently loses all tags and disappears from every site.
+		const joins = await db.select().from(articlePillars).where(eq(articlePillars.articleId, a.id));
+		expect(joins.map((j) => j.pillarId)).toEqual([somn.id]);
 	});
 
 	it('somn-tagged articles appear on BOTH sites; foreign/untagged ones only where active', async () => {
