@@ -1,4 +1,53 @@
-# STATE — after FIX-3 (timeouts, pool limits, stream abort)
+# STATE — after FIX-4 (schema-safe content bundle)
+
+## Remediation FIX-4 (audit Theme D / architecture #2, data HIGH-1, MED-2, MED-3 — after FIX-3)
+
+- **Bundle types are schema-derived** (`content/bundle.ts`): the
+  `*Content`/`MediaDescriptor` types are now `BundleFields<Row, Excluded>` over
+  `typeof table.$inferSelect` — every persisted column travels in the bundle
+  unless listed in the exported `BUNDLE_EXCLUDED_COLUMNS` map (ids, pillar ids
+  — slugs travel instead, Stripe catalog ids, createdBy, timestamps; the
+  rationale for each is a doc comment on the const). Dates serialize to ISO
+  strings via a non-distributive `Serialized<T>` conditional. **Adding a column
+  now fails to compile** in the `articleToContent`/`quizToContent`/
+  `productToContent`/`mediaToDescriptor` mappers (bundle.ts) until it is mapped
+  — and the import side spreads the bundle payload into insert/update values,
+  so once mapped it round-trips with no further edits (a new timestamp column
+  would still need a `new Date(...)` override in import.ts; the compiler flags
+  that too).
+- **`media.blurhash` round-trips** (was silently dropped — every imported image
+  lost its placeholder). `CONTENT_BUNDLE_VERSION` bumped **1 → 2** and
+  `parseBundle` requires the field: v1 bundle files are refused with a version
+  error — re-export from the source site (bundles are transfer artifacts, not
+  archives).
+- **Missing-pillar imports are a hard failure** (data MED-2): when a bundle HAS
+  pillars but NONE resolve in the target db, `importContent` returns the new
+  `'missing-pillars'` error BEFORE writing anything (no rows, no bucket
+  objects) and the CLI exits nonzero — previously it created an untagged,
+  invisible item with a warning and exit 0. Opt back in with
+  `pnpm content import f.json --allow-untagged` /
+  `importContent(deps, bundle, { allowUntagged: true })`; the skipped-pillar
+  warning now says loudly when the item ends up untagged. Partially-matching
+  bundles still import with the resolvable subset tagged (unchanged).
+- **MED-3 resolved by documentation** (on `ensureMedia` in import.ts): storage
+  keys embed a per-upload uuid fragment (`mediaKeyFor`), so the bytes behind a
+  key never change — match-by-key reuse on re-import is sound and never needs
+  a byte refresh. Media orphaned when a re-imported item drops a reference is
+  an ACCEPTED leak: rows stay in the target's media library (deletable there,
+  guarded by reference checks); sweeping on import could delete media the
+  target site reuses elsewhere.
+- **Tests** (all demonstrably FAILED against the pre-fix code, verified by
+  temporarily restoring the lossy mapper / disabling the refusal): parity tests
+  in `bundle.spec.ts` compare `getTableColumns()` minus `BUNDLE_EXCLUDED_COLUMNS`
+  against the mapper output keys per content type (also compile-verified: a
+  temporary `products.sku` column produced TS2741 in bundle.ts); blurhash
+  round-trip assertions and the missing-pillars refusal (nothing written,
+  `--allow-untagged` path) in `content.spec.ts`. Note for that spec: test DBs
+  reset every run but the `better-base-content-a/-b` MinIO buckets persist —
+  a test asserting an object is ABSENT must delete it in its own `beforeAll`.
+- No schema changes, no new env vars. CLI change: `pnpm content import` gained
+  `--allow-untagged`. New exports from `$lib/modules/content`:
+  `BUNDLE_EXCLUDED_COLUMNS`, the four row→bundle mappers, `ImportOptions`.
 
 ## Remediation FIX-3 (audit Theme C / resilience #2/#3/#4 — after FIX-2)
 
@@ -702,9 +751,10 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - `pnpm chat:prune` — delete chat sessions older than 30 days from the
   `DATABASE_URL` database (wire into cron at deploy time).
 - `pnpm content export --type article|quiz|product --slug X [--out f.json]` /
-  `pnpm content import f.json` — cross-site content sharing (bundle carries
-  media bytes; import is idempotent by slug and targets the current env's
-  db+bucket).
+  `pnpm content import f.json [--allow-untagged]` — cross-site content sharing
+  (bundle carries media bytes; import is idempotent by slug and targets the
+  current env's db+bucket; a bundle whose pillars are all absent from the
+  target is refused unless `--allow-untagged`).
 - `pnpm subscriber:delete -- --email x@y.ro` — GDPR erasure (subscriber row
   deleted, quiz results unlinked, orders/email log anonymized).
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site
