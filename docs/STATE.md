@@ -1,4 +1,4 @@
-# STATE — after Phase 3 (Blog)
+# STATE — after Phase 4 (Quizzes, subscribers & email funnel)
 
 ## What exists
 
@@ -11,7 +11,7 @@
     `stres`, `relatii`, `scop`, `mediu`, `minte`, `finante`).
   - `sites/sleep.ts` (1 pillar) and `sites/life.ts` (9 pillars) — the ONLY places a
     brand string may appear. Shape: `{ id, name, domain, locales, pillars, theme, nav,
-    chatPersonaKey, email }`.
+chatPersonaKey, email }`.
   - `index.ts` — pure `resolveSiteConfig(siteId)` (throws on missing/unknown id or
     non-canonical pillar). Server code gets the active config via
     `getSite()` from `$lib/server/site` (reads `SITE_ID` from `$env/dynamic/private`,
@@ -54,7 +54,7 @@
     derived by better-auth from an https `PUBLIC_SITE_URL` (so secure in prod).
   - `guards.ts` — pure `guardAdminPath(pathname, role)` →
     allow / login-redirect / forbidden. `ADMIN_ONLY_SECTIONS = products, orders,
-    subscribers, settings` (editors are blocked there; everything else under
+subscribers, settings` (editors are blocked there; everything else under
     /admin needs any staff session).
   - `rate-limit.ts` — login rate limit, 5 failed attempts / 15 min per IP+email,
     fixed window persisted in `login_attempts` (pure logic + Db helpers).
@@ -62,7 +62,7 @@
     on email (creates user + credential account, or updates role/password via
     better-auth's internal adapter, hashing included).
 - **Creating users**: `pnpm user:create -- --email a@b.ro --password 'min12chars…'
-  --role admin|editor [--name X]` (root script → `apps/web/scripts/user-create.ts`,
+--role admin|editor [--name X]` (root script → `apps/web/scripts/user-create.ts`,
   plain node against `DATABASE_URL`; needs `BETTER_AUTH_SECRET`). Idempotent:
   rerunning with the same email updates role+password.
 - **Auth flow**: `/admin/login` form action calls `auth.api.signInEmail` (rate
@@ -108,7 +108,7 @@
   `imgSources()`. SVGs are emitted unresized/unconverted. The unit test vector
   was validated against the live imgproxy container.
 - **Upload flow**: browser → `POST /admin/media/upload` `{op:'presign',
-  filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
+filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   the file straight to storage (presigned URL signs content-type AND
   content-length — a mismatching PUT gets 403 from storage; see
   `signableHeaders` in `storage.ts`) → `{op:'confirm', key, filename}` verifies
@@ -193,6 +193,104 @@
 - **Typography**: `@tailwindcss/typography` is installed (`@plugin` in
   `routes/layout.css`); rendered article HTML gets `prose` classes.
 
+## Quizzes, subscribers & email (Phase 4)
+
+- **modules/email** (split barrels): idempotent transactional email.
+  - `email_log` table (migration `0004`): every attempt is recorded — real
+    sends AND dry-runs. The unique `idempotency_key` is claimed BY INSERT, so
+    concurrent retries collapse to one row; statuses `sending|sent|dryrun|error`
+    (only `error` rows may be retried, guarded re-claim).
+  - `createEmailSender({ db, dryRun, from, replyTo?, transport? })` →
+    `.send({ to, template, data, idempotencyKey })`. **`EMAIL_DRYRUN` defaults
+    to TRUE** (only `EMAIL_DRYRUN=false` + `RESEND_API_KEY` sends for real, via
+    the fetch-based Resend adapter in `resend.ts`). `getEmailSender()` (server
+    barrel) is the env-bound singleton; `from` comes from site config.
+  - Templates are typed functions (`templates.ts`, universal barrel):
+    `quiz-result`, `newsletter-confirm` → subject+html+text, ro copy, all
+    interpolations escaped. Add new templates to `TemplateData` +
+    `EMAIL_TEMPLATE_KEYS` + the render switch.
+- **modules/crm** (NEW module — subscribers live here, not in quiz, because
+  newsletter signup exists independently; the phase plan left this open):
+  - `subscribers` (migration `0005`): unique email, `consents` jsonb
+    (`newsletter` / `profile_emails`, each `{ granted, at, source }`),
+    `confirmed_at` (double opt-in stamp), non-expiring `unsubscribe_token`.
+    Newsletter-mailable = granted consent AND confirmed_at.
+  - Consent semantics (`consent.ts`, pure, unit-tested): callers pass only
+    EXPLICIT intents — an unticked checkbox never revokes; re-affirming an
+    unchanged value keeps the ORIGINAL record (proof of first consent, and it
+    keeps retry idempotency keys stable). Revocation via `/unsubscribe/[token]`
+    (revokes ALL consents, source `unsubscribe`) or an explicit `false`.
+  - Signed action tokens (`token.ts`): HMAC-SHA256, base64url payload+sig,
+    purpose + expiry checked (`timingSafeEqual`). Secret = `BETTER_AUTH_SECRET`
+    via `getTokenSecret()`. Confirm tokens live 7 days
+    (`CONFIRM_TOKEN_TTL_SECONDS`); known limitation: an unconfirmed subscriber
+    re-signing up gets NO fresh confirm email (same consent timestamp → same
+    idempotency key) — the old link must still be valid.
+  - Services: `upsertSubscriber` (normalizes email, merges consents, race-safe
+    insert), `requestNewsletterSignup` / `sendNewsletterConfirmEmail`,
+    `confirmSubscriber` (stamps once), `unsubscribeByToken`, `listSubscribers`,
+    `subscribersCsv` (pure, quoted).
+  - `NewsletterSignup.svelte` (universal barrel): plain POST to `/newsletter`,
+    consent checkbox default-unticked + required; used in the public footer
+    (`(public)/+layout.svelte`) and on `/blog`.
+- **modules/quiz**:
+  - Schema (migration `0006`): `quizzes` (unique slug, title, `intro_md`,
+    `pillar_id` FK, `form_schema` jsonb = formcomp FormConfig, `scoring` jsonb,
+    status, `result_template_key`) and `quiz_results` (quiz FK cascade,
+    NULLABLE subscriber FK set-null, `answers` jsonb = sanitized formcomp
+    submit answers keyed by stable uuid, integer `score`, `profile` jsonb).
+  - Scoring engine (`scoring.ts`, pure, TDD): question specs `{kind:'map'}`
+    (value→points; multi-select sums selections) or `{kind:'numeric'}`
+    (clamped to question min/max × multiplier, then `cap`); dimension sums with
+    ro labels; bands by ascending inclusive `min` (score exactly on a threshold
+    → higher band; below all → first). Missing/unknown answers score 0.
+    `maxScore` computed (null when a numeric question is unbounded).
+    `validateScoringConfig(form, raw)` → ro errors for the admin editor.
+  - **IMPORTANT**: never runtime-import `formcomp` from server/node code — its
+    only export pulls .svelte files, which plain node (seed script, drizzle
+    scripts) cannot load. `import type` is fine; structural checks live in
+    `validate.ts` (`validateFormSchema`, `validateForPublish`); formcomp's own
+    `validateConfig` runs client-side only (admin editor).
+  - Services: CRUD with unique ro slugs (reuses blog slug helpers), publish
+    gate (≥1 question + valid scoring), `getQuizBySlug` (drafts hidden by
+    default), `listQuizzes` (+result counts), `sanitizeSubmittedAnswers`
+    (drops unknown question ids, coerces strings), `submitQuiz` (scores +
+    stores), `latestResults(WithEmail)`.
+  - Funnel (`funnel.ts`): `claimQuizResult` upserts the subscriber (ticked
+    boxes only, source `quiz:<slug>`), links the result row, sends the
+    TRANSACTIONAL quiz-result email with key
+    `quiz-result:<resultId>:<email>` (retries skip; a corrected typo still
+    gets its email) and starts double opt-in when newsletter was ticked.
+    `getQuizFunnelDeps()` wires db/sender/secret/`PUBLIC_SITE_URL`/site name.
+- **Public routes** (`(public)/`): `/quiz/[slug]` renders MultiStepForm from
+  the stored schema (ro default labels merged under stored `settings`;
+  per-quiz sessionStorage key, versioned by `updatedAt` so edits discard stale
+  answers; visibility = quiz pillar ∈ site config pillars, like articles),
+  POSTs to `/quiz/[slug]/submit` (+server.ts: 256KB cap, sanitize, score,
+  `{ redirectUrl }`) → `/quiz/[slug]/rezultat/[resultId]` (band, advice,
+  per-dimension bars, then the OPTIONAL email step — result fully visible
+  without it; `?/email` action). `/newsletter` (signup action + status page),
+  `/newsletter/confirm/[token]`, `/unsubscribe/[token]` (both idempotent GET
+  side effects, noindex).
+- **Admin**: `/admin/quizzes` (editor-accessible; list + create-by-title like
+  articles, per-quiz result counts) and `/admin/quizzes/[id]` — fields +
+  form_schema/scoring JSON textareas (server re-validates; failed saves echo
+  the texts back so edits survive), live client-side validation panel, an
+  on-demand MultiStepForm preview (persist:false, doesn't store results),
+  publish/unpublish (persist first), latest-20 results with subscriber email.
+  `/admin/subscribers` (admin-only, already in `ADMIN_ONLY_SECTIONS`): search,
+  consent badges with source, confirmed flag, CSV at
+  `/admin/subscribers/export.csv` (+server.ts inside the (shell) group so the
+  guard's section rule applies).
+- **Seed**: `pnpm db:seed` also upserts a published ro sleep screening quiz
+  `/quiz/evaluare-somn` (11 questions / 3 steps incl. a likert-batch, 3
+  dimensions, 3 bands; content in `modules/quiz/seed-quiz.ts`), idempotent,
+  tagged `somn` so it is live on BOTH sites.
+- **Layout note**: the new dynamic public routes widened `$app/types`'
+  `Pathname` union; `resolve(x as Pathname)` no longer typechecks (union
+  defeats the overloads). Nav/config hrefs now cast to a single static route
+  (`as '/'` / `as '/admin'`) — value is unchanged at runtime.
+
 ## Key commands (all from repo root)
 
 - `docker compose up -d` — start Postgres + MinIO + imgproxy (`--wait` works, all
@@ -219,6 +317,11 @@
   vitest setup file. In this agent container all service hosts are
   `host.docker.internal` (compose containers are siblings); `.env.example`
   documents `localhost` for humans.
+- Phase 4 env vars: `EMAIL_DRYRUN` (**defaults to true** — record to
+  `email_log` instead of sending; only `EMAIL_DRYRUN=false` AND a
+  `RESEND_API_KEY` deliver for real; tests/e2e always run dry) and
+  `RESEND_API_KEY` (empty in dev). `PUBLIC_SITE_URL` is now also the base for
+  links inside emails (confirm/result URLs).
 - Phase 2 env vars: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
   (`better-base-media`), `S3_REGION`, `IMGPROXY_URL`, `IMGPROXY_KEY`,
   `IMGPROXY_SALT`, plus compose port knobs `MINIO_PORT`, `MINIO_CONSOLE_PORT`,
@@ -290,13 +393,49 @@
   twitter card/JSON-LD Article), sitemap entry, pillar landing card, unpublish
   → 404 again. Global setup now clears `articles` before `media`.
 
+- Unit (Phase 4): scoring engine incl. band boundaries and max-score
+  (`modules/quiz/scoring.spec.ts`), consent shaping (`modules/crm/consent.spec.ts`),
+  token sign/verify incl. expiry boundary and tampering
+  (`modules/crm/token.spec.ts`), email templates escaping + skip/retry
+  decision (`modules/email/email.spec.ts`).
+- Integration (Phase 4, TEST_DATABASE_URL, fresh migrate each):
+  email idempotency — dry-run never touches the transport, concurrent same-key
+  sends collapse to ONE `email_log` row, error→retry keeps one row
+  (`email.spec.ts`); subscriber upsert/merge, double opt-in round trip via the
+  URL recorded in the dry-run log, unsubscribe revokes, CSV escaping
+  (`crm.spec.ts`); quiz lifecycle, publish gate, answer sanitizing, and the
+  funnel — retried `claimQuizResult` yields exactly ONE quiz-result and ONE
+  newsletter-confirm log entry, corrected email still delivers, unsubscribe
+  after the funnel flips consent (`quiz.spec.ts`); `seedDemoQuiz` idempotency
+  (`db/seed.spec.ts`).
+- E2E quiz funnel (`e2e/quiz.e2e.ts`, both SITE_IDs): complete the seeded quiz
+  (deterministic answers → 20/32, top band), consent checkboxes asserted
+  default-unticked, result visible before any email, email step → both
+  templates in `email_log` as dry-run, confirm link → `confirmed_at`,
+  admin sees subscriber + result row, unsubscribe link revokes; plus footer
+  newsletter signup from /blog. Global setup seeds pillars + the demo quiz per
+  site db, clears `quiz_results`/`subscribers`/`email_log`, and the preview
+  servers force `EMAIL_DRYRUN=true`.
+
 ## For the next phase
 
 - Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
-  stub `+page.svelte` (they render `StubPage.svelte`; remaining stubs: quizzes,
-  subscribers, products, orders, settings). The sidebar entry already exists;
-  nav labels are paraglide messages (`admin_nav_*`). The articles section is a
-  full reference implementation (list + editor + form actions).
+  stub `+page.svelte` (they render `StubPage.svelte`; remaining stubs:
+  products, orders, settings). The sidebar entry already exists; nav labels
+  are paraglide messages (`admin_nav_*`). Articles and quizzes are full
+  reference implementations (list + editor + form actions).
+- Sending email from a new module: `getEmailSender()` from
+  `$lib/modules/email/server`, add a typed template in
+  `modules/email/templates.ts`, and pick an idempotency key that is STABLE
+  across handler retries (derive it from row ids / consent timestamps, never
+  from `new Date()` in the handler). Shop order confirmations (Phase 5) should
+  key on the order id.
+- The quiz email step treats the result email as TRANSACTIONAL (sent to the
+  given address regardless of checkboxes); marketing consents are separate
+  records. Keep that split for any future email touchpoint.
+- Public content visibility rule (articles AND quizzes): row is published AND
+  tagged to a pillar that is in the active site config. Products should follow
+  the same pattern.
 - To show an image: build `imgSources(row, { w })` in a `load` function
   (server barrel) and pass it to `<Img>` (universal barrel). Never import the
   server barrel from a component.
