@@ -5,7 +5,8 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
 import { createMockChatProvider, mockReplyFor } from './mock-provider.ts';
 import type { ChatMessage, ChatProvider, ChatStreamOptions } from './provider.ts';
-import { chatMessages, chatSessions } from './schema.ts';
+import { ipRateKey } from './rate-limit.ts';
+import { chatMessages, chatRateLimits, chatSessions } from './schema.ts';
 import { handleChatMessage, pruneChatSessions, type ChatDeps } from './service.ts';
 import { signSessionToken } from './token.ts';
 import { HISTORY_LIMIT } from './validate.ts';
@@ -211,8 +212,10 @@ describe('handleChatMessage', () => {
 		});
 		expect(blocked.kind).toBe('rate-limited');
 
-		// After the window expires the same session may talk again.
-		const later = () => new Date(Date.now() + 61 * 60 * 1000);
+		// After the sliding window fully expires (two aligned windows — the
+		// previous hour's count decays over the following one) the same session
+		// may talk again.
+		const later = () => new Date(Date.now() + 121 * 60 * 1000);
 		const resumed = await handleChatMessage(deps({ now: later }), {
 			message: 'după fereastră',
 			sessionToken: token,
@@ -235,6 +238,30 @@ describe('handleChatMessage', () => {
 			ip
 		});
 		expect(blocked.kind).toBe('rate-limited');
+	});
+
+	it('never over-admits under a parallel burst (atomic IP counter, regression for audit resilience #5)', async () => {
+		// Fixed, window-aligned time so the burst can't straddle a window boundary.
+		const NOW = new Date('2026-03-02T10:00:00Z');
+		const d = deps({ now: () => NOW });
+		const ip = '198.51.100.200';
+
+		// 25 concurrent messages, each from a fresh session: only the IP counter
+		// can trip. The pre-fix read-modify-write code admits all 25.
+		const results = await Promise.all(
+			Array.from({ length: 25 }, (_, i) =>
+				handleChatMessage(d, { message: `cursă ${i}`, sessionToken: null, ip })
+			)
+		);
+		expect(results.filter((r) => r.kind === 'stream')).toHaveLength(20);
+		expect(results.filter((r) => r.kind === 'rate-limited')).toHaveLength(5);
+
+		// The counter reached exactly 25 — no lost increments.
+		const [row] = await db
+			.select()
+			.from(chatRateLimits)
+			.where(eq(chatRateLimits.key, ipRateKey(ip)));
+		expect(row.count).toBe(25);
 	});
 });
 

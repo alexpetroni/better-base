@@ -11,7 +11,7 @@ export { ANTHROPIC_CHAT_MODEL, createAnthropicChatProvider } from './anthropic-p
 export { CHAT_ERRORS } from './copy.ts';
 export { createMockChatProvider, mockReplyFor } from './mock-provider.ts';
 export type { ChatMessage, ChatProvider, ChatRole, ChatStreamOptions } from './provider.ts';
-export { CHAT_RATE_LIMIT, type ChatRateConfig } from './rate-limit.ts';
+export { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
 export {
 	chatMessages,
 	chatRateLimits,

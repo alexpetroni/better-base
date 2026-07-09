@@ -1,18 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { asc, eq, lt, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { consumeRateLimit, type RateLimitConfig } from '../../server/rate-limit/core.ts';
 import type { ChatMessage, ChatProvider } from './provider.ts';
-import {
-	CHAT_RATE_LIMIT,
-	getChatRateState,
-	ipRateKey,
-	isChatRateLimited,
-	recordChatMessage,
-	saveChatRateState,
-	sessionRateKey,
-	type ChatRateConfig
-} from './rate-limit.ts';
-import { chatMessages, chatSessions, type ChatSessionRow } from './schema.ts';
+import { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
+import { chatMessages, chatRateLimits, chatSessions, type ChatSessionRow } from './schema.ts';
 import { signSessionToken, verifySessionToken } from './token.ts';
 import { capHistory, validateChatMessage } from './validate.ts';
 
@@ -33,7 +25,7 @@ export interface ChatDeps {
 	secret: string;
 	/** Persona system prompt for the active site. */
 	systemPrompt: string;
-	rateConfig?: ChatRateConfig;
+	rateConfig?: RateLimitConfig;
 	now?: () => Date;
 }
 
@@ -99,15 +91,15 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 	if (resolved === 'forbidden') return { kind: 'forbidden' };
 	const session = resolved;
 
-	// Both counters must be clear BEFORE anything is persisted.
-	const keys = [sessionRateKey(session.id), ipRateKey(input.ip)];
-	const states = await Promise.all(keys.map((key) => getChatRateState(db, key)));
-	if (states.some((state) => isChatRateLimited(state, now, rateConfig))) {
-		return { kind: 'rate-limited' };
-	}
-	await Promise.all(
-		keys.map((key, i) => saveChatRateState(db, key, recordChatMessage(states[i], now, rateConfig)))
+	// Both counters are consumed atomically BEFORE anything is persisted; the
+	// decision comes from the post-increment counts, so a concurrent burst
+	// cannot slip past the cap. A refused message still consumes its slots.
+	const consumed = await Promise.all(
+		[sessionRateKey(session.id), ipRateKey(input.ip)].map((key) =>
+			consumeRateLimit(db, chatRateLimits, key, rateConfig, now)
+		)
 	);
+	if (consumed.some((result) => result.limited)) return { kind: 'rate-limited' };
 
 	await db
 		.insert(chatMessages)
