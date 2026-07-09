@@ -111,7 +111,7 @@
 			</button>
 		</form>
 	</div>
-	<p class="mt-2 text-right text-sm text-(--color-ink)/60">{m.cart_checkout_note()}</p>
+	<p class="mt-2 text-right text-sm text-(--color-ink)/70">{m.cart_checkout_note()}</p>
 
 	{#if form?.checkoutError}
 		<p data-testid="cart-checkout-error" class="mt-4 rounded bg-red-50 p-3 text-sm text-red-700">

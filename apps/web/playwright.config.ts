@@ -19,12 +19,31 @@ function siteEnv(siteId: 'sleep' | 'life') {
 	};
 }
 
+// Every test starts with the cookie-consent banner already dismissed — a
+// fixed bottom overlay would intercept clicks on footer forms in unrelated
+// specs. The funnel spec clears cookies first to exercise the banner itself.
+const consentDismissed = {
+	cookies: [
+		{
+			name: 'cookie_consent',
+			value: 'denied',
+			domain: 'localhost',
+			path: '/',
+			expires: -1,
+			httpOnly: false,
+			secure: false,
+			sameSite: 'Lax' as const
+		}
+	],
+	origins: []
+};
+
 export default defineConfig({
 	testMatch: '**/*.e2e.{ts,js}',
 	globalSetup: './e2e/global-setup.ts',
 	projects: [
-		{ name: 'sleep', use: { baseURL: 'http://localhost:4173' } },
-		{ name: 'life', use: { baseURL: 'http://localhost:4174' } }
+		{ name: 'sleep', use: { baseURL: 'http://localhost:4173', storageState: consentDismissed } },
+		{ name: 'life', use: { baseURL: 'http://localhost:4174', storageState: consentDismissed } }
 	],
 	webServer: [
 		{

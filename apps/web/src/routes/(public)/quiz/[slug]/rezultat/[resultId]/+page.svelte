@@ -20,7 +20,7 @@
 />
 
 <article data-testid="quiz-result-page" class="mx-auto max-w-2xl">
-	<p class="text-sm text-(--color-ink)/60">{data.quizTitle}</p>
+	<p class="text-sm text-(--color-ink)/70">{data.quizTitle}</p>
 	<h1 class="mb-6 text-3xl font-bold">{m.quiz_result_heading()}</h1>
 
 	<section
@@ -47,7 +47,7 @@
 					<li data-testid="result-dimension" data-dimension={dim.key}>
 						<div class="mb-1 flex justify-between text-sm">
 							<span>{dim.label}</span>
-							<span class="text-(--color-ink)/60">
+							<span class="text-(--color-ink)/70">
 								{dim.maxScore !== null ? `${dim.score} / ${dim.maxScore}` : dim.score}
 							</span>
 						</div>

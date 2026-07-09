@@ -68,7 +68,7 @@
 				{/each}
 			</ul>
 		</nav>
-		<p class="mt-4 text-sm text-(--color-ink)/60">© {data.site.name}</p>
+		<p class="mt-4 text-sm text-(--color-ink)/70">© {data.site.name}</p>
 	</div>
 </footer>
 

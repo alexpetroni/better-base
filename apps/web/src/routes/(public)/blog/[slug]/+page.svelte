@@ -23,7 +23,7 @@
 	<header class="mb-8">
 		<h1 class="mb-2 text-3xl font-bold" data-testid="article-title">{data.article.title}</h1>
 		{#if data.article.publishedAt}
-			<p class="text-sm text-(--color-ink)/60">
+			<p class="text-sm text-(--color-ink)/70">
 				{m.blog_published_on({ date: dateFmt.format(data.article.publishedAt) })}
 			</p>
 		{/if}

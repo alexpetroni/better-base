@@ -81,7 +81,7 @@
 <div class="flex flex-col {variant === 'page' ? 'h-[32rem]' : 'h-96'}">
 	<div bind:this={listEl} class="flex-1 space-y-3 overflow-y-auto p-3" data-testid="chat-messages">
 		{#if messages.length === 0}
-			<p class="text-sm text-(--color-ink)/60">{m.chat_empty()}</p>
+			<p class="text-sm text-(--color-ink)/70">{m.chat_empty()}</p>
 		{/if}
 		{#each messages as message, i (i)}
 			<div
@@ -100,7 +100,7 @@
 	</div>
 
 	<div class="border-t border-(--color-brand-soft) p-3">
-		<p class="mb-2 text-xs text-(--color-ink)/60" data-testid="chat-disclaimer">
+		<p class="mb-2 text-xs text-(--color-ink)/70" data-testid="chat-disclaimer">
 			{m.chat_disclaimer()}
 		</p>
 		<form onsubmit={send} class="flex gap-2">
@@ -125,7 +125,7 @@
 			type="button"
 			data-testid="chat-reset"
 			onclick={reset}
-			class="mt-2 text-xs text-(--color-ink)/60 underline hover:text-(--color-ink)"
+			class="mt-2 text-xs text-(--color-ink)/70 underline hover:text-(--color-ink)"
 		>
 			{m.chat_reset()}
 		</button>

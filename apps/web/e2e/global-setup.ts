@@ -6,7 +6,13 @@ import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
-import { seedDemoProducts, seedDemoQuiz, seedPillars } from '../src/lib/db/seed.ts';
+import {
+	seedDefaultPages,
+	seedDemoArticles,
+	seedDemoProducts,
+	seedDemoQuiz,
+	seedPillars
+} from '../src/lib/db/seed.ts';
 import { createAuth } from '../src/lib/modules/auth/auth.ts';
 import { upsertStaffUser } from '../src/lib/modules/auth/staff.ts';
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
@@ -52,6 +58,10 @@ export default async function globalSetup() {
 			// The shop e2e runs against the seeded demo catalog (idempotent; also
 			// restores stock levels consumed by earlier webhook simulations).
 			await seedDemoProducts(db, storage);
+			// The full-funnel e2e walks pillar page → demo article and the legal
+			// pages linked from the footer.
+			await seedDemoArticles(db);
+			await seedDefaultPages(db);
 		} finally {
 			await db.$client.end();
 		}

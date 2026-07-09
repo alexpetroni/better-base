@@ -50,7 +50,7 @@
 					<div class="p-4">
 						<h2 class="mb-1 font-semibold group-hover:underline">{card.title}</h2>
 						{#if card.publishedAt}
-							<p class="mb-2 text-xs text-(--color-ink)/60">
+							<p class="mb-2 text-xs text-(--color-ink)/70">
 								{m.blog_published_on({ date: dateFmt.format(card.publishedAt) })}
 							</p>
 						{/if}
