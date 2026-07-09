@@ -85,7 +85,7 @@ export const CONFIRM_TOKEN_TTL_SECONDS = 7 * 24 * 3600;
 
 export interface NewsletterSignupDeps extends CrmDeps {
 	email: EmailSender;
-	/** HMAC secret for confirm tokens (the app wires BETTER_AUTH_SECRET). */
+	/** HMAC secret for confirm tokens (the app wires the dedicated TOKEN_SECRET). */
 	secret: string;
 	/** Public origin for links in emails, e.g. https://bettersleep.ro */
 	baseUrl: string;

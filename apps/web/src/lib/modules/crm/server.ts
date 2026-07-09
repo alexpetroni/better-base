@@ -1,5 +1,6 @@
 // Server module barrel: subscriber schema, services and token signing.
 import { env } from '$env/dynamic/private';
+import { tokenSecretFrom } from '$lib/server/secrets';
 
 export { subscribers, type SubscriberRow } from './schema.ts';
 export {
@@ -24,8 +25,7 @@ export {
 } from './service.ts';
 export { signToken, verifyToken, type TokenClaims, type TokenVerification } from './token.ts';
 
-/** HMAC secret for signed action tokens (reuses the auth session secret). */
+/** HMAC secret for signed action tokens — the dedicated TOKEN_SECRET, never the auth secret. */
 export function getTokenSecret(): string {
-	if (!env.BETTER_AUTH_SECRET) throw new Error('BETTER_AUTH_SECRET is not set');
-	return env.BETTER_AUTH_SECRET;
+	return tokenSecretFrom(env);
 }

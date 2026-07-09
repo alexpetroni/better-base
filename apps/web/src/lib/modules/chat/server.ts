@@ -3,6 +3,7 @@
 // ONLY when CHAT_PROVIDER=anthropic AND ANTHROPIC_API_KEY are both set.
 import { env } from '$env/dynamic/private';
 import { positiveIntEnv } from '$lib/server/env';
+import { tokenSecretFrom } from '$lib/server/secrets';
 import { ANTHROPIC_TIMEOUT_MS_DEFAULT, createAnthropicChatProvider } from './anthropic-provider.ts';
 import { createMockChatProvider } from './mock-provider.ts';
 import type { ChatProvider } from './provider.ts';
@@ -58,10 +59,9 @@ export function getChatProvider(): ChatProvider {
 	return providerInstance;
 }
 
-/** HMAC secret for chat session cookie tokens (reuses the auth secret). */
+/** HMAC secret for chat session cookie tokens — the dedicated TOKEN_SECRET, never the auth secret. */
 export function getChatSecret(): string {
-	if (!env.BETTER_AUTH_SECRET) throw new Error('BETTER_AUTH_SECRET is not set');
-	return env.BETTER_AUTH_SECRET;
+	return tokenSecretFrom(env);
 }
 
 // Fail fast at boot: hooks.server.ts imports this barrel, so a misconfigured
