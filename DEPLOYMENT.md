@@ -40,7 +40,8 @@ documented dev values). Per-site values:
 | `DATABASE_URL` | `postgres://…/better_sleep` | `postgres://…/better_life` | One database per site, identical schema. |
 | `PUBLIC_SITE_URL` | `https://bettersleep.ro` | `https://betterlife.ro` | Canonical origin: links in emails, sitemap, OG tags, Stripe redirect URLs. Must be https in prod (session cookies derive `Secure` from it). |
 | `S3_BUCKET` | e.g. `bettersleep-media` | e.g. `betterlife-media` | One bucket per site. |
-| `BETTER_AUTH_SECRET` | unique 32+ random bytes | unique 32+ random bytes | `openssl rand -base64 32`. Signs staff sessions, chat sessions, newsletter/confirm tokens. Rotating it invalidates all of those. |
+| `BETTER_AUTH_SECRET` | unique 32+ random bytes | unique 32+ random bytes | `openssl rand -base64 32`. Signs staff sessions only. Rotating it logs staff out. |
+| `TOKEN_SECRET` | unique 32+ random bytes | unique 32+ random bytes | `openssl rand -base64 32`. Signs newsletter confirm links, chat session cookies and upload-confirm tickets. MUST differ from `BETTER_AUTH_SECRET` (boot refuses otherwise). Rotating it invalidates outstanding confirm links and chat sessions (users just start a fresh conversation). |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | per-site Stripe account or shared account | 〃 | See §6. |
 | `RESEND_API_KEY` + `EMAIL_DRYRUN=false` | per-site sending domain | 〃 | See §7. |
 
@@ -53,6 +54,12 @@ Shared (may be identical on both sites):
 | `IMGPROXY_KEY`, `IMGPROXY_SALT` | `openssl rand -hex 32` (twice) | MUST match the imgproxy process's own `IMGPROXY_KEY`/`IMGPROXY_SALT`. |
 | `CHAT_PROVIDER` | `anthropic` (prod) | With `anthropic` the server **refuses to boot** without `ANTHROPIC_API_KEY` — no silent mock fallback. Keep `mock` if the assistant should not use the live API yet. |
 | `ANTHROPIC_API_KEY` | from Anthropic console | Only read when `CHAT_PROVIDER=anthropic`. |
+| `ADDRESS_HEADER`, `XFF_DEPTH` | see §3 | REQUIRED behind any proxy so rate limits key real client IPs, and dangerous if set wrong — read §3 before setting. |
+
+The server validates the whole matrix at boot and **refuses to start** with a
+message listing every missing variable (plus `RESEND_API_KEY` when
+`EMAIL_DRYRUN=false`, and `STRIPE_WEBHOOK_SECRET` when a real Stripe key is
+set) — a bad deploy fails at startup, never as 500s on first use.
 
 Not used in prod: `TEST_DATABASE_URL`, `DB_PORT`, `MINIO_*`, `IMGPROXY_PORT`
 (compose/dev knobs only).
@@ -72,6 +79,29 @@ node apps/web/build        # serves HTTP on PORT (default 3000)
   horizontal scaling works.
 - Put a TLS-terminating proxy in front (Caddy, nginx, Cloudflare). Forward
   `X-Forwarded-*` headers.
+- adapter-node caps request bodies at 512 KiB by default (`BODY_SIZE_LIMIT`);
+  keep that default — the app enforces tighter per-endpoint caps on top
+  (32 KiB chat, 256 KiB quiz submissions).
+
+### Client IPs behind the proxy (rate limiting)
+
+Login, chat and public-email rate limits key on the client IP. Out of the box
+the app uses the **socket address** — behind a proxy that is the proxy's own
+IP, so all visitors share one bucket: a burst from anyone rate-limits
+everyone, and per-IP caps do nothing against a single abuser. Configure
+adapter-node's trust explicitly (env vars, read at runtime):
+
+- **One proxy you control (Caddy/nginx → app):**
+  `ADDRESS_HEADER=x-forwarded-for` and `XFF_DEPTH=1` (the rightmost XFF entry
+  was appended by YOUR proxy and is spoof-proof; make the proxy overwrite —
+  not append to — untrusted incoming XFF, or count every hop in `XFF_DEPTH`).
+- **Cloudflare in front of your proxy:** `ADDRESS_HEADER=cf-connecting-ip`
+  (set by Cloudflare itself, can't be spoofed as long as the origin only
+  accepts Cloudflare traffic), or keep `x-forwarded-for` with `XFF_DEPTH=2`
+  (two trusted hops: Cloudflare + your proxy).
+- **No proxy (direct exposure):** set neither. NEVER set `ADDRESS_HEADER`
+  to a header your edge does not strip/overwrite from client requests —
+  that turns the rate limiter keys client-spoofable.
 
 Health: `GET /api/health` returns `200 {status:'ok'}` when the database and
 the bucket are reachable, `503` otherwise — point your uptime checks and load
@@ -128,6 +158,9 @@ env:
 ```
 IMGPROXY_KEY=<hex from openssl rand -hex 32>        # same values the app gets
 IMGPROXY_SALT=<hex from openssl rand -hex 32>
+IMGPROXY_SANITIZE_SVG=true                          # strip scripts from served SVGs
+IMGPROXY_MAX_SRC_FILE_SIZE=15728640                 # 15 MiB, = the app's upload cap
+IMGPROXY_MAX_SRC_RESOLUTION=50                      # megapixels; decompression-bomb guard
 IMGPROXY_USE_S3=true
 IMGPROXY_S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
 AWS_ACCESS_KEY_ID=<R2 token key>                    # read-only token is enough
@@ -138,6 +171,18 @@ AWS_REGION=auto
 Expose it at a public hostname (e.g. `img.bettersleep.ro`) and set that as
 `IMGPROXY_URL` for the app. Signature enforcement is on by default when
 key/salt are set — unsigned or tampered URLs get 403.
+
+**Key/salt hygiene & rotation.** There are NO committed defaults anywhere
+(docker-compose refuses to start without a pair in `.env`; the app's boot
+check does the same) — generate a unique pair per environment and never reuse
+the pair from another deploy. To rotate: generate a new pair, update the
+imgproxy process AND the app env together, restart both. Pages sign URLs per
+request, so newly rendered pages work immediately; already-CDN-cached image
+responses keep serving until their edge TTL expires (fine — the cache key is
+the old URL), while uncached old URLs start returning 403. SVGs are always
+served with `Content-Disposition: attachment` (the app signs `att:1` into
+their URLs) so a stored SVG can never render as a page in the imgproxy
+origin; keep `IMGPROXY_SANITIZE_SVG=true` as defense in depth.
 
 **Cloudflare cache note:** imgproxy re-transforms on every request. Put the
 imgproxy hostname behind Cloudflare (orange cloud) with a cache rule
