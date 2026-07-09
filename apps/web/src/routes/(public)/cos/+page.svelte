@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
+	import { singleSubmit } from '$lib/components/single-submit';
 	import { Img } from '$lib/modules/media';
 	import { formatCents } from '$lib/util/money';
 
@@ -36,6 +37,7 @@
 				{#if line.cover}
 					<Img
 						image={line.cover}
+						sizes="5rem"
 						class="h-16 w-20 rounded bg-(--color-brand-soft)/20 object-cover"
 					/>
 				{:else}
@@ -57,7 +59,7 @@
 						</span>
 					{/if}
 				</div>
-				<form method="POST" action="?/setQty" class="flex items-center gap-2">
+				<form method="POST" action="?/setQty" use:singleSubmit class="flex items-center gap-2">
 					<input type="hidden" name="productId" value={line.productId} />
 					<input
 						type="number"
@@ -80,7 +82,7 @@
 				<span data-testid="cart-line-total" class="w-24 text-right font-semibold">
 					{formatCents(line.lineTotalCents, line.currency)}
 				</span>
-				<form method="POST" action="?/remove">
+				<form method="POST" action="?/remove" use:singleSubmit>
 					<input type="hidden" name="productId" value={line.productId} />
 					<button
 						type="submit"
@@ -99,7 +101,7 @@
 			{m.cart_total()}:
 			<strong data-testid="cart-total">{formatCents(data.totalCents, data.currency)}</strong>
 		</span>
-		<form method="POST" action="?/checkout">
+		<form method="POST" action="?/checkout" use:singleSubmit>
 			<button
 				type="submit"
 				data-testid="cart-checkout"

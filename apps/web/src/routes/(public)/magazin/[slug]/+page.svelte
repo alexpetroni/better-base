@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Seo from '$lib/components/Seo.svelte';
+	import { singleSubmit } from '$lib/components/single-submit';
 	import { m } from '$lib/paraglide/messages';
 	import { Img } from '$lib/modules/media';
 	import { formatCents } from '$lib/util/money';
@@ -19,6 +20,7 @@
 		{#if data.cover}
 			<Img
 				image={data.cover}
+				sizes="(min-width: 48rem) 26rem, calc(100vw - 2rem)"
 				class="w-full rounded-lg bg-(--color-brand-soft)/20"
 				loading="eager"
 			/>
@@ -32,6 +34,7 @@
 						<Img
 							{image}
 							alt={image.alt || `${data.product.name} ${i + 1}`}
+							sizes="(min-width: 48rem) 8rem, calc((100vw - 3.5rem) / 3)"
 							class="aspect-square w-full rounded bg-(--color-brand-soft)/20 object-cover"
 						/>
 					</li>
@@ -46,7 +49,7 @@
 			{formatCents(data.product.priceCents, data.product.currency)}
 		</p>
 
-		<form method="POST" action="?/add" class="mb-8 flex items-end gap-3">
+		<form method="POST" action="?/add" use:singleSubmit class="mb-8 flex items-end gap-3">
 			<label class="block text-sm">
 				<span class="mb-1 block text-(--color-ink)/70">{m.shop_qty_label()}</span>
 				<input

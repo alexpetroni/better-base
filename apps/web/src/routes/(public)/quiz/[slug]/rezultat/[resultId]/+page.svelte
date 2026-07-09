@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
 	import Seo from '$lib/components/Seo.svelte';
+	import { singleSubmit } from '$lib/components/single-submit';
 	import { canonicalUrl } from '$lib/seo';
 
 	let { data, form } = $props();
@@ -18,6 +19,11 @@
 	canonical={canonicalUrl(`/quiz/${data.quizSlug}`)}
 	siteName={data.site.name}
 />
+
+<svelte:head>
+	<!-- Result pages carry personal scores (PII) — never index them. -->
+	<meta name="robots" content="noindex" />
+</svelte:head>
 
 <article data-testid="quiz-result-page" class="mx-auto max-w-2xl">
 	<p class="text-sm text-(--color-ink)/70">{data.quizTitle}</p>
@@ -85,7 +91,7 @@
 					{m.quiz_email_invalid()}
 				</p>
 			{/if}
-			<form method="POST" action="?/email">
+			<form method="POST" action="?/email" use:singleSubmit>
 				<div class="mb-3 flex flex-col gap-2 sm:flex-row">
 					<input
 						type="text"

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { m } from '$lib/paraglide/messages';
+	import { singleSubmit } from '$lib/components/single-submit';
 
 	// GDPR: the consent checkbox starts UNTICKED and is required to submit.
 	// Plain form POST to /newsletter (works without JS); `source` tells the
@@ -7,7 +8,13 @@
 	let { source = 'footer' }: { source?: string } = $props();
 </script>
 
-<form method="POST" action="/newsletter" class="max-w-md" data-testid="newsletter-form">
+<form
+	method="POST"
+	action="/newsletter"
+	use:singleSubmit
+	class="max-w-md"
+	data-testid="newsletter-form"
+>
 	<h2 class="mb-2 text-lg font-semibold">{m.newsletter_heading()}</h2>
 	<p class="mb-3 text-sm opacity-80">{m.newsletter_blurb()}</p>
 	<input type="hidden" name="source" value={source} />

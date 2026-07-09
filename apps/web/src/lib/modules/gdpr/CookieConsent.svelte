@@ -9,15 +9,36 @@
 	// The server-read cookie is only the seed; later changes are local decisions.
 	// svelte-ignore state_referenced_locally
 	let decision = $state(initial);
+	let bannerEl = $state<HTMLElement>();
 
 	function decide(value: CookieConsentValue) {
 		document.cookie = consentCookieString(value);
 		decision = value;
 	}
+
+	// Publish the banner's height as --cookie-banner-h so other fixed-bottom UI
+	// (the chat widget) can offset above it instead of being occluded. Cleared
+	// when the banner leaves the DOM after a decision.
+	$effect(() => {
+		if (!bannerEl) {
+			document.documentElement.style.removeProperty('--cookie-banner-h');
+			return;
+		}
+		const el = bannerEl;
+		const observer = new ResizeObserver(() => {
+			document.documentElement.style.setProperty('--cookie-banner-h', `${el.offsetHeight}px`);
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			document.documentElement.style.removeProperty('--cookie-banner-h');
+		};
+	});
 </script>
 
 {#if decision === null}
 	<section
+		bind:this={bannerEl}
 		data-testid="cookie-consent"
 		aria-label={m.consent_aria_label()}
 		class="fixed inset-x-0 bottom-0 z-50 border-t border-(--color-brand-soft) bg-white p-4 shadow-lg"

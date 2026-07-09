@@ -62,6 +62,9 @@ test('visitor completes the seeded quiz, opts into the funnel, confirms and unsu
 		await expect(page.getByTestId('result-score')).toContainText('20 din 32');
 		await expect(page.locator('[data-testid="result-dimension"]')).toHaveCount(3);
 
+		// Result pages carry personal scores (PII) — they must never be indexed.
+		await expect(page.locator('head meta[name="robots"]')).toHaveAttribute('content', /noindex/);
+
 		// GDPR: both consent checkboxes start UNTICKED; the result is already
 		// fully visible without giving an email.
 		await expect(page.getByTestId('result-consent-newsletter')).not.toBeChecked();

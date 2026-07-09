@@ -3,6 +3,10 @@
 	import { m } from '$lib/paraglide/messages';
 
 	let { data, form } = $props();
+
+	// Disable the button while the action is in flight so a double-click can't
+	// fire two login attempts (each would consume a rate-limit slot).
+	let submitting = $state(false);
 </script>
 
 <svelte:head>
@@ -23,7 +27,17 @@
 		</p>
 	{/if}
 
-	<form method="POST" use:enhance class="space-y-4">
+	<form
+		method="POST"
+		use:enhance={() => {
+			submitting = true;
+			return async ({ update }) => {
+				await update();
+				submitting = false;
+			};
+		}}
+		class="space-y-4"
+	>
 		<label class="block">
 			<span class="mb-1 block text-sm font-medium">{m.admin_login_email()}</span>
 			<input
@@ -47,7 +61,8 @@
 		</label>
 		<button
 			type="submit"
-			class="w-full rounded bg-(--color-brand) px-4 py-2 font-semibold text-white hover:opacity-90"
+			disabled={submitting}
+			class="w-full rounded bg-(--color-brand) px-4 py-2 font-semibold text-white hover:opacity-90 disabled:opacity-50"
 		>
 			{m.admin_login_submit()}
 		</button>
