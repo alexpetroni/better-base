@@ -15,7 +15,8 @@ export const lifeSite: SiteConfig = {
 	},
 	nav: [
 		{ label: 'Acasă', href: '/' },
-		{ label: 'Sănătate', href: '/sanatate/somn' }
+		{ label: 'Sănătate', href: '/sanatate/somn' },
+		{ label: 'Blog', href: '/blog' }
 	],
 	chatPersonaKey: 'life-coach',
 	email: {
