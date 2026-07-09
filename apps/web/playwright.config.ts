@@ -4,15 +4,18 @@ import { E2E_STRIPE_WEBHOOK_SECRET, siteDatabaseUrl } from './e2e/env.ts';
 // One build serves both sites: SITE_ID is read at runtime, so we start two
 // preview servers from the same output. `pnpm test:e2e` builds first.
 // Each server gets its own site database (auth sessions live in the DB).
-// EMAIL_DRYRUN and an EMPTY STRIPE_SECRET_KEY are forced: an e2e run must
-// never deliver real email nor call Stripe (empty key selects the mock).
+// EMAIL_DRYRUN, an EMPTY STRIPE_SECRET_KEY and the MOCK chat provider are
+// forced: an e2e run must never deliver real email, call Stripe, or call an
+// LLM (CHAT_PROVIDER=mock with an empty key can never reach Anthropic).
 function siteEnv(siteId: 'sleep' | 'life') {
 	return {
 		SITE_ID: siteId,
 		DATABASE_URL: siteDatabaseUrl(siteId),
 		EMAIL_DRYRUN: 'true',
 		STRIPE_SECRET_KEY: '',
-		STRIPE_WEBHOOK_SECRET: E2E_STRIPE_WEBHOOK_SECRET
+		STRIPE_WEBHOOK_SECRET: E2E_STRIPE_WEBHOOK_SECRET,
+		CHAT_PROVIDER: 'mock',
+		ANTHROPIC_API_KEY: ''
 	};
 }
 

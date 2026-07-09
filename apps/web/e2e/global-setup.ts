@@ -45,6 +45,10 @@ export default async function globalSetup() {
 			await db.execute(sql`delete from quiz_results`);
 			await db.execute(sql`delete from subscribers`);
 			await db.execute(sql`delete from email_log`);
+			// Chat leftovers: hourly rate-limit counters outlive a test cycle.
+			await db.execute(sql`delete from chat_messages`);
+			await db.execute(sql`delete from chat_sessions`);
+			await db.execute(sql`delete from chat_rate_limits`);
 			// The shop e2e runs against the seeded demo catalog (idempotent; also
 			// restores stock levels consumed by earlier webhook simulations).
 			await seedDemoProducts(db, storage);
