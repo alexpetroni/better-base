@@ -9,7 +9,11 @@
       "Bash(git push *)",
       "Bash(DRY_RUN=1 bash run.sh)",
       "Bash(git -C /home/alex/work/better-base log --oneline -5)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(git -C /home/alex/work/better-base log --oneline -8)",
+      "Bash(git -C /home/alex/work/better-base log --oneline -3)",
+      "Bash(xargs -r docker rm -f)",
+      "Bash(bash run.sh)"
     ]
   }
 }
