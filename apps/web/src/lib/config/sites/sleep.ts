@@ -17,9 +17,11 @@ export const sleepSite: SiteConfig = {
 		{ label: 'Acasă', href: '/' },
 		{ label: 'Somn', href: '/sanatate/somn' },
 		{ label: 'Blog', href: '/blog' },
-		{ label: 'Magazin', href: '/magazin' }
+		{ label: 'Magazin', href: '/magazin' },
+		{ label: 'Asistent', href: '/asistent' }
 	],
 	chatPersonaKey: 'sleep-coach',
+	chatWidget: true,
 	email: {
 		from: 'salut@bettersleep.ro',
 		replyTo: 'salut@bettersleep.ro'

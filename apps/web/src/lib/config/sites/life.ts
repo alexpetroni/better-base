@@ -17,9 +17,11 @@ export const lifeSite: SiteConfig = {
 		{ label: 'Acasă', href: '/' },
 		{ label: 'Sănătate', href: '/sanatate/somn' },
 		{ label: 'Blog', href: '/blog' },
-		{ label: 'Magazin', href: '/magazin' }
+		{ label: 'Magazin', href: '/magazin' },
+		{ label: 'Asistent', href: '/asistent' }
 	],
 	chatPersonaKey: 'life-coach',
+	chatWidget: true,
 	email: {
 		from: 'salut@betterlife.ro',
 		replyTo: 'salut@betterlife.ro'

@@ -14,6 +14,8 @@ export interface SiteConfig {
 	theme: Record<string, string>;
 	nav: NavItem[];
 	chatPersonaKey: string;
+	/** Whether the floating chat widget is rendered on public pages. */
+	chatWidget: boolean;
 	email: {
 		from: string;
 		replyTo: string;
