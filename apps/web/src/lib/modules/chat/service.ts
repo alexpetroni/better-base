@@ -101,6 +101,11 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 	);
 	if (consumed.some((result) => result.limited)) return { kind: 'rate-limited' };
 
+	// Deliberately not transactional (audit Theme B): the assistant reply is
+	// persisted only after the external stream completes, which could never sit
+	// inside a DB transaction. A failure mid-stream leaves a user message with
+	// no reply — an accurate record, not corruption. `messageCount` is a
+	// heuristic pruning stat, not an invariant.
 	await db
 		.insert(chatMessages)
 		.values({ id: randomUUID(), sessionId: session.id, role: 'user', content: validated.message });

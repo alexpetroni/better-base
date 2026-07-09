@@ -64,6 +64,11 @@ export async function requestUpload(
  * Step 2, after the browser PUT succeeded: verify the object really landed
  * (size/mime enforced by the presigned signature, re-checked here), read its
  * dimensions server-side and record the row.
+ *
+ * Deliberately not transactional (audit Theme B): storage is external, so the
+ * only DB write is the single row insert. A failure here strands an orphan
+ * object in the bucket — harmless, invisible, and re-confirmable — never a
+ * corrupt row.
  */
 export async function confirmUpload(
 	deps: MediaDeps,
@@ -146,6 +151,12 @@ export async function updateMediaAlt(
 /**
  * Delete a media row and its storage object. Refuses when any registered
  * reference check reports the row in use.
+ *
+ * Deliberately not transactional (audit Theme B): the storage delete cannot
+ * join a DB transaction. Object-then-row order means a failure between the
+ * two leaves a row whose thumbnail 404s; retrying the delete heals it (S3
+ * deletes are idempotent). The reverse order would leak unreachable objects
+ * with no admin-visible trace to retry.
  */
 export async function deleteMedia(deps: MediaDeps, id: string): Promise<Result<MediaRow>> {
 	const row = await getMedia(deps, id);

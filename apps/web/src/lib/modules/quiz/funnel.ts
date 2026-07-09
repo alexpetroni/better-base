@@ -16,6 +16,14 @@ import { getResultWithQuiz } from './service.ts';
  * consents. The quiz-result email is transactional — it goes out for the
  * given address regardless of the consent checkboxes, exactly once per
  * (result, address) even when the handler retries.
+ *
+ * Deliberately NOT wrapped in a db.transaction (audit Theme B): the sequence
+ * interleaves external email sends that could never roll back, and every
+ * step is individually idempotent — the subscriber upsert merges (keeping
+ * the original consent record), the result link is a repeatable UPDATE, and
+ * both emails are keyed. A partial failure surfaces as a form error and a
+ * retry of the whole action heals it; a rollback would instead orphan
+ * email_log rows that already reference the rolled-back subscriber.
  */
 
 export interface QuizFunnelDeps {
