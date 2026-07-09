@@ -37,6 +37,9 @@ importers:
       sanitize-html:
         specifier: ^2.17.5
         version: 2.17.5
+      stripe:
+        specifier: ^22.3.0
+        version: 22.3.0(@types/node@24.13.2)
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -2546,6 +2549,15 @@ packages:
   std-env@4.1.0:
     resolution: {integrity: sha512-Rq7ybcX2RuC55r9oaPVEW7/xu3tj8u4GeBYHBWCychFtzMIr86A7e3PPEBPT37sHStKX3+TiX/Fr/ACmJLVlLQ==}
 
+  stripe@22.3.0:
+    resolution: {integrity: sha512-ypO6xjVrMWs9SmIMeHr8naCx3dAQ0clxMdUTxn7Ejd7hmY9meBGfE+N4pVHkf9sUNebAHp6uJo6mV3GxDIc2cA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@types/node': '>=18'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
@@ -4835,6 +4847,10 @@ snapshots:
   stackback@0.0.2: {}
 
   std-env@4.1.0: {}
+
+  stripe@22.3.0(@types/node@24.13.2):
+    optionalDependencies:
+      '@types/node': 24.13.2
 
   supports-preserve-symlinks-flag@1.0.0: {}
 

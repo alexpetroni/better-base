@@ -1,55 +1,62 @@
 {
-	"version": "7",
-	"dialect": "postgresql",
-	"entries": [
-		{
-			"idx": 0,
-			"version": "7",
-			"when": 1783533969326,
-			"tag": "0000_silent_northstar",
-			"breakpoints": true
-		},
-		{
-			"idx": 1,
-			"version": "7",
-			"when": 1783535224275,
-			"tag": "0001_new_vertigo",
-			"breakpoints": true
-		},
-		{
-			"idx": 2,
-			"version": "7",
-			"when": 1783540647513,
-			"tag": "0002_bitter_maestro",
-			"breakpoints": true
-		},
-		{
-			"idx": 3,
-			"version": "7",
-			"when": 1783541842096,
-			"tag": "0003_yielding_shatterstar",
-			"breakpoints": true
-		},
-		{
-			"idx": 4,
-			"version": "7",
-			"when": 1783559011337,
-			"tag": "0004_small_mauler",
-			"breakpoints": true
-		},
-		{
-			"idx": 5,
-			"version": "7",
-			"when": 1783559531081,
-			"tag": "0005_rapid_owl",
-			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "7",
-			"when": 1783559919404,
-			"tag": "0006_narrow_alex_wilder",
-			"breakpoints": true
-		}
-	]
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783533969326,
+      "tag": "0000_silent_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783535224275,
+      "tag": "0001_new_vertigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783540647513,
+      "tag": "0002_bitter_maestro",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783541842096,
+      "tag": "0003_yielding_shatterstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783559011337,
+      "tag": "0004_small_mauler",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783559531081,
+      "tag": "0005_rapid_owl",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783559919404,
+      "tag": "0006_narrow_alex_wilder",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783576728766,
+      "tag": "0007_regular_calypso",
+      "breakpoints": true
+    }
+  ]
 }
