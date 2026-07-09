@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { m } from '$lib/paraglide/messages';
-	import { formatCents } from '$lib/modules/shop';
+	import { formatCents } from '$lib/util/money';
 
 	let { data, form } = $props();
 

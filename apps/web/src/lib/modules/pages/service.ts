@@ -1,14 +1,14 @@
 import { asc, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
-import { nextUniqueSlug, slugify } from '../blog/slug.ts';
+import type { Result } from '../../util/result.ts';
+import { nextUniqueSlug, slugify } from '../../util/slug.ts';
 import { pages, type PageRow } from './schema.ts';
 
 export interface PagesDeps {
 	db: Db;
 }
 
-export type PagesResult<T> =
-	{ ok: true; value: T } | { ok: false; error: 'not-found' | 'invalid-title' };
+export type PagesResult<T> = Result<T, 'not-found' | 'invalid-title'>;
 
 export async function getPageBySlug(deps: PagesDeps, slug: string): Promise<PageRow | null> {
 	const [row] = await deps.db.select().from(pages).where(eq(pages.slug, slug));

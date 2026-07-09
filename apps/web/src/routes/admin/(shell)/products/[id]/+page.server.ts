@@ -1,7 +1,8 @@
 import { error, fail } from '@sveltejs/kit';
 import { PILLARS_BY_SLUG } from '$lib/config';
 import { getDb } from '$lib/db';
-import { parseLeiToCents, type ProductStatus } from '$lib/modules/shop';
+import { parseLeiToCents } from '$lib/util/money';
+import type { ProductStatus } from '$lib/modules/shop';
 import {
 	getProduct,
 	getStripeGateway,

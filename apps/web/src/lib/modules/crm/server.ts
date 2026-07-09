@@ -9,7 +9,6 @@ export {
 	getSubscriber,
 	listSubscribers,
 	NEWSLETTER_CONFIRM_PURPOSE,
-	normalizeEmail,
 	requestNewsletterSignup,
 	sendNewsletterConfirmEmail,
 	subscribersCsv,

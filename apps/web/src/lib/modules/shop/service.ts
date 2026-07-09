@@ -1,7 +1,8 @@
 import { and, desc, eq, exists, ilike, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
-import { nextUniqueSlug, slugify } from '../blog/slug.ts';
+import type { Result } from '../../util/result.ts';
+import { nextUniqueSlug, slugify } from '../../util/slug.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import { productPillars, products, type ProductRow, type ProductStatus } from './schema.ts';
 
@@ -23,8 +24,7 @@ export type ShopError =
 	| 'invalid-stock'
 	| 'unknown-pillar';
 
-export type ShopResult<T> =
-	{ ok: true; value: T } | { ok: false; error: ShopError; detail?: string };
+export type ShopResult<T> = Result<T, ShopError>;
 
 export interface ProductWithPillars {
 	product: ProductRow;

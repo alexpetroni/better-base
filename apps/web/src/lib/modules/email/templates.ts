@@ -1,4 +1,4 @@
-import { formatCents } from '../shop/money.ts';
+import { formatCents } from '../../util/money.ts';
 
 /**
  * Email templates as typed functions: each key has its own data shape and

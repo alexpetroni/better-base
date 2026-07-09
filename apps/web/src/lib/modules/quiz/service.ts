@@ -3,7 +3,8 @@ import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FormConfig } from 'formcomp';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
-import { nextUniqueSlug, slugify } from '../blog/slug.ts';
+import type { Result } from '../../util/result.ts';
+import { nextUniqueSlug, slugify } from '../../util/slug.ts';
 import { subscribers } from '../crm/schema.ts';
 import {
 	quizResults,
@@ -36,8 +37,7 @@ export type QuizError =
 	| 'invalid-scoring'
 	| 'not-publishable';
 
-export type QuizOpResult<T> =
-	{ ok: true; value: T } | { ok: false; error: QuizError; detail?: string };
+export type QuizOpResult<T> = Result<T, QuizError>;
 
 async function ensureUniqueQuizSlug(deps: QuizDeps, base: string, excludeId?: string) {
 	const root = slugify(base) || 'chestionar';

@@ -1,5 +1,6 @@
 import type { FormConfig } from 'formcomp';
 import { validateScoringConfig, type ScoringConfig } from './scoring.ts';
+import { isRecord } from '../../util/object.ts';
 
 /**
  * Structural validation for admin-authored quiz JSON. Deliberately does NOT
@@ -7,10 +8,6 @@ import { validateScoringConfig, type ScoringConfig } from './scoring.ts';
  * which plain-node contexts like the seed script cannot load) — formcomp's own
  * `validateConfig` runs client-side in the editor preview pane instead.
  */
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /** ro errors; empty list ⇒ `raw` is a renderable FormConfig. */
 export function validateFormSchema(raw: unknown): string[] {

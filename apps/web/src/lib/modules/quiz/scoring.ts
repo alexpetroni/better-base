@@ -1,4 +1,5 @@
 import type { FormConfig, Question } from 'formcomp';
+import { isRecord } from '../../util/object.ts';
 
 /**
  * Pure scoring engine: (form schema, scoring config, answers) → profile.
@@ -179,10 +180,6 @@ export function scoreQuiz(
 }
 
 const OPTION_TYPES = new Set(['single-select', 'multi-select', 'select', 'likert']);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /**
  * Validate a scoring config (as parsed, untrusted JSON) against a form

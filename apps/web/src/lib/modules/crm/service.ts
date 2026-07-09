@@ -1,5 +1,7 @@
 import { desc, eq, ilike, or } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { normalizeEmail } from '../../util/email.ts';
+import type { Result } from '../../util/result.ts';
 import type { EmailSender, SendEmailOutcome } from '../email/service.ts';
 import { applyConsents, hasConsent, revokeAllConsents, type ConsentChanges } from './consent.ts';
 import { subscribers, type SubscriberRow } from './schema.ts';
@@ -15,15 +17,7 @@ export interface CrmDeps {
 	db: Db;
 }
 
-export type CrmResult<T> = { ok: true; value: T } | { ok: false; error: 'invalid-email' };
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** Lowercased/trimmed email, or null when it is not plausibly an address. */
-export function normalizeEmail(raw: string): string | null {
-	const email = raw.trim().toLowerCase();
-	return EMAIL_RE.test(email) ? email : null;
-}
+export type CrmResult<T> = Result<T, 'invalid-email'>;
 
 export interface UpsertSubscriberInput {
 	email: string;

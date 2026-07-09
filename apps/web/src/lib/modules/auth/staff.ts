@@ -1,5 +1,6 @@
 import { MIN_PASSWORD_LENGTH, type Auth } from './auth.ts';
 import { isStaffRole, type StaffRole } from './guards.ts';
+import { EMAIL_RE } from '../../util/email.ts';
 
 export interface UpsertStaffUserInput {
 	email: string;
@@ -26,7 +27,7 @@ export async function upsertStaffUser(
 	input: UpsertStaffUserInput
 ): Promise<UpsertStaffUserResult> {
 	const email = input.email.trim().toLowerCase();
-	if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+	if (!EMAIL_RE.test(email)) {
 		throw new Error(`Invalid email address: "${input.email}"`);
 	}
 	if (input.password.length < MIN_PASSWORD_LENGTH) {

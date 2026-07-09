@@ -1,6 +1,7 @@
 import { eq, inArray, or } from 'drizzle-orm';
 import { pillars } from '../../db/schema/core.ts';
 import type { Db } from '../../db/client.ts';
+import type { Result } from '../../util/result.ts';
 import { extractMediaRefs } from '../blog/markdown.ts';
 import { articlePillars, articles } from '../blog/schema.ts';
 import { media, type MediaRow } from '../media/schema.ts';
@@ -25,8 +26,7 @@ export interface ContentDeps {
 
 export type ContentError = 'not-found' | 'missing-object' | 'invalid-bundle' | 'missing-pillars';
 
-export type ContentResult<T> =
-	{ ok: true; value: T } | { ok: false; error: ContentError; detail?: string };
+export type ContentResult<T> = Result<T, ContentError>;
 
 /**
  * Resolve `media:` refs (row id OR storage key — same rule as rendering) plus

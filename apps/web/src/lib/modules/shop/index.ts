@@ -14,7 +14,6 @@ export {
 	setCartQty,
 	type CartItem
 } from './cart.ts';
-export { formatCents, parseLeiToCents } from './money.ts';
 export type {
 	OrderItemRow,
 	OrderRow,

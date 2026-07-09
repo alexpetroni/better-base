@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { imageSize } from 'image-size';
 import type { Db } from '../../db/client.ts';
+import type { Result as ResultOf } from '../../util/result.ts';
 import { media, type MediaRow, type VideoProvider } from './schema.ts';
 import type { Storage } from './storage.ts';
 import { isAllowedImageMime, mediaKeyFor, validateUpload } from './validation.ts';
@@ -17,7 +18,7 @@ export interface MediaDeps {
 
 export type MediaError = 'invalid-mime' | 'invalid-size' | 'not-found' | 'referenced';
 
-export type Result<T> = { ok: true; value: T } | { ok: false; error: MediaError; detail?: string };
+export type Result<T> = ResultOf<T, MediaError>;
 
 /**
  * Reference checks other modules register (blog covers, product images, …).

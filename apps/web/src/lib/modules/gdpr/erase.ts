@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { normalizeEmail } from '../../util/email.ts';
+import type { Result } from '../../util/result.ts';
 import { subscribers } from '../crm/schema.ts';
-import { normalizeEmail } from '../crm/service.ts';
 import { emailLog } from '../email/schema.ts';
 import { quizResults } from '../quiz/schema.ts';
 import { orders } from '../shop/schema.ts';
@@ -28,7 +29,7 @@ export interface EraseSummary {
 	emailLogAnonymized: number;
 }
 
-export type EraseResult = { ok: true; value: EraseSummary } | { ok: false; error: 'invalid-email' };
+export type EraseResult = Result<EraseSummary, 'invalid-email'>;
 
 export async function eraseSubscriberData(
 	deps: { db: Db },

@@ -2,6 +2,7 @@ import type { ArticleRow } from '../blog/schema.ts';
 import type { MediaRow } from '../media/schema.ts';
 import type { QuizRow } from '../quiz/schema.ts';
 import type { ProductRow } from '../shop/schema.ts';
+import { isRecord } from '../../util/object.ts';
 
 /**
  * Content bundle format: the JSON produced by `pnpm content export` and
@@ -167,10 +168,6 @@ export function remapMediaRefs(md: string, map: ReadonlyMap<string, string>): st
 		(all, pre: string, ref: string, post: string) =>
 			map.has(ref) ? `${pre}${map.get(ref)}${post}` : all
 	);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function optionalString(value: unknown): value is string | null {

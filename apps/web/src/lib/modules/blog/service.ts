@@ -3,7 +3,8 @@ import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import { articlePillars, articles, type ArticleRow, type ArticleStatus } from './schema.ts';
-import { nextUniqueSlug, slugify } from './slug.ts';
+import type { Result } from '../../util/result.ts';
+import { nextUniqueSlug, slugify } from '../../util/slug.ts';
 
 /**
  * Blog service. Framework-free: the db is passed in so the same functions
@@ -18,8 +19,7 @@ export interface BlogDeps {
 
 export type BlogError = 'not-found' | 'invalid-slug' | 'unknown-pillar' | 'invalid-title';
 
-export type BlogResult<T> =
-	{ ok: true; value: T } | { ok: false; error: BlogError; detail?: string };
+export type BlogResult<T> = Result<T, BlogError>;
 
 export interface ArticleWithPillars {
 	article: ArticleRow;

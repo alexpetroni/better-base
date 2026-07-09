@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
-	import { slugify } from '$lib/modules/blog';
+	import { slugify } from '$lib/util/slug';
 	import { Img, type ImageSources } from '$lib/modules/media';
 	import MediaPicker, { type LibraryImage } from '$lib/components/MediaPicker.svelte';
 

@@ -2,9 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
-	import { slugify } from '$lib/modules/blog';
+	import { slugify } from '$lib/util/slug';
 	import { Img, type ImageSources } from '$lib/modules/media';
-	import { formatCents } from '$lib/modules/shop';
+	import { formatCents } from '$lib/util/money';
 	import MediaPicker, { type LibraryImage } from '$lib/components/MediaPicker.svelte';
 
 	let { data, form } = $props();
