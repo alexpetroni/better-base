@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages';
+	import { ChatWidget } from '$lib/modules/chat';
 	import { NewsletterSignup } from '$lib/modules/crm';
 
 	let { data, children } = $props();
@@ -55,3 +56,7 @@
 		<p class="mt-8 text-sm text-(--color-ink)/60">© {data.site.name}</p>
 	</div>
 </footer>
+
+{#if data.site.chatWidget}
+	<ChatWidget />
+{/if}

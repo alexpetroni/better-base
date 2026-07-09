@@ -246,5 +246,15 @@
 	"admin_order_status_paid": "plătită",
 	"admin_order_status_failed": "eșuată",
 	"admin_order_status_refunded": "rambursată",
-	"admin_order_back": "← Toate comenzile"
+	"admin_order_back": "← Toate comenzile",
+	"chat_open": "Asistent",
+	"chat_close": "Închide",
+	"chat_title": "Asistent virtual",
+	"chat_full_page": "Deschide pagina",
+	"chat_empty": "Salut! Întreabă-mă orice despre obiceiuri sănătoase.",
+	"chat_disclaimer": "Asistent virtual — nu oferă sfaturi medicale. Pentru probleme de sănătate, consultă un medic.",
+	"chat_placeholder": "Scrie un mesaj…",
+	"chat_send": "Trimite",
+	"chat_reset": "Conversație nouă",
+	"chat_page_intro": "Discută cu asistentul nostru virtual despre obiceiuri sănătoase. Răspunsurile sunt generate automat și nu înlocuiesc sfatul unui medic."
 }

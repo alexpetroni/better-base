@@ -246,5 +246,15 @@
 	"admin_order_status_paid": "paid",
 	"admin_order_status_failed": "failed",
 	"admin_order_status_refunded": "refunded",
-	"admin_order_back": "← All orders"
+	"admin_order_back": "← All orders",
+	"chat_open": "Assistant",
+	"chat_close": "Close",
+	"chat_title": "Virtual assistant",
+	"chat_full_page": "Open page",
+	"chat_empty": "Hi! Ask me anything about healthy habits.",
+	"chat_disclaimer": "Virtual assistant — no medical advice. For health issues, see a doctor.",
+	"chat_placeholder": "Type a message…",
+	"chat_send": "Send",
+	"chat_reset": "New conversation",
+	"chat_page_intro": "Chat with our virtual assistant about healthy habits. Responses are generated automatically and do not replace medical advice."
 }

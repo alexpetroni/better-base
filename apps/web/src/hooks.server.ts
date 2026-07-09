@@ -7,6 +7,9 @@ import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
 // any request can delete media (they live in the server barrels' module init).
 import '$lib/modules/blog/server';
 import '$lib/modules/shop/server';
+// Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
+// without an ANTHROPIC_API_KEY fails fast instead of at the first message.
+import '$lib/modules/chat/server';
 
 const handleParaglide: Handle = ({ event, resolve }) =>
 	paraglideMiddleware(event.request, ({ request, locale }) => {

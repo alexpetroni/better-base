@@ -8,7 +8,8 @@ export const load: LayoutServerLoad = () => {
 			id: site.id,
 			name: site.name,
 			nav: site.nav,
-			theme: site.theme
+			theme: site.theme,
+			chatWidget: site.chatWidget
 		}
 	};
 };
