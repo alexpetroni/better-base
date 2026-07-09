@@ -57,6 +57,13 @@
 			"when": 1783576728766,
 			"tag": "0007_regular_calypso",
 			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1783592831502,
+			"tag": "0008_friendly_rhino",
+			"breakpoints": true
 		}
 	]
 }

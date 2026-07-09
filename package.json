@@ -15,6 +15,7 @@
 		"db:migrate": "pnpm --filter web db:migrate",
 		"db:seed": "pnpm --filter web db:seed",
 		"storage:init": "pnpm --filter web storage:init",
+		"chat:prune": "pnpm --filter web chat:prune",
 		"user:create": "pnpm --filter web user:create"
 	}
 }
