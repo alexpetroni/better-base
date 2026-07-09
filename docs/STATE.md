@@ -1,4 +1,4 @@
-# STATE — after Phase 4 (Quizzes, subscribers & email funnel)
+# STATE — after Phase 5 (Shop: products, cart, Stripe Checkout, orders)
 
 ## What exists
 
@@ -291,6 +291,101 @@ filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   defeats the overloads). Nav/config hrefs now cast to a single static route
   (`as '/'` / `as '/admin'`) — value is unchanged at runtime.
 
+## Shop (Phase 5)
+
+- **modules/shop** (`apps/web/src/lib/modules/shop/`, split barrels; the server
+  barrel is imported from `hooks.server.ts` so the products media-reference
+  check registers at boot). `README.md` in the module documents the design.
+- **Money is integer cents (bani) everywhere** — DB, services, Stripe,
+  metadata. `money.ts` is the ONLY place amounts meet strings:
+  `formatCents(4990) → "49,90 lei"` and `parseLeiToCents("49,90") → 4990`,
+  both integer/string math (grep-verified: no parseFloat/toFixed/float
+  arithmetic anywhere in shop code).
+- **Schema** (migration `0007`): `products` (text id, unique slug, name,
+  `description_md`, `price_cents` int, currency `ron`, `stripe_product_id`,
+  `stripe_price_id`, status `draft|active|archived`, `cover_media_id`
+  FK→media set-null, `gallery` jsonb media-id array, `stock` nullable int —
+  null = untracked, timestamps), `product_pillars` (join, cascade),
+  `orders` (id, email, UNIQUE `stripe_session_id` — the idempotency anchor,
+  `stripe_payment_intent`, `amount_total_cents`, currency, status
+  `pending|paid|failed|refunded`, `shipping_address` jsonb, created_at),
+  `order_items` (order FK cascade, product FK set-null, name+`price_cents`
+  snapshot, qty).
+- **StripeGateway** (`gateway.ts`): every Stripe API call goes through this
+  interface. `getStripeGateway()` (server barrel) returns the REAL gateway
+  (`stripe-gateway.ts`) only when `STRIPE_SECRET_KEY` is non-empty; otherwise
+  the deterministic in-memory mock (`mock-gateway.ts`, sessions
+  `cs_test_mock_N` → `https://checkout.stripe.com/c/pay/cs_test_mock_N`).
+  Dev, vitest and e2e all run on the mock (playwright config forces
+  `STRIPE_SECRET_KEY=''`), so no test can ever call Stripe.
+- **Sync** (`sync.ts`): saving a product in admin upserts the Stripe product
+  and creates a new price + archives the replaced one when the amount changed
+  (`syncProductToStripe`). Checkout does NOT depend on sync — sessions use
+  inline `price_data` snapshotted from our DB rows.
+- **Cart**: httpOnly cookie `cart` of `{productId, qty}` lines; pure logic in
+  `cart.ts` (add/setQty/remove/count, qty clamped 1–99, max 7 distinct lines
+  so the checkout metadata snapshot fits Stripe's 500-char value limit),
+  cookie glue in `$lib/server/cart.ts`. Prices are never trusted from the
+  cookie — always re-read from the DB. Header badge is server-rendered from
+  the layout load (`cartCount` in `App.PageData`; a page load that mutates
+  the cart cookie must override it — the checkout success page returns
+  `cartCount: 0` because the layout load may read the cookie first).
+- **Checkout** (`checkout.ts`): `createCheckoutFromCart` filters the cart to
+  visible+purchasable products, drops out-of-stock lines (error if anything
+  was dropped: `unavailable-items`), creates the session (RON, shipping
+  address collection RO, success `/cos/succes?session_id={CHECKOUT_SESSION_ID}`,
+  cancel `/cos`, both from `PUBLIC_SITE_URL`) and the `?/checkout` action on
+  `/cos` 303-redirects to the session URL. The cart snapshot travels in
+  session metadata (`cart` = JSON `[{i,q,p}]`, built/parsed by
+  `buildCartMetadata`/`parseCartMetadata`).
+- **Webhook** `POST /api/stripe/webhook`: `verifyStripeEvent` (SDK's offline
+  signature check against `STRIPE_WEBHOOK_SECRET`; bad/missing signature →
+  400, nothing written). `processStripeEvent`:
+  `checkout.session.completed` → insert order + items in a transaction keyed
+  on the UNIQUE session id (a duplicate delivery hits the constraint and
+  returns `duplicate-session` — exactly one order), decrement tracked stock
+  floored at 0 (untracked stays null), send the `order-confirmation` email
+  through modules/email with idempotency key `order-confirmation:<orderId>`;
+  `charge.refunded` → mark the matching order `refunded`. Unhandled event
+  types are acknowledged (`ignored`). Always 200 + `{received, outcome}` for
+  verified events.
+- **Public routes**: `/magazin` (grid of `active` products tagged to the
+  site's pillars — same visibility rule as blog/quiz; out-of-stock badge),
+  `/magazin/[slug]` (gallery via `<Img>`, sanitized markdown description
+  incl. `media:` refs, qty + add-to-cart form → 303 `/cos`; disabled
+  "Stoc epuizat" button when tracked stock is 0), `/cos` (qty edit, remove,
+  totals, checkout action), `/cos/succes` (order summary by `session_id`,
+  server-side lookup; clears the cart; shows a "processing" state when the
+  webhook hasn't landed yet). Nav configs have a `Magazin` entry.
+- **Admin** (both admin-role only, already in `ADMIN_ONLY_SECTIONS`):
+  `/admin/products` (list + create-by-name) and `/admin/products/[id]`
+  (fields, price entered in lei → stored bani via `parseLeiToCents`, status,
+  stock, cover/gallery media pickers, pillar checkboxes, Stripe sync status +
+  manual re-sync action; every save re-syncs to Stripe when active);
+  `/admin/orders` (list, ro status labels) and `/admin/orders/[id]`
+  (read-only detail: items, totals, shipping address, Stripe ids).
+- **Seed**: `pnpm db:seed` also upserts 3 demo `somn` products (mask 89,90 lei
+  stock 25; tea 34,50 lei untracked; light 129,00 lei stock 8) with SVG
+  placeholder covers+gallery uploaded to storage by the seed itself (no
+  binaries in the repo; fixed ids/keys, idempotent — `seed-products.ts`).
+  NOTE: seeding needs MinIO up (it PUTs the SVGs).
+
+### Manual end-to-end verification with real Stripe (test mode)
+
+Not run in CI/agent runs — do this by hand when you have keys:
+
+1. In `.env` set `STRIPE_SECRET_KEY=sk_test_…`, restart `pnpm dev` (the real
+   gateway is selected only when the key is non-empty).
+2. `stripe listen --forward-to localhost:5173/api/stripe/webhook` and copy the
+   printed `whsec_…` into `STRIPE_WEBHOOK_SECRET` (restart dev again).
+3. Buy something on `/magazin` → Stripe Checkout test card `4242 4242 4242
+   4242`, any future expiry/CVC, RO address → you land on `/cos/succes` and
+   `stripe listen` forwards `checkout.session.completed` → order appears in
+   `/admin/orders` as `plătită`, stock decremented, `email_log` has the
+   `order-confirmation` row (dry-run unless Resend is configured).
+4. Refund the payment in the Stripe test dashboard → `charge.refunded` flips
+   the order to `rambursată`.
+
 ## Key commands (all from repo root)
 
 - `docker compose up -d` — start Postgres + MinIO + imgproxy (`--wait` works, all
@@ -317,6 +412,12 @@ filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   vitest setup file. In this agent container all service hosts are
   `host.docker.internal` (compose containers are siblings); `.env.example`
   documents `localhost` for humans.
+- Phase 5 env vars: `STRIPE_SECRET_KEY` (**empty in dev/tests → deterministic
+  mock gateway**; set `sk_test_…` only for manual verification) and
+  `STRIPE_WEBHOOK_SECRET` (any non-empty value for the mock/dev flow; the
+  real `whsec_…` from the dashboard or `stripe listen` otherwise). The
+  playwright config forces `STRIPE_SECRET_KEY=''` and a fixed e2e webhook
+  secret into both preview servers.
 - Phase 4 env vars: `EMAIL_DRYRUN` (**defaults to true** — record to
   `email_log` instead of sending; only `EMAIL_DRYRUN=false` AND a
   `RESEND_API_KEY` deliver for real; tests/e2e always run dry) and
@@ -339,6 +440,15 @@ filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   rootless — debs extracted to `~/chromium-libs`. Before `pnpm test:e2e`, export
   `LD_LIBRARY_PATH=$HOME/chromium-libs/usr/lib/x86_64-linux-gnu:$HOME/chromium-libs/lib/x86_64-linux-gnu`.
   (On a normal machine `npx playwright install-deps` replaces this.)
+  The dir does NOT survive a container rebuild — recreate rootless with:
+  `mkdir -p /tmp/apt-lists/partial /tmp/apt-cache/archives/partial /tmp/debs`,
+  `apt-get update -o Dir::State::Lists=/tmp/apt-lists -o Dir::Cache=/tmp/apt-cache`,
+  then in /tmp/debs `apt-get download -o … libnspr4 libnss3 libatk1.0-0
+  libatk-bridge2.0-0 libdbus-1-3 libxcomposite1 libxdamage1 libxfixes3
+  libxrandr2 libgbm1 libxkbcommon0 libasound2 libatspi2.0-0 libdrm2
+  libwayland-server0 libxi6` and `for d in *.deb; do dpkg-deb -x "$d"
+  ~/chromium-libs; done` (verify: `ldd …/chrome-headless-shell | grep 'not
+  found'` is empty with LD_LIBRARY_PATH set).
 - Paraglide output (`src/lib/paraglide/`) is gitignored and regenerated; `pnpm check`
   runs `paraglide:compile` first so it works from a fresh checkout.
 
@@ -417,13 +527,44 @@ filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   site db, clears `quiz_results`/`subscribers`/`email_log`, and the preview
   servers force `EMAIL_DRYRUN=true`.
 
+- Unit (Phase 5): cart math incl. clamping and the 7-line cap
+  (`modules/shop/cart.spec.ts`), money parse/format round-trips
+  (`money.spec.ts`), pure webhook pieces — stock floor at 0, metadata
+  build/parse, event shape guards (`webhook-pure.spec.ts`).
+- Integration (Phase 5, `modules/shop/shop.spec.ts`, TEST_DATABASE_URL,
+  fresh migrate, mock gateway): product CRUD + slug dedupe + unknown pillar
+  rejected; **visibility against the real site configs** — somn-tagged
+  visible on sleep AND life, nutritie-tagged invisible on sleep (the
+  inactive-pillar DoD case), untagged/draft invisible everywhere; Stripe
+  sync creates/reuses product + archives replaced price; checkout from cart
+  (unavailable lines rejected); webhook happy path — signed
+  `checkout.session.completed` → order + items + `email_log` row; tampered
+  signature → no order; duplicate delivery → exactly one order; stock
+  decrement floors at 0; `charge.refunded` → status flip;
+  `seedDemoProducts` idempotency (also re-asserted in `db/seed.spec.ts`).
+- E2E shop (`e2e/shop.e2e.ts`, both SITE_IDs, mock gateway): seeded catalog
+  with real imgproxy covers, add 2 products, qty edit, cart totals,
+  `?/checkout` action 303s to the mock checkout URL, tampered webhook
+  signature → 400 + no order, signed webhook → order created, duplicate →
+  still one order, stock decrement, success page (summary + cart badge
+  cleared), admin order list + detail; separate test: tracked stock 0 →
+  disabled "Stoc epuizat" buy button + catalog badge.
+
 ## For the next phase
 
 - Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
-  stub `+page.svelte` (they render `StubPage.svelte`; remaining stubs:
-  products, orders, settings). The sidebar entry already exists; nav labels
-  are paraglide messages (`admin_nav_*`). Articles and quizzes are full
-  reference implementations (list + editor + form actions).
+  stub `+page.svelte` (they render `StubPage.svelte`; the only remaining stub
+  is settings). The sidebar entry already exists; nav labels are paraglide
+  messages (`admin_nav_*`). Articles, quizzes and products are full reference
+  implementations (list + editor + form actions).
+- E2E login: use `login`/`submitLogin` from `e2e/helpers.ts` — they wait for
+  the `data-hydrated` marker the root layout sets on `<html>` at mount.
+  Filling an input that has a server-echoed `value` attribute BEFORE
+  hydration races: hydration resets it (this bit us as a flake). Wait for
+  the marker in any new e2e that types into such inputs right after goto.
+- Posting to a form action with playwright's `request` API: send
+  `accept: text/html`, otherwise SvelteKit negotiates the JSON action
+  protocol (HTTP 200 + `{type:'redirect'}` body) instead of a real 303.
 - Sending email from a new module: `getEmailSender()` from
   `$lib/modules/email/server`, add a typed template in
   `modules/email/templates.ts`, and pick an idempotency key that is STABLE
