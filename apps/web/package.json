@@ -21,6 +21,7 @@
 		"db:seed": "node scripts/seed.ts",
 		"storage:init": "node scripts/storage-init.ts",
 		"chat:prune": "node scripts/chat-prune.ts",
+		"content": "node scripts/content.ts",
 		"user:create": "node scripts/user-create.ts"
 	},
 	"dependencies": {
