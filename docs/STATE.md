@@ -1,4 +1,60 @@
-# STATE — after FIX-4 (schema-safe content bundle)
+# STATE — after FIX-5 (FK indexes, media refs, email uniqueness, idempotency)
+
+## Remediation FIX-5 (audit Theme E + data HIGH-3/LOW-2, resilience #6/#7/#8 — after FIX-4)
+
+- **Migration 0011 — covering indexes** on every previously-unindexed FK/lookup
+  column: `quizzes.pillar_id`/`created_by`, `quiz_results.subscriber_id`,
+  `orders.email`/`stripe_payment_intent`, `order_items.product_id`,
+  `articles.cover_media_id`/`created_by`, `products.cover_media_id`,
+  `media.created_by` — plus **unique `lower(email)` indexes** on `subscribers`
+  and `users` (case-variant duplicates now fail at the DB even from writers
+  that bypass `normalizeEmail`; keep normalizing — the citext route was not
+  taken, no extension needed). Verified on fresh AND populated dbs.
+- **Media reference integrity** (data HIGH-3): the delete-blocking reference
+  checks already covered article cover/body and product cover/gallery; the
+  actual dangling path was `products.description_md` `media:` refs — the
+  products check now scans it (id and storage-key forms). Any NEW table that
+  references media must still register a `MediaReferenceCheck` (see media
+  service docs).
+- **Quiz submit is idempotent** (resilience #8, migration 0012): nullable
+  `quiz_results.client_token` + unique `(quiz_id, client_token)`. The quiz
+  page sends a per-mount uuid header `x-quiz-attempt`; the server stores
+  `token.sha256(answers)` and resolves duplicates via onConflictDoNothing +
+  re-select, so refresh/replay returns the ORIGINAL result row. Same token
+  with EDITED answers is deliberately a new attempt (digest differs).
+  Token-less writers (curl, other callers of `submitQuiz`) keep non-idempotent
+  behavior — nulls never collide.
+- **Rate-limit counters are pruned** (resilience #6): new shared
+  `pruneStaleRateLimits(db, table, cutoff)` in `$lib/server/rate-limit`.
+  `pruneChatSessions` now returns `{ sessions, rateLimitRows }` (callers
+  updated) and sweeps `chat_rate_limits`; `pnpm chat:prune` also sweeps the
+  generic `rate_limits` and `login_attempts` (same counter shape / growth
+  cause, introduced with FIX-1 after the audit). Cron wiring note in
+  DEPLOYMENT.md still applies — one daily `chat:prune` covers all retention.
+- **Overselling detected + flagged, not auto-refunded** (resilience #7,
+  migration 0013): the webhook's stock decrement is an un-floored
+  `UPDATE … RETURNING` inside the order transaction; a negative result clamps
+  stock back to 0 and sets the new `orders.oversold` flag (red badge in
+  /admin/orders list + detail, message key `admin_order_oversold`). Reasoning
+  recorded in webhook.ts: auto-refund would put an external Stripe call back
+  inside the transaction (undoing FIX-2/FIX-3 discipline) and a human should
+  decide between restock/partial refund for a possibly multi-line order; a
+  checkout-time reservation system was judged too heavy (expiry sweeps,
+  abandoned sessions) for current traffic. `decrementedStock` (pure helper)
+  was deleted with its spec — the floor lives in the detect-and-clamp path.
+- **Tests** (each demonstrably FAILED pre-fix via targeted `git stash` runs):
+  `db/integrity.spec.ts` (index presence for all 12, forced-plan
+  `enable_seqscan=off` EXPLAIN for the refund-webhook + quiz-pillar lookups,
+  case-variant subscriber/user inserts rejected with 23505); shop spec
+  (description_md media refs claimed; oversell flag + floor; last-unit race
+  flags only the second order; exact sell-out unflagged); quiz spec (5 RACED
+  duplicate submits collapse to one row; edited-answers/token-less paths
+  still insert); chat spec (stale `ip:`/`session:` counter rows deleted, live
+  ones survive).
+- Migrations 0011/0012/0013 applied to sleep/life/test dbs and verified on a
+  scratch fresh db. No new env vars or scripts. Both sites boot (home 200,
+  /api/health ok). New exports: `pruneStaleRateLimits` (rate-limit barrel),
+  `submissionKey` (quiz service); removed export: `decrementedStock` (shop).
 
 ## Remediation FIX-4 (audit Theme D / architecture #2, data HIGH-1, MED-2, MED-3 — after FIX-3)
 
