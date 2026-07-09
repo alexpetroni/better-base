@@ -56,7 +56,10 @@ beforeAll(async () => {
 	try {
 		await dbA.execute(sql`create database better_test_b`);
 	} catch (err) {
-		if ((err as { code?: string }).code !== '42P04') throw err; // 42P04 = already exists
+		// 42P04 = already exists (fresh volumes pre-create it via postgres-init).
+		// Drizzle wraps the pg error, so the code may sit on the cause.
+		const e = err as { code?: string; cause?: { code?: string } };
+		if (e.code !== '42P04' && e.cause?.code !== '42P04') throw err;
 	}
 	dbB = createDb(urlB.toString());
 

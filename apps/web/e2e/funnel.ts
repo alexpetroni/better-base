@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import Stripe from 'stripe';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
+import { chatRateLimits } from '../src/lib/modules/chat/schema.ts';
 import { subscribers } from '../src/lib/modules/crm/schema.ts';
 import { emailLog } from '../src/lib/modules/email/schema.ts';
 import { buildCartMetadata } from '../src/lib/modules/shop/checkout.ts';
@@ -212,13 +213,20 @@ export function defineFunnelSpec(siteId: keyof typeof SITE_DB_NAMES) {
 				expect(confirmation?.status).toBe('dryrun');
 
 				// --- Chat: the widget streams the canned (mock-provider) answer.
+				// The chat spec's rate-limit test exhausts this hour's per-IP budget
+				// (both specs share the preview server's view of the client IP) and
+				// may do so again concurrently — clear the counters and retry until
+				// the message lands.
 				await page.getByTestId('chat-toggle').click();
 				await expect(page.getByTestId('chat-disclaimer')).toBeVisible();
-				await page.locator('input[name="chat-message"]').fill('Cum pot dormi mai bine?');
-				await page.locator('form button[type="submit"]', { hasText: 'Trimite' }).click();
-				await expect(
-					page.locator('[data-testid="chat-message"][data-role="assistant"]').last()
-				).toContainText('Pentru un somn mai bun');
+				await expect(async () => {
+					await db.delete(chatRateLimits);
+					await page.locator('input[name="chat-message"]').fill('Cum pot dormi mai bine?');
+					await page.locator('form button[type="submit"]', { hasText: 'Trimite' }).click();
+					await expect(
+						page.locator('[data-testid="chat-message"][data-role="assistant"]').last()
+					).toContainText('Pentru un somn mai bun', { timeout: 4000 });
+				}).toPass({ timeout: 30_000 });
 			} finally {
 				await db.$client.end();
 			}
