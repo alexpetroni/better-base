@@ -1,4 +1,82 @@
-# STATE — after FIX-7 (module boundaries + simplification)
+# STATE — after FIX-8 (frontend a11y / SEO / performance batch)
+
+## Remediation FIX-8 (audit Frontend #1–#15 — after FIX-7)
+
+Frontend-only phase: no schema changes, no migrations, no new env vars, no
+new scripts. Deliberate rendering/behavior changes are listed below.
+
+- **Chat a11y + UX** (`ChatPanel.svelte`, `ChatWidget.svelte`):
+  - The message list is now `role="log" aria-live="polite" aria-atomic="false"`
+    (+ `aria-busy` while streaming) so streamed replies are announced.
+  - The input has an sr-only `<label>` (message `chat_input_label`, unique id
+    via `$props.id()` — the widget and /asistent can coexist on one page).
+  - Opening the widget moves focus into the input (`focusInput()` instance
+    export on ChatPanel); `Escape` (svelte:window) closes it and returns focus
+    to the toggle; the panel container is `role="dialog"`.
+  - Auto-scroll only pins to the bottom while the reader is already within
+    ~48px of it (scroll listener sets a plain `pinned` flag) — scrolling up to
+    re-read is no longer hijacked per token.
+  - **Mid-stream errors**: a partial assistant bubble is marked
+    `data-failed="true"` (red border + `chat_reply_failed` note) with a
+    `chat-retry` button that re-asks the last user question; an EMPTY broken
+    bubble is dropped. Retry re-POSTs the same text, so the server records the
+    user message twice — accurate (it was asked twice), documented in-code.
+- **Cookie banner vs chat widget** (frontend #13): `CookieConsent` publishes
+  its measured height as `--cookie-banner-h` on `<html>` (ResizeObserver,
+  removed on decision/unmount); the chat widget's `bottom` is
+  `calc(1rem + var(--cookie-banner-h, 0px))`. Any future fixed-bottom UI
+  should reuse the variable instead of racing z-indexes.
+- **SEO**:
+  - Home page uses `<Seo>` (title `SITE — tagline`, new `home_seo_description`
+    message, canonical, OG) instead of a bare `<title>`.
+  - Quiz result pages emit `<meta name="robots" content="noindex">` (PII).
+  - `sitemap.xml` now also lists `/magazin`, active site-visible products
+    (`listVisibleProducts`) and all CMS pages (`listPages`), each with
+    `lastmod`.
+  - **hreflang**: the public layout emits `<link rel="alternate"
+    hreflang="ro|en|x-default">` per page (de-localized pathname re-localized
+    per locale via paraglide, absolute via `canonicalUrl`); the root layout's
+    display:none locale-anchor hack is GONE. NOTE: `localizeHref` does NOT
+    de-localize its input — always feed it `deLocalizeUrl(url).pathname`.
+- **Width-descriptor srcsets** (frontend #5): `buildSrcset` now emits
+  `320w…2×w` candidates (ladder 320/480/640/768/960/1200/1600 clamped to
+  [w/2, 2w] plus w and 2w; exported `srcsetWidths`); a fixed `h` scales
+  proportionally per candidate so fill crops keep their aspect. `<Img>` (and
+  markdown `pictureHtml`) emit `sizes` — default `${width}px` (matches the old
+  1x/2x behavior), and the public cover/gallery/cart call sites pass real
+  viewport-dependent `sizes`, so retina stops over-fetching. `buildSrcset` now
+  REQUIRES `w` (compile-time) and ignores `dpr`.
+- **CLS placeholder** (frontend #14): `imageSources` falls back to a 4:3
+  height for dimensionless media (SVG without width/viewBox) instead of
+  emitting no height; Tailwind preflight's `img { height: auto }` means the
+  real ratio takes over on load.
+- **Double-submit guards** (frontend #11): new
+  `$lib/components/single-submit.ts` Svelte action (`use:singleSubmit`) —
+  disables all submit buttons inside a plain POST form once a submit is
+  accepted; `pageshow` re-enables (bfcache back-nav). Applied to newsletter
+  signup, quiz-result email, cart setQty/remove/checkout and product add.
+  Admin login (a `use:enhance` form) uses an enhance-callback `submitting`
+  state instead. Reuse one of these two patterns for any NEW public form.
+- **i18n**: footer legal-nav `aria-label` is now the `footer_legal_aria`
+  message (was hardcoded RO). New keys (en+ro, parity 283/283):
+  `chat_input_label`, `chat_retry`, `chat_reply_failed`, `footer_legal_aria`,
+  `home_seo_description`.
+- **formatDate** (frontend #10) needed no code change — the Europe/Bucharest
+  pin + TZ-stability spec landed in FIX-7 (`$lib/util/date`); verified no
+  stray `Intl.DateTimeFormat`/`toLocale*` remain outside it.
+- **Tests** (new ones verified to FAIL against the pre-fix code via targeted
+  stash runs): unit — width-descriptor + proportional-height srcset and the
+  4:3 fallback (`imgproxy.spec.ts`; the old `1x/2x` and `height: undefined`
+  assertions asserted the audited bugs and were updated), `sizes` in rendered
+  article images (`markdown.spec.ts`), sitemap lists an active product + CMS
+  page and skips drafts (`src/routes/sitemap.xml/sitemap.spec.ts`, real route
+  handler against TEST_DATABASE_URL with `$lib/db`/`$lib/server/site`
+  mocked). e2e — chat behavioral a11y (focused labelled input, role=log
+  live region, Escape), mid-stream SSE error → failed bubble → retry
+  (route-injected broken stream), quiz-result `noindex`, and NEW
+  `e2e/frontend.e2e.ts` (home SEO metas + hreflang links, newsletter submit
+  disabled while POST in flight via delayed route, mobile-viewport
+  banner/chat-widget non-occlusion). Full gate + e2e green on BOTH sites.
 
 ## Remediation FIX-7 (audit Theme G, architecture #1, simplification #1–#10 — after FIX-6)
 
