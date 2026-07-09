@@ -156,6 +156,35 @@ describe('imgproxy serving', () => {
 		const tampered = signed.replace('rs:fit:100:0', 'rs:fit:200:0');
 		expect((await fetch(tampered)).status).toBe(403);
 	});
+
+	it('serves an uploaded SVG sanitized and as an attachment (audit M1)', async () => {
+		const malicious = Buffer.from(
+			'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" onload="alert(1)">' +
+				'<script>alert(document.cookie)</script><rect width="10" height="10"/></svg>',
+			'utf8'
+		);
+		const ticket = await requestUpload(deps, {
+			filename: 'evil.svg',
+			mime: 'image/svg+xml',
+			size: malicious.byteLength
+		});
+		if (!ticket.ok) throw new Error('presign failed');
+		const put = await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/svg+xml' },
+			body: malicious
+		});
+		expect(put.status).toBe(200);
+
+		// Exactly the URL the app embeds for SVG rows (att:1, no processing).
+		const served = await fetch(buildImgUrl(imgproxy, ticket.value.key, { attachment: true }));
+		expect(served.status).toBe(200);
+		expect(served.headers.get('content-disposition')).toContain('attachment');
+		const body = await served.text();
+		expect(body).not.toContain('<script');
+		expect(body).not.toContain('onload');
+		expect(body).toContain('<rect'); // still a usable image, not an empty husk
+	});
 });
 
 describe('alt, delete and reference checks', () => {

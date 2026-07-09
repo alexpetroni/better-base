@@ -28,6 +28,8 @@ export interface ImgOptions {
 	fit?: ImgFit;
 	format?: ImgFormat;
 	dpr?: number;
+	/** Serve with `Content-Disposition: attachment` (imgproxy `att:1`) — used for SVGs. */
+	attachment?: boolean;
 }
 
 /** Sign an imgproxy path (must start with `/`): base64url(HMAC-SHA256(key, salt + path)). */
@@ -49,6 +51,7 @@ export function imgproxyPath(
 		parts.push(`rs:${opts.fit ?? 'fit'}:${opts.w ?? 0}:${opts.h ?? 0}`);
 	}
 	if (opts.dpr !== undefined && opts.dpr !== 1) parts.push(`dpr:${opts.dpr}`);
+	if (opts.attachment) parts.push('att:1');
 	const source = `plain/s3://${cfg.bucket}/${key}${opts.format ? `@${opts.format}` : ''}`;
 	return `/${[...parts, source].join('/')}`;
 }
@@ -94,7 +97,10 @@ export function imageSources(
 	if (!key) throw new Error('imageSources: media row has no storage key (video embed?)');
 
 	// SVGs are served as-is: rasterizing/resizing them is pointless and imgproxy
-	// may not have conversion enabled for them.
+	// may not have conversion enabled for them. Because they stay SVG (active
+	// content), they are served with `att:1` — a direct navigation downloads
+	// instead of rendering in the imgproxy origin (audit M1); imgproxy also
+	// strips scripts via IMGPROXY_SANITIZE_SVG (docker-compose.yml).
 	const isSvg = key.endsWith('.svg');
 	const size: ImgOptions = isSvg ? {} : { w: opts.w, h: opts.h, fit: opts.fit };
 
@@ -102,7 +108,7 @@ export function imageSources(
 	const height = opts.h ?? (natural ? Math.round((opts.w * natural.h) / natural.w) : undefined);
 
 	return {
-		src: buildImgUrl(cfg, key, isSvg ? {} : { ...size, format: 'webp' }),
+		src: buildImgUrl(cfg, key, isSvg ? { attachment: true } : { ...size, format: 'webp' }),
 		srcsetWebp: isSvg ? '' : buildSrcset(cfg, key, { ...size, format: 'webp' }),
 		srcsetAvif: isSvg ? '' : buildSrcset(cfg, key, { ...size, format: 'avif' }),
 		width: opts.w,

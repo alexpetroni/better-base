@@ -111,6 +111,14 @@ describe('imageSources', () => {
 		expect(sources.srcsetAvif).toBe('');
 	});
 
+	it('serves SVGs as attachments (audit M1: never rendered on direct navigation)', () => {
+		const svg = imageSources(CFG, { ...row, key: 'a/logo.svg' }, { w: 320 });
+		expect(svg.src).toContain('/att:1/');
+		// Raster formats stay inline-viewable.
+		const png = imageSources(CFG, row, { w: 320 });
+		expect(png.src).not.toContain('att:1');
+	});
+
 	it('throws for a row without a storage key', () => {
 		expect(() =>
 			imageSources(CFG, { key: null, width: null, height: null, alt: '' }, { w: 100 })
