@@ -83,7 +83,10 @@ try {
 		);
 		if (s.pillarsSkipped.length) {
 			console.error(
-				`Warning: pillar(s) not present in the target database were skipped: ${s.pillarsSkipped.join(', ')}`
+				`WARNING: pillar(s) not present in the target database were skipped: ${s.pillarsSkipped.join(', ')}` +
+					(s.pillarsTagged.length
+						? ''
+						: ' — the item is UNTAGGED and will not appear in any public listing until an admin tags it')
 			);
 		}
 	}

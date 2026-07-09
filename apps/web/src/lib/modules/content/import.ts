@@ -30,33 +30,38 @@ async function freeMediaId(db: Db, id: string): Promise<string> {
  * Ensure one media descriptor exists in the target database + bucket.
  * Images are matched by storage key, video embeds by provider + external id —
  * so importing the same bundle twice never duplicates rows or uploads.
+ *
+ * Matching by key relies on keys being IMMUTABLE: `mediaKeyFor` embeds a
+ * uuid fragment per upload, so the bytes behind a given key never change at
+ * the source — a key that already exists in the target is guaranteed to hold
+ * the same object, and re-import can safely skip the upload. (Replacing an
+ * image at the source means uploading a new file → new key → new row here.)
+ *
+ * Accepted leak: a re-import does NOT delete target media that a previous
+ * import created but the updated item no longer references. Such rows stay in
+ * the target's media library (harmless, visible, manually deletable there —
+ * the library's reference checks keep deletion safe). Sweeping them here
+ * would risk deleting media the target site reuses elsewhere.
  */
 async function ensureMedia(
 	deps: ContentDeps,
 	d: MediaDescriptor
 ): Promise<{ targetId: string; created: boolean }> {
 	const { db, storage } = deps;
+	// Everything the descriptor carries except the bytes and the (source) id
+	// is a media column — new schema columns round-trip without touching this.
+	const { dataBase64, id: sourceId, ...columns } = d;
 	if (d.kind === 'image') {
 		const key = d.key as string; // validated by parseBundle
 		const [existing] = await db.select().from(media).where(eq(media.key, key));
 		if (existing) return { targetId: existing.id, created: false };
 		await storage.putObject(
 			key,
-			Buffer.from(d.dataBase64 ?? '', 'base64'),
+			Buffer.from(dataBase64 ?? '', 'base64'),
 			d.mime ?? 'application/octet-stream'
 		);
-		const id = await freeMediaId(db, d.id);
-		await db.insert(media).values({
-			id,
-			kind: 'image',
-			key,
-			filename: d.filename,
-			mime: d.mime,
-			size: d.size,
-			width: d.width,
-			height: d.height,
-			alt: d.alt
-		});
+		const id = await freeMediaId(db, sourceId);
+		await db.insert(media).values({ ...columns, id });
 		return { targetId: id, created: true };
 	}
 	const [existing] = await db
@@ -70,14 +75,8 @@ async function ensureMedia(
 			)
 		);
 	if (existing) return { targetId: existing.id, created: false };
-	const id = await freeMediaId(db, d.id);
-	await db.insert(media).values({
-		id,
-		kind: 'video-embed',
-		videoProvider: d.videoProvider,
-		videoExternalId: d.videoExternalId,
-		alt: d.alt
-	});
+	const id = await freeMediaId(db, sourceId);
+	await db.insert(media).values({ ...columns, id });
 	return { targetId: id, created: true };
 }
 
@@ -107,7 +106,9 @@ export async function importContent(
 ): Promise<ContentResult<ImportSummary>> {
 	const { db } = deps;
 
-	// 1. Media first: build the source-id → target-id map.
+	const { ids: pillarIds, tagged, skipped } = await resolvePillars(db, bundle.pillars);
+
+	// Media first: build the source-id → target-id map.
 	const idMap = new Map<string, string>();
 	let mediaCreated = 0;
 	let mediaReused = 0;
@@ -134,7 +135,6 @@ export async function importContent(
 		return { ok: true, value: target };
 	};
 
-	const { ids: pillarIds, tagged, skipped } = await resolvePillars(db, bundle.pillars);
 	const summary = (slug: string, action: 'created' | 'updated'): ImportSummary => ({
 		type: bundle.type,
 		slug,
@@ -149,15 +149,14 @@ export async function importContent(
 		const a = bundle.article;
 		const cover = mapCover(a.coverMediaId);
 		if (!cover.ok) return cover;
+		// Spread the bundle content and override only the fields that need
+		// target-local translation — a new column travels without edits here.
+		// (slug stays: updates matched on it, so re-setting it is a no-op.)
 		const fields = {
-			title: a.title,
-			excerpt: a.excerpt,
+			...a,
 			bodyMd: remapMediaRefs(a.bodyMd, changed),
 			coverMediaId: cover.value,
-			status: a.status,
-			publishedAt: a.publishedAt ? new Date(a.publishedAt) : null,
-			seoTitle: a.seoTitle,
-			seoDescription: a.seoDescription
+			publishedAt: a.publishedAt ? new Date(a.publishedAt) : null
 		};
 		const [existing] = await db.select().from(articles).where(eq(articles.slug, a.slug));
 		let articleId: string;
@@ -172,7 +171,7 @@ export async function importContent(
 		} else {
 			articleId = crypto.randomUUID();
 			action = 'created';
-			await db.insert(articles).values({ id: articleId, slug: a.slug, ...fields });
+			await db.insert(articles).values({ id: articleId, ...fields });
 		}
 		await db.delete(articlePillars).where(eq(articlePillars.articleId, articleId));
 		if (tagged.length) {
@@ -185,15 +184,10 @@ export async function importContent(
 
 	if (bundle.type === 'quiz') {
 		const q = bundle.quiz;
-		const pillarId = tagged.length ? (pillarIds.get(tagged[0]) as number) : null;
 		const fields = {
-			title: q.title,
+			...q,
 			introMd: remapMediaRefs(q.introMd, changed),
-			pillarId,
-			formSchema: q.formSchema,
-			scoring: q.scoring,
-			status: q.status,
-			resultTemplateKey: q.resultTemplateKey
+			pillarId: tagged.length ? (pillarIds.get(tagged[0]) as number) : null
 		};
 		const [existing] = await db.select().from(quizzes).where(eq(quizzes.slug, q.slug));
 		if (existing) {
@@ -204,7 +198,7 @@ export async function importContent(
 			return { ok: true, value: summary(q.slug, 'updated') };
 		}
 		const id = crypto.randomUUID();
-		await db.insert(quizzes).values({ id, slug: q.slug, ...fields });
+		await db.insert(quizzes).values({ id, ...fields });
 		return { ok: true, value: summary(q.slug, 'created') };
 	}
 
@@ -224,14 +218,10 @@ export async function importContent(
 		gallery.push(target);
 	}
 	const fields = {
-		name: p.name,
+		...p,
 		descriptionMd: remapMediaRefs(p.descriptionMd, changed),
-		priceCents: p.priceCents,
-		currency: p.currency,
-		status: p.status,
 		coverMediaId: cover.value,
-		gallery,
-		stock: p.stock
+		gallery
 	};
 	const [existing] = await db.select().from(products).where(eq(products.slug, p.slug));
 	let productId: string;
@@ -249,7 +239,7 @@ export async function importContent(
 	} else {
 		productId = crypto.randomUUID();
 		action = 'created';
-		await db.insert(products).values({ id: productId, slug: p.slug, ...fields });
+		await db.insert(products).values({ id: productId, ...fields });
 	}
 	await db.delete(productPillars).where(eq(productPillars.productId, productId));
 	if (tagged.length) {

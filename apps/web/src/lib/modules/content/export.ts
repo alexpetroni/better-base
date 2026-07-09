@@ -9,6 +9,10 @@ import { quizzes } from '../quiz/schema.ts';
 import { productPillars, products } from '../shop/schema.ts';
 import {
 	CONTENT_BUNDLE_VERSION,
+	articleToContent,
+	mediaToDescriptor,
+	productToContent,
+	quizToContent,
 	type ContentBundle,
 	type ContentType,
 	type MediaDescriptor
@@ -52,23 +56,7 @@ async function toDescriptor(
 		if (!stat) return { ok: false, error: 'missing-object', detail: row.key };
 		dataBase64 = Buffer.from(await storage.getObjectBytes(row.key)).toString('base64');
 	}
-	return {
-		ok: true,
-		value: {
-			id: row.id,
-			kind: row.kind,
-			key: row.key,
-			filename: row.filename,
-			mime: row.mime,
-			size: row.size,
-			width: row.width,
-			height: row.height,
-			alt: row.alt,
-			videoProvider: row.videoProvider,
-			videoExternalId: row.videoExternalId,
-			dataBase64
-		}
-	};
+	return { ok: true, value: mediaToDescriptor(row, dataBase64) };
 }
 
 async function pillarSlugsFor(db: Db, ids: number[]): Promise<string[]> {
@@ -112,17 +100,7 @@ export async function exportContent(
 					joins.map((j) => j.pillarId)
 				),
 				media: descriptors,
-				article: {
-					slug: row.slug,
-					title: row.title,
-					excerpt: row.excerpt,
-					bodyMd: row.bodyMd,
-					coverMediaId: row.coverMediaId,
-					status: row.status,
-					publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
-					seoTitle: row.seoTitle,
-					seoDescription: row.seoDescription
-				}
+				article: articleToContent(row)
 			}
 		};
 	}
@@ -144,15 +122,7 @@ export async function exportContent(
 				type: 'quiz',
 				pillars: row.pillarId === null ? [] : await pillarSlugsFor(db, [row.pillarId]),
 				media: descriptors,
-				quiz: {
-					slug: row.slug,
-					title: row.title,
-					introMd: row.introMd,
-					formSchema: row.formSchema,
-					scoring: row.scoring,
-					status: row.status,
-					resultTemplateKey: row.resultTemplateKey
-				}
+				quiz: quizToContent(row)
 			}
 		};
 	}
@@ -181,17 +151,7 @@ export async function exportContent(
 				joins.map((j) => j.pillarId)
 			),
 			media: descriptors,
-			product: {
-				slug: row.slug,
-				name: row.name,
-				descriptionMd: row.descriptionMd,
-				priceCents: row.priceCents,
-				currency: row.currency,
-				status: row.status,
-				coverMediaId: row.coverMediaId,
-				gallery: row.gallery,
-				stock: row.stock
-			}
+			product: productToContent(row)
 		}
 	};
 }

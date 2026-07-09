@@ -1,5 +1,7 @@
-import type { FormConfig } from 'formcomp';
-import type { ScoringConfig } from '../quiz/scoring.ts';
+import type { ArticleRow } from '../blog/schema.ts';
+import type { MediaRow } from '../media/schema.ts';
+import type { QuizRow } from '../quiz/schema.ts';
+import type { ProductRow } from '../shop/schema.ts';
 
 /**
  * Content bundle format: the JSON produced by `pnpm content export` and
@@ -10,9 +12,18 @@ import type { ScoringConfig } from '../quiz/scoring.ts';
  *
  * Everything here is pure and node-safe: no $env/$app imports, dates travel
  * as ISO strings, file bytes as base64.
+ *
+ * The `*Content`/`MediaDescriptor` types are DERIVED from the Drizzle row
+ * types: every persisted column travels in the bundle unless it is listed in
+ * `BUNDLE_EXCLUDED_COLUMNS`. Adding a column to a schema therefore fails to
+ * compile in the `*ToContent` mappers below until the bundle carries it (or
+ * the column is deliberately excluded); `bundle.spec.ts` additionally asserts
+ * the runtime parity between table columns and bundle keys.
  */
 
-export const CONTENT_BUNDLE_VERSION = 1;
+// Version 2: media descriptors gained the (previously dropped) `blurhash`
+// column. v1 files were lossy — re-export them from the source site.
+export const CONTENT_BUNDLE_VERSION = 2;
 
 export const CONTENT_TYPES = ['article', 'quiz', 'product'] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
@@ -21,54 +32,114 @@ export function isContentType(value: string): value is ContentType {
 	return (CONTENT_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * Columns that deliberately do NOT travel in a bundle. Everything else must.
+ * - `id`: target-local (regenerated on collision); media ids DO travel
+ *   because markdown `media:` refs point at them.
+ * - `pillarId` / join rows: pillars travel as canonical SLUGS — numeric ids
+ *   differ per database.
+ * - `stripeProductId`/`stripePriceId`: belong to the source site's Stripe
+ *   account; the target re-syncs its own.
+ * - `createdBy`: users are site-local.
+ * - `createdAt`/`updatedAt`: stamped by the target database.
+ */
+export const BUNDLE_EXCLUDED_COLUMNS = {
+	article: ['id', 'createdBy', 'createdAt', 'updatedAt'],
+	quiz: ['id', 'pillarId', 'createdBy', 'createdAt', 'updatedAt'],
+	product: ['id', 'stripeProductId', 'stripePriceId', 'createdAt', 'updatedAt'],
+	media: ['createdBy', 'createdAt']
+} as const satisfies Record<string, readonly string[]>;
+
+/** Dates travel as ISO strings; everything else keeps its row type. (Tuple
+ * wrapping stops the conditional from distributing over `X | null` unions.) */
+type Serialized<T> = [T] extends [Date] ? string : [T] extends [Date | null] ? string | null : T;
+
+type BundleFields<Row, Excluded extends keyof Row> = {
+	[K in Exclude<keyof Row, Excluded>]: Serialized<Row[K]>;
+};
+
+export type ArticleContent = BundleFields<
+	ArticleRow,
+	(typeof BUNDLE_EXCLUDED_COLUMNS.article)[number]
+>;
+
+export type QuizContent = BundleFields<QuizRow, (typeof BUNDLE_EXCLUDED_COLUMNS.quiz)[number]>;
+
+export type ProductContent = BundleFields<
+	ProductRow,
+	(typeof BUNDLE_EXCLUDED_COLUMNS.product)[number]
+>;
+
 /** A media row + (for images) the original file bytes, base64-encoded. */
-export interface MediaDescriptor {
-	id: string;
-	kind: 'image' | 'video-embed';
-	key: string | null;
-	filename: string | null;
-	mime: string | null;
-	size: number | null;
-	width: number | null;
-	height: number | null;
-	alt: string;
-	videoProvider: 'youtube' | 'bunny' | null;
-	videoExternalId: string | null;
+export type MediaDescriptor = BundleFields<
+	MediaRow,
+	(typeof BUNDLE_EXCLUDED_COLUMNS.media)[number]
+> & {
 	dataBase64: string | null;
+};
+
+/**
+ * Row → bundle mappers. These object literals are the compiler link between
+ * schema and bundle: a new column makes them fail to compile until it is
+ * mapped here (and, via the spread-based inserts in `import.ts`, it then
+ * round-trips automatically).
+ */
+export function articleToContent(row: ArticleRow): ArticleContent {
+	return {
+		slug: row.slug,
+		title: row.title,
+		excerpt: row.excerpt,
+		bodyMd: row.bodyMd,
+		coverMediaId: row.coverMediaId,
+		status: row.status,
+		publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+		seoTitle: row.seoTitle,
+		seoDescription: row.seoDescription
+	};
 }
 
-export interface ArticleContent {
-	slug: string;
-	title: string;
-	excerpt: string;
-	bodyMd: string;
-	coverMediaId: string | null;
-	status: 'draft' | 'published';
-	publishedAt: string | null;
-	seoTitle: string | null;
-	seoDescription: string | null;
+export function quizToContent(row: QuizRow): QuizContent {
+	return {
+		slug: row.slug,
+		title: row.title,
+		introMd: row.introMd,
+		formSchema: row.formSchema,
+		scoring: row.scoring,
+		status: row.status,
+		resultTemplateKey: row.resultTemplateKey
+	};
 }
 
-export interface QuizContent {
-	slug: string;
-	title: string;
-	introMd: string;
-	formSchema: FormConfig;
-	scoring: ScoringConfig;
-	status: 'draft' | 'published';
-	resultTemplateKey: string;
+export function productToContent(row: ProductRow): ProductContent {
+	return {
+		slug: row.slug,
+		name: row.name,
+		descriptionMd: row.descriptionMd,
+		priceCents: row.priceCents,
+		currency: row.currency,
+		status: row.status,
+		coverMediaId: row.coverMediaId,
+		gallery: row.gallery,
+		stock: row.stock
+	};
 }
 
-export interface ProductContent {
-	slug: string;
-	name: string;
-	descriptionMd: string;
-	priceCents: number;
-	currency: string;
-	status: 'draft' | 'active' | 'archived';
-	coverMediaId: string | null;
-	gallery: string[];
-	stock: number | null;
+export function mediaToDescriptor(row: MediaRow, dataBase64: string | null): MediaDescriptor {
+	return {
+		id: row.id,
+		kind: row.kind,
+		key: row.key,
+		filename: row.filename,
+		mime: row.mime,
+		size: row.size,
+		width: row.width,
+		height: row.height,
+		alt: row.alt,
+		blurhash: row.blurhash,
+		videoProvider: row.videoProvider,
+		videoExternalId: row.videoExternalId,
+		dataBase64
+	};
 }
 
 interface BundleBase {
@@ -116,6 +187,7 @@ function isStringArray(value: unknown): value is string[] {
 
 function validMediaDescriptor(raw: unknown): raw is MediaDescriptor {
 	if (!isRecord(raw) || typeof raw.id !== 'string' || typeof raw.alt !== 'string') return false;
+	if (!optionalString(raw.blurhash)) return false;
 	if (raw.kind === 'image') {
 		return (
 			typeof raw.key === 'string' &&

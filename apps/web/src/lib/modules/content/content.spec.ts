@@ -16,6 +16,7 @@ import { quizzes } from '../quiz/schema.ts';
 import { SLEEP_QUIZ_SEED } from '../quiz/seed-quiz.ts';
 import type { ScoringConfig } from '../quiz/scoring.ts';
 import { productPillars, products } from '../shop/schema.ts';
+import type { ContentBundle } from './bundle.ts';
 import { exportContent, type ContentDeps } from './export.ts';
 import { importContent } from './import.ts';
 
@@ -91,7 +92,7 @@ async function pillarIdBySlug(db: Db, slug: string): Promise<number> {
 	return row.id;
 }
 
-async function insertImage(db: Db, storage: Storage, id: string, key: string) {
+async function insertImage(db: Db, storage: Storage, id: string, key: string, blurhash?: string) {
 	await storage.putObject(key, fixtureBytes, 'image/png');
 	await db.insert(media).values({
 		id,
@@ -102,18 +103,20 @@ async function insertImage(db: Db, storage: Storage, id: string, key: string) {
 		size: fixtureBytes.byteLength,
 		width: 320,
 		height: 200,
-		alt: 'imagine de test'
+		alt: 'imagine de test',
+		blurhash: blurhash ?? null
 	});
 }
 
 describe('article export → import between two databases', () => {
 	const COVER_ID = 'content-a-cover';
 	const COVER_KEY = 'uploads/content-spec/article-cover.png';
+	const COVER_BLURHASH = 'LEHV6nWB2yk8pyo0adR*.7kCMdnj';
 	const INLINE_ID = 'content-a-inline';
 	const INLINE_KEY = 'uploads/content-spec/article-inline.png';
 
 	beforeAll(async () => {
-		await insertImage(dbA, storageA, COVER_ID, COVER_KEY);
+		await insertImage(dbA, storageA, COVER_ID, COVER_KEY, COVER_BLURHASH);
 		await insertImage(dbA, storageA, INLINE_ID, INLINE_KEY);
 		await dbA.insert(articles).values({
 			id: 'content-a-article',
@@ -160,6 +163,11 @@ describe('article export → import between two databases', () => {
 		// Media landed in the TARGET bucket, rows keep their keys (source ids are free in B).
 		const statB = await storageB.statObject(COVER_KEY);
 		expect(statB?.size).toBe(fixtureBytes.byteLength);
+		// blurhash round-trips (silently dropped before the Theme D fix).
+		const [coverB] = await dbB.select().from(media).where(eq(media.key, COVER_KEY));
+		expect(coverB.blurhash).toBe(COVER_BLURHASH);
+		const [inlineB] = await dbB.select().from(media).where(eq(media.key, INLINE_KEY));
+		expect(inlineB.blurhash).toBeNull();
 		const [imported] = await dbB
 			.select()
 			.from(articles)
