@@ -1,8 +1,11 @@
 import { error, redirect, type Handle, type HandleServerError } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
+import { env } from '$env/dynamic/private';
+import { env as publicEnv } from '$env/dynamic/public';
 import { deLocalizeUrl, getTextDirection } from '$lib/paraglide/runtime';
 import { paraglideMiddleware } from '$lib/paraglide/server';
 import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
+import { assertBootEnv } from '$lib/server/boot';
 import { formatServerError } from '$lib/server/log';
 // Side effect: registers the blog's and shop's media reference checks before
 // any request can delete media (they live in the server barrels' module init).
@@ -11,6 +14,10 @@ import '$lib/modules/shop/server';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
 // without an ANTHROPIC_API_KEY fails fast instead of at the first message.
 import '$lib/modules/chat/server';
+
+// Fail fast (audit resilience #10): refuse to boot on missing required env
+// instead of 500ing on first use. PUBLIC_SITE_URL lives in the public env.
+assertBootEnv({ ...env, PUBLIC_SITE_URL: publicEnv.PUBLIC_SITE_URL });
 
 const handleParaglide: Handle = ({ event, resolve }) =>
 	paraglideMiddleware(event.request, ({ request, locale }) => {
