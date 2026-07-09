@@ -8,6 +8,16 @@ import { productPillars, products } from '../shop/schema.ts';
 import { remapMediaRefs, type ContentBundle, type MediaDescriptor } from './bundle.ts';
 import type { ContentDeps, ContentResult } from './export.ts';
 
+export interface ImportOptions {
+	/**
+	 * Import even when NONE of the bundle's pillar slugs exist in the target
+	 * database. The item is then created untagged — invisible in every public
+	 * listing until an admin tags it. Without this flag such an import is a
+	 * hard failure (`missing-pillars`).
+	 */
+	allowUntagged?: boolean;
+}
+
 export interface ImportSummary {
 	type: ContentBundle['type'];
 	slug: string;
@@ -99,16 +109,31 @@ async function resolvePillars(
  * Import a bundle into the target database + bucket (both come from `deps`).
  * Idempotent by slug: an existing item is updated in place, a missing one is
  * created; re-importing the same bundle changes nothing and duplicates nothing.
+ *
+ * A bundle whose pillar slugs are ALL absent from the target database is
+ * refused before anything is written (the item would be untagged → invisible
+ * in every listing) unless `allowUntagged` is set.
  */
 export async function importContent(
 	deps: ContentDeps,
-	bundle: ContentBundle
+	bundle: ContentBundle,
+	options: ImportOptions = {}
 ): Promise<ContentResult<ImportSummary>> {
 	const { db } = deps;
 
+	// Pillars first — refusal must happen before any media/row writes.
 	const { ids: pillarIds, tagged, skipped } = await resolvePillars(db, bundle.pillars);
+	if (bundle.pillars.length > 0 && tagged.length === 0 && !options.allowUntagged) {
+		return {
+			ok: false,
+			error: 'missing-pillars',
+			detail:
+				`none of the bundle's pillars (${bundle.pillars.join(', ')}) exist in the target ` +
+				`database — the imported item would be invisible; pass --allow-untagged to import anyway`
+		};
+	}
 
-	// Media first: build the source-id → target-id map.
+	// Media next: build the source-id → target-id map.
 	const idMap = new Map<string, string>();
 	let mediaCreated = 0;
 	let mediaReused = 0;

@@ -25,4 +25,4 @@ export {
 	type ContentError,
 	type ContentResult
 } from './export.ts';
-export { importContent, type ImportSummary } from './import.ts';
+export { importContent, type ImportOptions, type ImportSummary } from './import.ts';

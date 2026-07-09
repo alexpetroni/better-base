@@ -21,7 +21,11 @@ config({ path: path.resolve(import.meta.dirname, '../../../.env') });
 
 const USAGE = `Usage:
   pnpm content export --type article|quiz|product --slug <slug> [--out file.json]
-  pnpm content import <file.json>`;
+  pnpm content import <file.json> [--allow-untagged]
+
+Import refuses a bundle whose pillar slugs are ALL absent from the target
+database (the item would be untagged and invisible in every listing);
+--allow-untagged imports it anyway.`;
 
 function fail(message: string): never {
 	console.error(message);
@@ -63,7 +67,11 @@ try {
 			console.log(json);
 		}
 	} else {
-		const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} });
+		const { positionals, values } = parseArgs({
+			args: argv,
+			allowPositionals: true,
+			options: { 'allow-untagged': { type: 'boolean' } }
+		});
 		const file = positionals[0];
 		if (!file) fail(USAGE);
 		let raw: unknown;
@@ -74,7 +82,9 @@ try {
 		}
 		const parsed = parseBundle(raw);
 		if (!parsed.ok) fail(`Invalid bundle: ${parsed.error}`);
-		const result = await importContent(deps, parsed.bundle);
+		const result = await importContent(deps, parsed.bundle, {
+			allowUntagged: values['allow-untagged'] === true
+		});
 		if (!result.ok)
 			fail(`Import failed: ${result.error}${result.detail ? ` (${result.detail})` : ''}`);
 		const s = result.value;

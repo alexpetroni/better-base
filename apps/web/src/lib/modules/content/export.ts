@@ -23,7 +23,7 @@ export interface ContentDeps {
 	storage: Storage;
 }
 
-export type ContentError = 'not-found' | 'missing-object' | 'invalid-bundle';
+export type ContentError = 'not-found' | 'missing-object' | 'invalid-bundle' | 'missing-pillars';
 
 export type ContentResult<T> =
 	{ ok: true; value: T } | { ok: false; error: ContentError; detail?: string };

@@ -329,6 +329,67 @@ describe('product export → import', () => {
 	});
 });
 
+describe('import of a bundle whose pillars are all absent from the target', () => {
+	const MEDIA_ID = 'content-a-untagged-cover';
+	const MEDIA_KEY = 'uploads/content-spec/untagged-cover.png';
+	let wire: ContentBundle;
+
+	beforeAll(async () => {
+		// Databases reset every run but buckets persist — drop the object a
+		// previous run's allowUntagged import may have left in the target.
+		await storageB.deleteObject(MEDIA_KEY);
+		await insertImage(dbA, storageA, MEDIA_ID, MEDIA_KEY);
+		await dbA.insert(articles).values({
+			id: 'content-a-untagged-article',
+			slug: 'articol-fara-pilon',
+			title: 'Fără pilon în țintă',
+			bodyMd: `![x](media:${MEDIA_ID})`,
+			coverMediaId: MEDIA_ID,
+			status: 'published',
+			publishedAt: new Date('2026-07-02T00:00:00Z')
+		});
+		// Tagged ONLY to a pillar the sleep-like target B does not have.
+		await dbA.insert(articlePillars).values({
+			articleId: 'content-a-untagged-article',
+			pillarId: await pillarIdBySlug(dbA, 'nutritie')
+		});
+		const exported = await exportContent(depsA, { type: 'article', slug: 'articol-fara-pilon' });
+		if (!exported.ok) throw new Error('export failed');
+		wire = JSON.parse(JSON.stringify(exported.value)) as ContentBundle;
+	});
+
+	it('is a hard failure by default and writes NOTHING', async () => {
+		const result = await importContent(depsB, wire);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toBe('missing-pillars');
+			expect(result.detail).toContain('nutritie');
+		}
+		// The refusal happened before any write: no article row, no media row, no object.
+		const rows = await dbB.select().from(articles).where(eq(articles.slug, 'articol-fara-pilon'));
+		expect(rows).toHaveLength(0);
+		const mediaRows = await dbB.select().from(media).where(eq(media.key, MEDIA_KEY));
+		expect(mediaRows).toHaveLength(0);
+		expect(await storageB.statObject(MEDIA_KEY)).toBeNull();
+	});
+
+	it('imports untagged with allowUntagged, reporting the skipped pillars', async () => {
+		const result = await importContent(depsB, wire, { allowUntagged: true });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.action).toBe('created');
+		expect(result.value.pillarsTagged).toEqual([]);
+		expect(result.value.pillarsSkipped).toEqual(['nutritie']);
+		const [row] = await dbB.select().from(articles).where(eq(articles.slug, 'articol-fara-pilon'));
+		expect(row.status).toBe('published');
+		const joins = await dbB
+			.select()
+			.from(articlePillars)
+			.where(eq(articlePillars.articleId, row.id));
+		expect(joins).toHaveLength(0);
+	});
+});
+
 describe('export failure modes', () => {
 	it('reports unknown slugs', async () => {
 		const result = await exportContent(depsA, { type: 'article', slug: 'nu-exista' });
