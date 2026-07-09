@@ -34,6 +34,12 @@ export interface ChatInput {
 	/** Raw cookie value, if the visitor already has one. */
 	sessionToken: string | null;
 	ip: string;
+	/**
+	 * Fired when the client disconnects mid-reply (the SSE stream's cancel).
+	 * Threaded into the provider so the upstream call aborts, and the
+	 * assistant message is NOT persisted for a reply nobody received.
+	 */
+	signal?: AbortSignal;
 }
 
 export type ChatOutcome =
@@ -123,11 +129,15 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 		let full = '';
 		for await (const chunk of provider.stream(history, {
 			system: systemPrompt,
-			maxTokens: CHAT_MAX_TOKENS
+			maxTokens: CHAT_MAX_TOKENS,
+			signal: input.signal
 		})) {
 			full += chunk;
 			yield chunk;
 		}
+		// Client disconnected mid-reply: the user message stays (accurate), but
+		// a reply nobody received must not be persisted as if it were.
+		if (input.signal?.aborted) return;
 		await db
 			.insert(chatMessages)
 			.values({ id: randomUUID(), sessionId: session.id, role: 'assistant', content: full });

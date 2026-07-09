@@ -4,6 +4,7 @@ import { getDb } from '$lib/db';
 import {
 	CHAT_ERRORS,
 	CHAT_SESSION_COOKIE,
+	chatSseStream,
 	getChatProvider,
 	getChatSecret,
 	handleChatMessage
@@ -29,6 +30,9 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 
 	const site = getSite();
 	const persona = resolvePersona(site.chatPersonaKey);
+	// Aborted by the SSE stream's cancel() when the client disconnects — the
+	// service threads it to the provider and skips the assistant DB write.
+	const abort = new AbortController();
 	const outcome = await handleChatMessage(
 		{
 			db: getDb(),
@@ -39,7 +43,8 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 		{
 			message: (body as { message?: unknown } | null)?.message,
 			sessionToken: cookies.get(CHAT_SESSION_COOKIE) ?? null,
-			ip: getClientAddress()
+			ip: getClientAddress(),
+			signal: abort.signal
 		}
 	);
 
@@ -59,26 +64,7 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 		maxAge: SESSION_COOKIE_MAX_AGE
 	});
 
-	const encoder = new TextEncoder();
-	const stream = new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const frame = (payload: object) =>
-				controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
-			try {
-				for await (const chunk of outcome.stream) {
-					frame({ delta: chunk });
-				}
-				frame({ done: true });
-			} catch {
-				// Provider failed mid-stream; tell the widget instead of hanging.
-				frame({ error: CHAT_ERRORS.stream });
-			} finally {
-				controller.close();
-			}
-		}
-	});
-
-	return new Response(stream, {
+	return new Response(chatSseStream(outcome.stream, abort), {
 		headers: {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache',

@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatProvider } from './provider.ts';
+import type { ChatMessage, ChatProvider, ChatStreamOptions } from './provider.ts';
 
 /**
  * Deterministic keyword-based canned answers (ro) — enough to demo the advice
@@ -51,10 +51,12 @@ export function mockReplyFor(messages: ChatMessage[]): string {
 export function createMockChatProvider(): ChatProvider {
 	return {
 		kind: 'mock',
-		async *stream(messages: ChatMessage[]) {
+		async *stream(messages: ChatMessage[], options?: ChatStreamOptions) {
 			// Word-sized chunks so streaming UIs render progressively.
 			const reply = mockReplyFor(messages);
 			for (const word of reply.split(/(?<= )/)) {
+				// Client disconnected: stop like the real provider would.
+				if (options?.signal?.aborted) return;
 				yield word;
 			}
 		}

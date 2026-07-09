@@ -15,6 +15,11 @@ export interface ChatStreamOptions {
 	/** Persona system prompt for the active site. */
 	system: string;
 	maxTokens: number;
+	/**
+	 * Fired when the client disconnected mid-reply: implementations must stop
+	 * streaming (abort the upstream API call — no billing a dead request).
+	 */
+	signal?: AbortSignal;
 }
 
 export interface ChatProvider {

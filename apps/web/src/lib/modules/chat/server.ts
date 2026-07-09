@@ -2,13 +2,21 @@
 // singleton. Mock is the default everywhere; the Anthropic provider is live
 // ONLY when CHAT_PROVIDER=anthropic AND ANTHROPIC_API_KEY are both set.
 import { env } from '$env/dynamic/private';
-import { createAnthropicChatProvider } from './anthropic-provider.ts';
+import { positiveIntEnv } from '$lib/server/env';
+import { ANTHROPIC_TIMEOUT_MS_DEFAULT, createAnthropicChatProvider } from './anthropic-provider.ts';
 import { createMockChatProvider } from './mock-provider.ts';
 import type { ChatProvider } from './provider.ts';
 import { selectChatProvider } from './select.ts';
 
-export { ANTHROPIC_CHAT_MODEL, createAnthropicChatProvider } from './anthropic-provider.ts';
+export {
+	ANTHROPIC_CHAT_MODEL,
+	ANTHROPIC_MAX_RETRIES,
+	ANTHROPIC_TIMEOUT_MS_DEFAULT,
+	createAnthropicChatProvider,
+	type AnthropicProviderOptions
+} from './anthropic-provider.ts';
 export { CHAT_ERRORS } from './copy.ts';
+export { chatSseStream } from './sse.ts';
 export { createMockChatProvider, mockReplyFor } from './mock-provider.ts';
 export type { ChatMessage, ChatProvider, ChatRole, ChatStreamOptions } from './provider.ts';
 export { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
@@ -42,7 +50,9 @@ export function getChatProvider(): ChatProvider {
 		const selection = selectChatProvider(env);
 		providerInstance =
 			selection.kind === 'anthropic'
-				? createAnthropicChatProvider(selection.apiKey)
+				? createAnthropicChatProvider(selection.apiKey, {
+						timeoutMs: positiveIntEnv(env.ANTHROPIC_TIMEOUT_MS, ANTHROPIC_TIMEOUT_MS_DEFAULT)
+					})
 				: createMockChatProvider();
 	}
 	return providerInstance;

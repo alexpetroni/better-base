@@ -8,6 +8,7 @@ import type { ChatMessage, ChatProvider, ChatStreamOptions } from './provider.ts
 import { ipRateKey } from './rate-limit.ts';
 import { chatMessages, chatRateLimits, chatSessions } from './schema.ts';
 import { handleChatMessage, pruneChatSessions, type ChatDeps } from './service.ts';
+import { chatSseStream } from './sse.ts';
 import { signSessionToken } from './token.ts';
 import { HISTORY_LIMIT } from './validate.ts';
 
@@ -263,6 +264,45 @@ describe('handleChatMessage', () => {
 			.where(eq(chatRateLimits.key, ipRateKey(ip)));
 		expect(row.count).toBe(25);
 	});
+
+	it('client disconnect aborts the provider stream and skips the assistant write (regression for audit resilience #4)', async () => {
+		let providerFinished = false;
+		const slowProvider: ChatProvider = {
+			kind: 'mock',
+			async *stream(_messages: ChatMessage[], { signal }: ChatStreamOptions) {
+				for (let i = 0; i < 50; i++) {
+					if (signal?.aborted) return;
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					yield `cuvânt${i} `;
+				}
+				providerFinished = true;
+			}
+		};
+		const abort = new AbortController();
+		const outcome = await handleChatMessage(deps({ provider: slowProvider }), {
+			message: 'Salut!',
+			sessionToken: null,
+			ip: '198.51.100.77',
+			signal: abort.signal
+		});
+		expect(outcome.kind).toBe('stream');
+		if (outcome.kind !== 'stream') return;
+
+		// The route wraps the reply exactly like this; cancel() = client gone.
+		const reader = chatSseStream(outcome.stream, abort).getReader();
+		await reader.read();
+		await reader.cancel();
+		expect(abort.signal.aborted).toBe(true);
+
+		// Give a buggy implementation time to keep streaming and persist.
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(providerFinished).toBe(false);
+		const stored = await db
+			.select()
+			.from(chatMessages)
+			.where(eq(chatMessages.sessionId, outcome.sessionId));
+		expect(stored.map((m) => m.role)).toEqual(['user']);
+	}, 5_000);
 });
 
 describe('pruneChatSessions', () => {

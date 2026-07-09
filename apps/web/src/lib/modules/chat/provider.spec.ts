@@ -72,6 +72,21 @@ describe('MockChatProvider', () => {
 	it('keeps the medical disclaimer stance in canned health answers', () => {
 		expect(mockReplyFor([{ role: 'user', content: 'insomnie' }])).toMatch(/medic/i);
 	});
+
+	it('stops streaming when the abort signal fires (client disconnected)', async () => {
+		const provider = createMockChatProvider();
+		const abort = new AbortController();
+		const chunks: string[] = [];
+		for await (const chunk of provider.stream([{ role: 'user', content: 'Salut!' }], {
+			system: 's',
+			maxTokens: 10,
+			signal: abort.signal
+		})) {
+			chunks.push(chunk);
+			abort.abort();
+		}
+		expect(chunks).toHaveLength(1);
+	});
 });
 
 describe('AnthropicChatProvider', () => {
@@ -88,4 +103,41 @@ describe('AnthropicChatProvider', () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 		vi.restoreAllMocks();
 	});
+
+	// Audit Theme C (resilience #3/#4): calls must be bounded and abortable.
+	// The fake fetch never completes but honors its abort signal — exactly
+	// what a hung Anthropic socket looks like to the SDK.
+	const hangingFetch = ((_url: unknown, init?: RequestInit) =>
+		new Promise((_resolve, reject) => {
+			init?.signal?.addEventListener('abort', () => reject((init.signal as AbortSignal).reason));
+		})) as typeof fetch;
+
+	it('times out instead of hanging when the API never responds (hung before the fix)', async () => {
+		const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
+			timeoutMs: 50,
+			maxRetries: 0,
+			fetchFn: hangingFetch
+		});
+		await expect(
+			collect(provider.stream([{ role: 'user', content: 'x' }], { system: 's', maxTokens: 10 }))
+		).rejects.toThrow(/timed out|timeout|abort/i);
+	}, 3_000);
+
+	it('aborts the upstream request when the stream signal fires (client disconnected)', async () => {
+		const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
+			timeoutMs: 60_000,
+			maxRetries: 0,
+			fetchFn: hangingFetch
+		});
+		const abort = new AbortController();
+		const pending = collect(
+			provider.stream([{ role: 'user', content: 'x' }], {
+				system: 's',
+				maxTokens: 10,
+				signal: abort.signal
+			})
+		);
+		setTimeout(() => abort.abort(), 20);
+		await expect(pending).rejects.toThrow(/abort/i);
+	}, 3_000);
 });
