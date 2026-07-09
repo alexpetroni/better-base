@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { m } from '$lib/paraglide/messages';
@@ -27,8 +28,6 @@
 		const qs = params.length ? `?${params.join('&')}` : '';
 		return `${resolve('/admin/products')}${qs}` as ResolvedPathname;
 	}
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium' });
 </script>
 
 <svelte:head>
@@ -130,7 +129,7 @@
 						{product.stripeProductId && product.stripePriceId ? 'stripe ✓' : 'stripe —'}
 					</span>
 					<span class="shrink-0 text-xs text-(--color-ink)/60">
-						{m.admin_products_updated({ date: dateFmt.format(product.updatedAt) })}
+						{m.admin_products_updated({ date: formatDate(product.updatedAt) })}
 					</span>
 					<span
 						data-testid="product-row-status"

@@ -1,12 +1,11 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import Seo from '$lib/components/Seo.svelte';
 	import { m } from '$lib/paraglide/messages';
 	import { Img } from '$lib/modules/media';
 
 	let { data } = $props();
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'long' });
 </script>
 
 <Seo
@@ -55,7 +54,7 @@
 							<h3 class="mb-1 font-semibold group-hover:underline">{card.title}</h3>
 							{#if card.publishedAt}
 								<p class="mb-2 text-xs text-(--color-ink)/70">
-									{m.blog_published_on({ date: dateFmt.format(card.publishedAt) })}
+									{m.blog_published_on({ date: formatDate(card.publishedAt, 'long') })}
 								</p>
 							{/if}
 							{#if card.excerpt}

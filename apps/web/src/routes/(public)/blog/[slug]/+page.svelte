@@ -1,11 +1,10 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import Seo from '$lib/components/Seo.svelte';
 	import { m } from '$lib/paraglide/messages';
 	import { Img } from '$lib/modules/media';
 
 	let { data } = $props();
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'long' });
 </script>
 
 <Seo
@@ -24,7 +23,7 @@
 		<h1 class="mb-2 text-3xl font-bold" data-testid="article-title">{data.article.title}</h1>
 		{#if data.article.publishedAt}
 			<p class="text-sm text-(--color-ink)/70">
-				{m.blog_published_on({ date: dateFmt.format(data.article.publishedAt) })}
+				{m.blog_published_on({ date: formatDate(data.article.publishedAt, 'long') })}
 			</p>
 		{/if}
 		{#if data.cover}

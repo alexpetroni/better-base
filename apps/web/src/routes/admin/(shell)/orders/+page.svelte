@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
 	import { formatCents } from '$lib/util/money';
@@ -17,8 +18,6 @@
 		failed: 'bg-red-100 text-red-800',
 		refunded: 'bg-amber-100 text-amber-800'
 	};
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 
 <svelte:head>
@@ -51,7 +50,7 @@
 							href={resolve('/admin/(shell)/orders/[id]', { id: order.id })}
 							class="text-(--color-brand) hover:underline"
 						>
-							{dateFmt.format(order.createdAt)}
+							{formatDate(order.createdAt, 'medium-time')}
 						</a>
 					</td>
 					<td class="px-4 py-2" data-testid="order-row-email">{order.email}</td>

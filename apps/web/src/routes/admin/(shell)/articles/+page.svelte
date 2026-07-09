@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { m } from '$lib/paraglide/messages';
@@ -19,8 +20,6 @@
 		const qs = params.length ? `?${params.join('&')}` : '';
 		return `${resolve('/admin/articles')}${qs}` as ResolvedPathname;
 	}
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium' });
 </script>
 
 <svelte:head>
@@ -102,7 +101,7 @@
 						<span class="block truncate text-sm text-(--color-ink)/60">/{article.slug}</span>
 					</span>
 					<span class="shrink-0 text-xs text-(--color-ink)/60">
-						{m.admin_articles_updated({ date: dateFmt.format(article.updatedAt) })}
+						{m.admin_articles_updated({ date: formatDate(article.updatedAt) })}
 					</span>
 					<span
 						data-testid="article-status"

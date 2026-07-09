@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
 	import { formatCents } from '$lib/util/money';
@@ -11,8 +12,6 @@
 		failed: m.admin_order_status_failed,
 		refunded: m.admin_order_status_refunded
 	};
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'long', timeStyle: 'short' });
 
 	const shipping = $derived(data.order.shippingAddress);
 	const shippingLines = $derived(
@@ -91,7 +90,7 @@
 	<aside class="space-y-4 text-sm">
 		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
 			<p class="mb-1 text-(--color-ink)/60">{m.admin_orders_col_date()}</p>
-			<p>{dateFmt.format(data.order.createdAt)}</p>
+			<p>{formatDate(data.order.createdAt, 'long-time')}</p>
 			<p class="mt-3 mb-1 text-(--color-ink)/60">{m.admin_orders_col_email()}</p>
 			<p data-testid="order-detail-email">{data.order.email}</p>
 		</div>

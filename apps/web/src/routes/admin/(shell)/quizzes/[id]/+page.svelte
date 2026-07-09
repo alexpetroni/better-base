@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { createFormState, MultiStepForm, validateConfig, type FormConfig } from 'formcomp';
 	import 'formcomp/theme.css';
 	import { resolve } from '$app/paths';
@@ -54,8 +55,6 @@
 		}
 		return { config, scoring, problems };
 	});
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium', timeStyle: 'short' });
 
 	const errorMessages: Record<string, () => string> = {
 		'json-form': m.admin_quiz_err_json_form,
@@ -294,7 +293,7 @@
 			<tbody>
 				{#each data.results as row (row.result.id)}
 					<tr data-testid="quiz-result-row" class="border-b border-(--color-brand-soft)/50">
-						<td class="px-3 py-2">{dateFmt.format(row.result.createdAt)}</td>
+						<td class="px-3 py-2">{formatDate(row.result.createdAt, 'medium-time')}</td>
 						<td class="px-3 py-2">{row.result.score}</td>
 						<td class="px-3 py-2">{row.result.profile.band.label}</td>
 						<td class="px-3 py-2">{row.email ?? '—'}</td>

@@ -1,10 +1,9 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
 
 	let { data, form } = $props();
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium' });
 </script>
 
 <svelte:head>
@@ -58,7 +57,7 @@
 					</a>
 				</td>
 				<td class="py-2 pr-4 text-(--color-ink)/70">/pagini/{page.slug}</td>
-				<td class="py-2 text-(--color-ink)/70">{dateFmt.format(page.updatedAt)}</td>
+				<td class="py-2 text-(--color-ink)/70">{formatDate(page.updatedAt)}</td>
 			</tr>
 		{:else}
 			<tr><td colspan="3" class="py-4 text-(--color-ink)/60">{m.admin_pages_empty()}</td></tr>

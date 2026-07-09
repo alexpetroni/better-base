@@ -1,11 +1,10 @@
 <script lang="ts">
+	import { formatDate } from '$lib/util/date';
 	import { resolve } from '$app/paths';
 	import { hasConsent } from '$lib/modules/crm';
 	import { m } from '$lib/paraglide/messages';
 
 	let { data } = $props();
-
-	const dateFmt = new Intl.DateTimeFormat('ro-RO', { dateStyle: 'medium' });
 </script>
 
 <svelte:head>
@@ -91,7 +90,7 @@
 					<td class="px-3 py-2" data-testid="subscriber-confirmed">
 						{sub.confirmedAt ? m.admin_subs_consent_yes() : m.admin_subs_consent_no()}
 					</td>
-					<td class="px-3 py-2 text-(--color-ink)/70">{dateFmt.format(sub.createdAt)}</td>
+					<td class="px-3 py-2 text-(--color-ink)/70">{formatDate(sub.createdAt)}</td>
 				</tr>
 			{/each}
 		</tbody>
