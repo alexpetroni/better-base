@@ -32,11 +32,14 @@ export function pictureHtml(sources: ImageSources, altOverride?: string): string
 	const alt = escapeHtml(altOverride || sources.alt);
 	const dims =
 		sources.width && sources.height ? ` width="${sources.width}" height="${sources.height}"` : '';
+	// Width-descriptor srcsets need a `sizes`; the layout width mirrors <Img>'s
+	// default (article images render at their requested width inside the prose).
+	const sizes = sources.width ? ` sizes="${sources.width}px"` : '';
 	const avif = sources.srcsetAvif
-		? `<source type="image/avif" srcset="${escapeHtml(sources.srcsetAvif)}" />`
+		? `<source type="image/avif" srcset="${escapeHtml(sources.srcsetAvif)}"${sizes} />`
 		: '';
 	const webp = sources.srcsetWebp
-		? `<source type="image/webp" srcset="${escapeHtml(sources.srcsetWebp)}" />`
+		? `<source type="image/webp" srcset="${escapeHtml(sources.srcsetWebp)}"${sizes} />`
 		: '';
 	return `<picture>${avif}${webp}<img src="${escapeHtml(sources.src)}" alt="${alt}"${dims} loading="lazy" decoding="async" /></picture>`;
 }

@@ -41,6 +41,7 @@
 					{#if card.cover}
 						<Img
 							image={card.cover}
+							sizes="(min-width: 64rem) 17rem, (min-width: 40rem) 45vw, calc(100vw - 2rem)"
 							class="aspect-[8/5] w-full bg-(--color-brand-soft)/20 object-cover"
 						/>
 					{:else}

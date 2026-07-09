@@ -81,6 +81,8 @@ describe('media references', () => {
 		expect(html).toContain('type="image/webp"');
 		expect(html).toContain('loading="lazy"');
 		expect(html).toContain('width="768"');
+		// Width-descriptor srcsets are inert without a sizes attribute.
+		expect(html).toContain('sizes="768px"');
 		expect(html).toContain('alt="O poză"');
 	});
 

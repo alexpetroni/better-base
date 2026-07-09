@@ -5,6 +5,7 @@ import {
 	imageSources,
 	imgproxyPath,
 	signImgproxyPath,
+	srcsetWidths,
 	type ImgproxyConfig
 } from './imgproxy.ts';
 
@@ -73,14 +74,37 @@ describe('buildImgUrl', () => {
 	});
 });
 
+describe('srcsetWidths', () => {
+	it('spans layout width to 2× (retina) plus ladder steps in between', () => {
+		expect(srcsetWidths(768)).toEqual([480, 640, 768, 960, 1200, 1536]);
+	});
+
+	it('always includes the layout width and its double, deduped and sorted', () => {
+		expect(srcsetWidths(320)).toEqual([320, 480, 640]);
+		expect(srcsetWidths(160)).toEqual([160, 320]);
+	});
+});
+
 describe('buildSrcset', () => {
-	it('emits 1x and 2x candidates', () => {
-		const srcset = buildSrcset(CFG, 'a/b.png', { w: 300, format: 'webp' });
+	// Regression (audit frontend #5): the old srcset was DPR-only (`1x, 2x`),
+	// which made the `sizes` attribute dead and over-fetched ~2× on retina.
+	it('emits width descriptors, not DPR descriptors', () => {
+		const srcset = buildSrcset(CFG, 'a/b.png', { w: 480, format: 'webp' });
 		const parts = srcset.split(', ');
-		expect(parts).toHaveLength(2);
-		expect(parts[0]).toMatch(/\/rs:fit:300:0\/plain\/s3:\/\/better-base-media\/a\/b\.png@webp 1x$/);
-		expect(parts[1]).toContain('/dpr:2/');
-		expect(parts[1]).toMatch(/ 2x$/);
+		expect(parts.length).toBeGreaterThan(2);
+		for (const part of parts) expect(part).toMatch(/ \d+w$/);
+		expect(srcset).not.toMatch(/ \dx\b/);
+		expect(parts[0]).toMatch(
+			/\/rs:fit:320:0\/plain\/s3:\/\/better-base-media\/a\/b\.png@webp 320w$/
+		);
+		expect(parts.at(-1)).toMatch(/\/rs:fit:960:0\/.* 960w$/);
+	});
+
+	it('scales a fixed height proportionally per candidate (fill crops keep their aspect)', () => {
+		const srcset = buildSrcset(CFG, 'a/b.png', { w: 480, h: 360, fit: 'fill', format: 'webp' });
+		expect(srcset).toContain('/rs:fill:480:360/');
+		expect(srcset).toContain('/rs:fill:960:720/');
+		expect(srcset).toContain('/rs:fill:640:480/');
 	});
 });
 
@@ -96,11 +120,23 @@ describe('imageSources', () => {
 		expect(sources.srcsetAvif).toContain('@avif');
 	});
 
-	it('accepts a bare storage key', () => {
+	it('accepts a bare storage key and falls back to a 4:3 placeholder height (no CLS)', () => {
 		const sources = imageSources(CFG, 'x/y.png', { w: 100 });
 		expect(sources.src).toContain('s3://better-base-media/x/y.png@webp');
-		expect(sources.height).toBeUndefined();
+		// Regression (audit frontend #14): dimensionless media used to ship no
+		// height at all, so the <img> reserved zero space and shifted layout.
+		expect(sources.height).toBe(75);
 		expect(sources.alt).toBe('');
+	});
+
+	it('gives dimensionless SVGs a placeholder height too', () => {
+		const sources = imageSources(
+			CFG,
+			{ key: 'a/logo.svg', width: null, height: null, alt: 'Logo' },
+			{ w: 320 }
+		);
+		expect(sources.width).toBe(320);
+		expect(sources.height).toBe(240);
 	});
 
 	it('serves SVGs unresized and without format conversion', () => {

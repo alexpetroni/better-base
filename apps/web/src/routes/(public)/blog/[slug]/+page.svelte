@@ -29,6 +29,7 @@
 		{#if data.cover}
 			<Img
 				image={data.cover}
+				sizes="(min-width: 56rem) 54rem, calc(100vw - 2rem)"
 				class="mt-6 w-full rounded-lg bg-(--color-brand-soft)/20"
 				loading="eager"
 			/>

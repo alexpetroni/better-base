@@ -62,9 +62,37 @@ export function buildImgUrl(cfg: ImgproxyConfig, key: string, opts: ImgOptions =
 	return `${cfg.baseUrl.replace(/\/$/, '')}/${signImgproxyPath(path, cfg.key, cfg.salt)}${path}`;
 }
 
-/** 1x/2x srcset for one format, e.g. `https://…/… 1x, https://…/… 2x`. */
-export function buildSrcset(cfg: ImgproxyConfig, key: string, opts: ImgOptions = {}): string {
-	return [1, 2].map((dpr) => `${buildImgUrl(cfg, key, { ...opts, dpr })} ${dpr}x`).join(', ');
+/** Candidate-width ladder for width-descriptor srcsets. */
+const SRCSET_LADDER = [320, 480, 640, 768, 960, 1200, 1600] as const;
+
+/**
+ * Candidate widths for a layout width `w`: ladder entries between w/2 and 2×w,
+ * plus w and 2×w themselves (2× covers retina). Sorted ascending, deduped.
+ */
+export function srcsetWidths(displayWidth: number): number[] {
+	const min = Math.ceil(displayWidth / 2);
+	const max = displayWidth * 2;
+	const ladder = SRCSET_LADDER.filter((width) => width >= min && width <= max);
+	return [...new Set([...ladder, displayWidth, max])].sort((a, b) => a - b);
+}
+
+/**
+ * Width-descriptor srcset, e.g. `https://… 480w, https://… 768w, https://… 1536w`
+ * — lets the browser pick per viewport×DPR via the `sizes` attribute instead
+ * of always fetching 2× on retina (audit frontend #5). A fixed `h` (fill
+ * crops) scales proportionally per candidate so the aspect never changes.
+ */
+export function buildSrcset(
+	cfg: ImgproxyConfig,
+	key: string,
+	opts: Omit<ImgOptions, 'dpr'> & { w: number }
+): string {
+	return srcsetWidths(opts.w)
+		.map((width) => {
+			const height = opts.h === undefined ? undefined : Math.round((opts.h * width) / opts.w);
+			return `${buildImgUrl(cfg, key, { ...opts, w: width, h: height })} ${width}w`;
+		})
+		.join(', ');
 }
 
 /**
@@ -97,10 +125,16 @@ export function imageSources(
 	// instead of rendering in the imgproxy origin (audit M1); imgproxy also
 	// strips scripts via IMGPROXY_SANITIZE_SVG (docker-compose.yml).
 	const isSvg = key.endsWith('.svg');
-	const size: ImgOptions = isSvg ? {} : { w: opts.w, h: opts.h, fit: opts.fit };
+	const size = { w: opts.w, h: opts.h, fit: opts.fit };
 
 	const natural = row?.width && row?.height ? { w: row.width, h: row.height } : null;
-	const height = opts.h ?? (natural ? Math.round((opts.w * natural.h) / natural.w) : undefined);
+	// Dimensionless media (e.g. an SVG without width/viewBox) still gets a
+	// height so the <img> reserves layout space (no CLS): a 4:3 placeholder box
+	// matching the cover crops used across the site. Tailwind's preflight sets
+	// `img { height: auto }`, so the real intrinsic ratio takes over on load.
+	const height =
+		opts.h ??
+		(natural ? Math.round((opts.w * natural.h) / natural.w) : Math.round((opts.w * 3) / 4));
 
 	return {
 		src: buildImgUrl(cfg, key, isSvg ? { attachment: true } : { ...size, format: 'webp' }),
