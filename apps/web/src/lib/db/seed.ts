@@ -2,6 +2,8 @@ import { eq } from 'drizzle-orm';
 import { PILLARS_BY_SLUG } from '../config/pillars.ts';
 import { articlePillars, articles } from '../modules/blog/schema.ts';
 import { media } from '../modules/media/schema.ts';
+import { DEFAULT_PAGES } from '../modules/pages/seed-pages.ts';
+import { ensurePage } from '../modules/pages/service.ts';
 import type { Storage } from '../modules/media/storage.ts';
 import { quizzes } from '../modules/quiz/schema.ts';
 import { SLEEP_QUIZ_SEED } from '../modules/quiz/seed-quiz.ts';
@@ -176,4 +178,16 @@ export async function seedDemoArticles(db: Db): Promise<number> {
 			.onConflictDoNothing();
 	}
 	return DEMO_ARTICLES.length;
+}
+
+/**
+ * Default legal pages (privacy, terms). Created only when missing — re-seeding
+ * never overwrites copy edited in /admin/pages.
+ */
+export async function seedDefaultPages(db: Db): Promise<number> {
+	let created = 0;
+	for (const page of DEFAULT_PAGES) {
+		if ((await ensurePage({ db }, page)) === 'created') created++;
+	}
+	return created;
 }

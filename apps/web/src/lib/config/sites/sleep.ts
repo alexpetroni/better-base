@@ -20,6 +20,10 @@ export const sleepSite: SiteConfig = {
 		{ label: 'Magazin', href: '/magazin' },
 		{ label: 'Asistent', href: '/asistent' }
 	],
+	footerLinks: [
+		{ label: 'Politica de confidențialitate', href: '/pagini/politica-de-confidentialitate' },
+		{ label: 'Termeni și condiții', href: '/pagini/termeni-si-conditii' }
+	],
 	chatPersonaKey: 'sleep-coach',
 	chatWidget: true,
 	email: {

@@ -22,6 +22,7 @@
 		"storage:init": "node scripts/storage-init.ts",
 		"chat:prune": "node scripts/chat-prune.ts",
 		"content": "node scripts/content.ts",
+		"subscriber:delete": "node scripts/subscriber-delete.ts",
 		"user:create": "node scripts/user-create.ts"
 	},
 	"dependencies": {

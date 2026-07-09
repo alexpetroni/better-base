@@ -10,6 +10,7 @@ const ADMIN_NAV = [
 	{ section: 'products', href: '/admin/products', message: 'products' },
 	{ section: 'quizzes', href: '/admin/quizzes', message: 'quizzes' },
 	{ section: 'media', href: '/admin/media', message: 'media' },
+	{ section: 'pages', href: '/admin/pages', message: 'pages' },
 	{ section: 'subscribers', href: '/admin/subscribers', message: 'subscribers' },
 	{ section: 'orders', href: '/admin/orders', message: 'orders' },
 	{ section: 'settings', href: '/admin/settings', message: 'settings' }

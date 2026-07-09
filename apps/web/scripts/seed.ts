@@ -7,6 +7,7 @@ import { createDb } from '../src/lib/db/client.ts';
 import {
 	seedDemoArticles,
 	seedDemoProducts,
+	seedDefaultPages,
 	seedDemoQuiz,
 	seedPillars
 } from '../src/lib/db/seed.ts';
@@ -31,4 +32,6 @@ const storage = createStorage(storageConfigFromEnv(process.env));
 await storage.ensureBucket();
 const productCount = await seedDemoProducts(db, storage);
 console.log(`Seeded ${productCount} demo product(s)`);
+const pageCount = await seedDefaultPages(db);
+console.log(`Seeded ${pageCount} default page(s)`);
 await db.$client.end();

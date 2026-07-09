@@ -13,6 +13,8 @@ export interface SiteConfig {
 	/** CSS custom property name (without `--`) -> value. Applied on <html> by the root layout. */
 	theme: Record<string, string>;
 	nav: NavItem[];
+	/** Footer links (legal pages etc.) — rendered on every public page. */
+	footerLinks: NavItem[];
 	chatPersonaKey: string;
 	/** Whether the floating chat widget is rendered on public pages. */
 	chatWidget: boolean;

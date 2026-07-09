@@ -4,6 +4,7 @@
 	import { m } from '$lib/paraglide/messages';
 	import { ChatWidget } from '$lib/modules/chat';
 	import { NewsletterSignup } from '$lib/modules/crm';
+	import { CookieConsent } from '$lib/modules/gdpr';
 
 	let { data, children } = $props();
 
@@ -53,10 +54,26 @@
 <footer class="mt-12 border-t border-(--color-brand-soft) bg-(--color-brand-soft)/20">
 	<div class="mx-auto max-w-4xl px-4 py-10">
 		<NewsletterSignup source="footer" />
-		<p class="mt-8 text-sm text-(--color-ink)/60">© {data.site.name}</p>
+		<nav aria-label="Linkuri legale" class="mt-8">
+			<ul class="flex flex-wrap gap-4 text-sm">
+				{#each data.site.footerLinks as link (link.href)}
+					<li>
+						<a
+							href={resolve(link.href as '/')}
+							class="text-(--color-ink)/70 underline hover:text-(--color-ink)"
+						>
+							{link.label}
+						</a>
+					</li>
+				{/each}
+			</ul>
+		</nav>
+		<p class="mt-4 text-sm text-(--color-ink)/60">© {data.site.name}</p>
 	</div>
 </footer>
 
 {#if data.site.chatWidget}
 	<ChatWidget />
 {/if}
+
+<CookieConsent initial={data.cookieConsent} />
