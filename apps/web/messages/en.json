@@ -248,6 +248,7 @@
 	"admin_order_status_paid": "paid",
 	"admin_order_status_failed": "failed",
 	"admin_order_status_refunded": "refunded",
+	"admin_order_oversold": "oversold",
 	"admin_order_back": "← All orders",
 	"chat_open": "Assistant",
 	"chat_close": "Close",

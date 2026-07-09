@@ -1,18 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CART_MAX_LINES } from './cart.ts';
 import { buildCartMetadata, parseCartMetadata } from './checkout.ts';
-import { decrementedStock } from './webhook.ts';
-
-describe('decrementedStock', () => {
-	it('subtracts sold units', () => {
-		expect(decrementedStock(10, 3)).toBe(7);
-	});
-
-	it('floors at zero when more units sold than tracked', () => {
-		expect(decrementedStock(2, 5)).toBe(0);
-		expect(decrementedStock(0, 1)).toBe(0);
-	});
-});
 
 describe('cart metadata', () => {
 	it('round-trips the checkout snapshot', () => {

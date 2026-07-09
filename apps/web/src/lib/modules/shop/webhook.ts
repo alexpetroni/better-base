@@ -38,11 +38,6 @@ export type WebhookOutcome =
 	| { kind: 'refund-unmatched' }
 	| { kind: 'ignored'; type: string };
 
-/** New stock after selling `qty` units: tracked stock never goes below 0. */
-export function decrementedStock(stock: number, qty: number): number {
-	return Math.max(stock - qty, 0);
-}
-
 // Older API versions expose shipping on the session root, newer ones under
 // collected_information; read both so fixtures and live events all work.
 type ShippingDetails = { name?: string | null; address?: Stripe.Address | null } | null;
@@ -143,15 +138,30 @@ async function handleCheckoutCompleted(
 		}));
 		await tx.insert(orderItems).values(items);
 
-		// Decrement tracked stock, floored at 0; untracked (null) stock is left alone.
+		// Decrement tracked stock; untracked (null) stock is left alone. The
+		// un-floored RETURNING exposes overselling (audit resilience #7): stock
+		// is only checked BEFORE payment, so two concurrent checkouts can both
+		// pass with one unit left. Clamp back to 0 and flag the order — a human
+		// decides between restock, partial refund or apology; auto-refunding a
+		// whole (possibly multi-line) paid order here would be worse. The row
+		// stays locked by the first update, so the clamp cannot race.
+		let oversold = false;
 		for (const item of cart) {
-			await tx
+			const [updated] = await tx
 				.update(products)
-				.set({ stock: sql`greatest(${products.stock} - ${item.q}, 0)` })
-				.where(and(eq(products.id, item.i), isNotNull(products.stock)));
+				.set({ stock: sql`${products.stock} - ${item.q}` })
+				.where(and(eq(products.id, item.i), isNotNull(products.stock)))
+				.returning({ id: products.id, stock: products.stock });
+			if (updated && updated.stock < 0) {
+				oversold = true;
+				await tx.update(products).set({ stock: 0 }).where(eq(products.id, updated.id));
+			}
+		}
+		if (oversold) {
+			await tx.update(orders).set({ oversold: true }).where(eq(orders.id, order.id));
 		}
 
-		return { order, items };
+		return { order: { ...order, oversold }, items };
 	});
 
 	if (!created) {

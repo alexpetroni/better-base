@@ -248,6 +248,7 @@
 	"admin_order_status_paid": "plătită",
 	"admin_order_status_failed": "eșuată",
 	"admin_order_status_refunded": "rambursată",
+	"admin_order_oversold": "stoc depășit",
 	"admin_order_back": "← Toate comenzile",
 	"chat_open": "Asistent",
 	"chat_close": "Închide",

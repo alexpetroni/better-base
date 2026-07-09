@@ -1,4 +1,13 @@
-import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+	boolean,
+	index,
+	integer,
+	jsonb,
+	pgTable,
+	primaryKey,
+	text,
+	timestamp
+} from 'drizzle-orm/pg-core';
 import { pillars } from '../../db/schema/core.ts';
 import { media } from '../media/schema.ts';
 
@@ -81,6 +90,12 @@ export const orders = pgTable(
 		status: text('status', { enum: ['pending', 'paid', 'failed', 'refunded'] })
 			.notNull()
 			.default('pending'),
+		/**
+		 * The payment claimed more units than were in stock (concurrent
+		 * checkouts both passed the pre-payment stock check). Flagged by the
+		 * webhook for manual follow-up — restock, partial refund, or apology.
+		 */
+		oversold: boolean('oversold').notNull().default(false),
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},

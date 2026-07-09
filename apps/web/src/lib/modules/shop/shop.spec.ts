@@ -471,7 +471,7 @@ describe('webhook: checkout.session.completed', () => {
 		expect(logs).toHaveLength(1);
 	});
 
-	it('floors tracked stock at zero when more units sold than tracked', async () => {
+	it('floors tracked stock at zero AND flags the order oversold (audit resilience #7)', async () => {
 		const scarce = await makeProduct({ name: 'Stoc mic', priceCents: 2000, stock: 1 });
 		const cart = [{ productId: scarce.id, qty: 3, priceCents: 2000 }];
 		const payload = completedSessionEvent({ id: 'cs_floor', cart, amountTotal: 6000 });
@@ -479,6 +479,35 @@ describe('webhook: checkout.session.completed', () => {
 		await processStripeEvent(webhookDeps, event);
 
 		const [after] = await db.select().from(products).where(eq(products.id, scarce.id));
+		expect(after.stock).toBe(0);
+		const [order] = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_floor'));
+		expect(order.oversold).toBe(true);
+	});
+
+	it('two paid checkouts racing for the last unit: the second order is flagged, exact sell-out is not', async () => {
+		// Both buyers passed the pre-payment stock check with stock 1; payment
+		// happens outside our control, so both webhooks arrive "paid".
+		const last = await makeProduct({ name: 'Ultima bucată', priceCents: 2000, stock: 1 });
+		const cart = [{ productId: last.id, qty: 1, priceCents: 2000 }];
+		for (const sessionId of ['cs_race_first', 'cs_race_second']) {
+			const payload = completedSessionEvent({ id: sessionId, cart, amountTotal: 2000 });
+			const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+			expect((await processStripeEvent(webhookDeps, event)).kind).toBe('order-created');
+		}
+
+		const [first] = await db
+			.select()
+			.from(orders)
+			.where(eq(orders.stripeSessionId, 'cs_race_first'));
+		const [second] = await db
+			.select()
+			.from(orders)
+			.where(eq(orders.stripeSessionId, 'cs_race_second'));
+		// The first buyer got the unit (exact sell-out — not oversold);
+		// the second paid for a unit that no longer existed.
+		expect(first.oversold).toBe(false);
+		expect(second.oversold).toBe(true);
+		const [after] = await db.select().from(products).where(eq(products.id, last.id));
 		expect(after.stock).toBe(0);
 	});
 

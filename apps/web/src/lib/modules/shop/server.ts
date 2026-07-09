@@ -60,7 +60,6 @@ export {
 } from './stripe-gateway.ts';
 export { syncProductToStripe, type SyncDeps, type SyncOutcome } from './sync.ts';
 export {
-	decrementedStock,
 	getOrderBySessionId,
 	getOrderWithItems,
 	listOrders,

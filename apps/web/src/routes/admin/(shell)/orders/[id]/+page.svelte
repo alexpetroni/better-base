@@ -51,6 +51,15 @@
 	>
 		{statusLabels[data.order.status]()}
 	</span>
+	{#if data.order.oversold}
+		<span
+			data-testid="order-detail-oversold"
+			class="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800"
+			title={m.admin_order_oversold()}
+		>
+			{m.admin_order_oversold()}
+		</span>
+	{/if}
 </div>
 
 <div class="grid gap-6 lg:grid-cols-[1fr_20rem]">

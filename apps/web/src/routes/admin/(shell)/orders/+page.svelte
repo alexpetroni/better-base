@@ -65,6 +65,14 @@
 						>
 							{statusLabels[order.status]()}
 						</span>
+						{#if order.oversold}
+							<span
+								data-testid="order-row-oversold"
+								class="ml-1 rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800"
+							>
+								{m.admin_order_oversold()}
+							</span>
+						{/if}
 					</td>
 				</tr>
 			{/each}
