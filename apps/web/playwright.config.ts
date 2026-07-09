@@ -15,13 +15,14 @@ export default defineConfig({
 		{
 			command: 'npm run preview -- --port 4173 --strictPort',
 			port: 4173,
-			env: { SITE_ID: 'sleep', DATABASE_URL: siteDatabaseUrl('sleep') },
+			// EMAIL_DRYRUN is forced: an e2e run must never deliver real email.
+			env: { SITE_ID: 'sleep', DATABASE_URL: siteDatabaseUrl('sleep'), EMAIL_DRYRUN: 'true' },
 			reuseExistingServer: false
 		},
 		{
 			command: 'npm run preview -- --port 4174 --strictPort',
 			port: 4174,
-			env: { SITE_ID: 'life', DATABASE_URL: siteDatabaseUrl('life') },
+			env: { SITE_ID: 'life', DATABASE_URL: siteDatabaseUrl('life'), EMAIL_DRYRUN: 'true' },
 			reuseExistingServer: false
 		}
 	]
