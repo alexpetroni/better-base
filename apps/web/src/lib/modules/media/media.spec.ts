@@ -12,10 +12,10 @@ import {
 	confirmUpload,
 	createVideoEmbed,
 	deleteMedia,
-	registerMediaReferenceCheck,
 	requestUpload,
 	updateMediaAlt,
-	type MediaDeps
+	type MediaDeps,
+	type MediaReferenceCheck
 } from './service.ts';
 import { createStorage } from './storage.ts';
 
@@ -202,21 +202,17 @@ describe('alt, delete and reference checks', () => {
 		if (!created.ok) throw new Error('confirm failed');
 		const id = created.value.id;
 
-		const unregister = registerMediaReferenceCheck({
+		const specCheck: MediaReferenceCheck = {
 			name: 'spec-articles',
 			isReferenced: async (_db, mediaId) => mediaId === id
+		};
+		expect(await deleteMedia({ ...deps, referenceChecks: [specCheck] }, id)).toMatchObject({
+			ok: false,
+			error: 'referenced',
+			detail: 'spec-articles'
 		});
-		try {
-			expect(await deleteMedia(deps, id)).toMatchObject({
-				ok: false,
-				error: 'referenced',
-				detail: 'spec-articles'
-			});
-		} finally {
-			unregister();
-		}
 
-		const deleted = await deleteMedia(deps, id);
+		const deleted = await deleteMedia({ ...deps, referenceChecks: [] }, id);
 		expect(deleted.ok).toBe(true);
 		expect(await deps.db.select().from(media).where(eq(media.id, id))).toHaveLength(0);
 		expect(await deps.storage.statObject(key)).toBeNull();
@@ -230,7 +226,7 @@ describe('alt, delete and reference checks', () => {
 		});
 		expect(row.kind).toBe('video-embed');
 		expect(row.key).toBeNull();
-		const deleted = await deleteMedia(deps, row.id);
+		const deleted = await deleteMedia({ ...deps, referenceChecks: [] }, row.id);
 		expect(deleted.ok).toBe(true);
 	});
 });

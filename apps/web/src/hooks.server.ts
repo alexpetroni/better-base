@@ -7,10 +7,6 @@ import { paraglideMiddleware } from '$lib/paraglide/server';
 import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
 import { assertBootEnv } from '$lib/server/boot';
 import { formatServerError } from '$lib/server/log';
-// Side effect: registers the blog's and shop's media reference checks before
-// any request can delete media (they live in the server barrels' module init).
-import '$lib/modules/blog/server';
-import '$lib/modules/shop/server';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
 // without an ANTHROPIC_API_KEY fails fast instead of at the first message.
 import '$lib/modules/chat/server';

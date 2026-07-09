@@ -14,6 +14,7 @@ import {
 	updateMediaAlt
 } from '$lib/modules/media/server';
 import { formStr } from '$lib/server/forms';
+import { MEDIA_REFERENCE_CHECKS } from '$lib/server/media-library';
 import type { Actions, PageServerLoad } from './$types';
 
 export interface MediaListItem {
@@ -47,7 +48,10 @@ export const actions: Actions = {
 	delete: async ({ request }) => {
 		const form = await request.formData();
 		const id = formStr(form, 'id');
-		const result = await deleteMedia({ db: getDb(), storage: getStorage() }, id);
+		const result = await deleteMedia(
+			{ db: getDb(), storage: getStorage(), referenceChecks: MEDIA_REFERENCE_CHECKS },
+			id
+		);
 		if (!result.ok) {
 			if (result.error === 'referenced') {
 				return fail(409, { error: result.error, detail: result.detail ?? '' });

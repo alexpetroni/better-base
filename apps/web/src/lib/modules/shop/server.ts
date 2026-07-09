@@ -1,12 +1,10 @@
-// Server module barrel: services, gateways, webhook processing and the media
-// reference check registration. Loaded from hooks.server.ts so the
-// registration below runs before any admin request can delete media.
+// Server module barrel: services, gateways and webhook processing. The
+// products media reference check is exported here and wired into deleteMedia
+// via $lib/server/media-library.ts MEDIA_REFERENCE_CHECKS.
 import { env } from '$env/dynamic/private';
-import { registerMediaReferenceCheck } from '$lib/modules/media/server';
 import { positiveIntEnv } from '$lib/server/env';
 import type { StripeGateway } from './gateway.ts';
 import { createMockStripeGateway } from './mock-gateway.ts';
-import { productsMediaReferenceCheck } from './media-ref.ts';
 import { createStripeGateway, STRIPE_TIMEOUT_MS_DEFAULT } from './stripe-gateway.ts';
 
 export {
@@ -91,5 +89,3 @@ export function getStripeWebhookSecret(): string {
 	}
 	return env.STRIPE_WEBHOOK_SECRET;
 }
-
-registerMediaReferenceCheck(productsMediaReferenceCheck);

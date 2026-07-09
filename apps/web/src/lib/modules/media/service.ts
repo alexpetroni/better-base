@@ -21,7 +21,7 @@ export type MediaError = 'invalid-mime' | 'invalid-size' | 'not-found' | 'refere
 export type Result<T> = ResultOf<T, MediaError>;
 
 /**
- * Reference checks other modules register (blog covers, product images, …).
+ * Reference checks other modules provide (blog covers, product images, …).
  * `deleteMedia` refuses to delete a row any check reports as referenced.
  */
 export type MediaReferenceCheck = {
@@ -29,14 +29,13 @@ export type MediaReferenceCheck = {
 	isReferenced: (db: Db, mediaId: string) => Promise<boolean>;
 };
 
-const referenceChecks: MediaReferenceCheck[] = [];
-
-export function registerMediaReferenceCheck(check: MediaReferenceCheck): () => void {
-	referenceChecks.push(check);
-	return () => {
-		const i = referenceChecks.indexOf(check);
-		if (i !== -1) referenceChecks.splice(i, 1);
-	};
+/**
+ * Deletion needs the full check list injected explicitly (the app wires it
+ * in `$lib/server/media-library.ts` `MEDIA_REFERENCE_CHECKS`) — a required
+ * field, so protection can't silently vanish with an import-order change.
+ */
+export interface MediaDeleteDeps extends MediaDeps {
+	referenceChecks: MediaReferenceCheck[];
 }
 
 export interface UploadTicket {
@@ -150,7 +149,7 @@ export async function updateMediaAlt(
 }
 
 /**
- * Delete a media row and its storage object. Refuses when any registered
+ * Delete a media row and its storage object. Refuses when any injected
  * reference check reports the row in use.
  *
  * Deliberately not transactional (audit Theme B): the storage delete cannot
@@ -159,11 +158,11 @@ export async function updateMediaAlt(
  * deletes are idempotent). The reverse order would leak unreachable objects
  * with no admin-visible trace to retry.
  */
-export async function deleteMedia(deps: MediaDeps, id: string): Promise<Result<MediaRow>> {
+export async function deleteMedia(deps: MediaDeleteDeps, id: string): Promise<Result<MediaRow>> {
 	const row = await getMedia(deps, id);
 	if (!row) return { ok: false, error: 'not-found' };
 
-	for (const check of referenceChecks) {
+	for (const check of deps.referenceChecks) {
 		if (await check.isReferenced(deps.db, id)) {
 			return { ok: false, error: 'referenced', detail: check.name };
 		}

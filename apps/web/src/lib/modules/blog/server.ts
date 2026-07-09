@@ -1,9 +1,6 @@
-// Server module barrel: services, rendering glue and the media reference
-// check registration. Loaded from hooks.server.ts so the registration below
-// runs before any admin request can delete media.
-import { registerMediaReferenceCheck } from '$lib/modules/media/server';
-import { articlesMediaReferenceCheck } from './media-ref.ts';
-
+// Server module barrel: services and rendering glue. The articles media
+// reference check is exported here and wired into deleteMedia via
+// $lib/server/media-library.ts MEDIA_REFERENCE_CHECKS.
 export { articlesMediaReferenceCheck } from './media-ref.ts';
 export {
 	extractMediaRefs,
@@ -33,5 +30,3 @@ export {
 	type BlogResult,
 	type PublishedList
 } from './service.ts';
-
-registerMediaReferenceCheck(articlesMediaReferenceCheck);
