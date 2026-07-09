@@ -4,8 +4,9 @@ import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { resolveSiteConfig } from '../config/index.ts';
 import { createDb, type Db } from './client.ts';
+import { articlePillars, articles } from '../modules/blog/schema.ts';
 import { pillars } from './schema/core.ts';
-import { seedPillars } from './seed.ts';
+import { seedDemoArticles, seedPillars } from './seed.ts';
 
 // Integration test against the compose Postgres: uses the dedicated test
 // database (TEST_DATABASE_URL), reset and re-migrated fresh on every run.
@@ -54,5 +55,19 @@ describe('seedPillars', () => {
 
 	it('rejects a slug that is not canonical', async () => {
 		await expect(seedPillars(db, ['nope'])).rejects.toThrow(/unknown pillar slug/);
+	});
+});
+
+describe('seedDemoArticles', () => {
+	it('seeds 3 published articles tagged to somn, idempotently', async () => {
+		// Pillars are present from the seedPillars tests above.
+		await expect(seedDemoArticles(db)).resolves.toBe(3);
+		const rows = await db.select().from(articles);
+		expect(rows).toHaveLength(3);
+		expect(rows.every((r) => r.status === 'published' && r.publishedAt)).toBe(true);
+
+		await seedDemoArticles(db);
+		expect(await db.select().from(articles)).toHaveLength(3);
+		expect(await db.select().from(articlePillars)).toHaveLength(3);
 	});
 });
