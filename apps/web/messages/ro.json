@@ -276,5 +276,10 @@
 	"consent_text": "Folosim cookie-uri strict necesare pentru funcționarea site-ului. Cookie-urile de analiză se activează doar cu acordul tău.",
 	"consent_more": "Află mai multe",
 	"consent_accept": "Accept",
-	"consent_deny": "Refuz"
+	"consent_deny": "Refuz",
+	"chat_input_label": "Mesajul tău",
+	"chat_retry": "Reîncearcă",
+	"chat_reply_failed": "Răspunsul a fost întrerupt.",
+	"footer_legal_aria": "Linkuri legale",
+	"home_seo_description": "Ghiduri practice, teste de autoevaluare și produse pentru o viață mai sănătoasă."
 }

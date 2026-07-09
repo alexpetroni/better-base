@@ -276,5 +276,10 @@
 	"consent_text": "We use strictly necessary cookies to run this site. Analytics cookies are enabled only with your consent.",
 	"consent_more": "Learn more",
 	"consent_accept": "Accept",
-	"consent_deny": "Decline"
+	"consent_deny": "Decline",
+	"chat_input_label": "Your message",
+	"chat_retry": "Try again",
+	"chat_reply_failed": "The reply was interrupted.",
+	"footer_legal_aria": "Legal links",
+	"home_seo_description": "Practical guides, self-assessment quizzes and products for a healthier life."
 }
