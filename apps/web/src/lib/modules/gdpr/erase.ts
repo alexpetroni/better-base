@@ -36,41 +36,44 @@ export async function eraseSubscriberData(
 ): Promise<EraseResult> {
 	const email = normalizeEmail(rawEmail);
 	if (!email) return { ok: false, error: 'invalid-email' };
-	const { db } = deps;
 
-	let subscriberDeleted = false;
-	let quizResultsUnlinked = 0;
-	const [subscriber] = await db.select().from(subscribers).where(eq(subscribers.email, email));
-	if (subscriber) {
-		const unlinked = await db
-			.update(quizResults)
-			.set({ subscriberId: null })
-			.where(eq(quizResults.subscriberId, subscriber.id))
-			.returning({ id: quizResults.id });
-		quizResultsUnlinked = unlinked.length;
-		await db.delete(subscribers).where(eq(subscribers.id, subscriber.id));
-		subscriberDeleted = true;
-	}
-
-	const anonymizedOrders = await db
-		.update(orders)
-		.set({ email: ANONYMIZED_EMAIL, shippingAddress: null })
-		.where(eq(orders.email, email))
-		.returning({ id: orders.id });
-
-	const anonymizedLog = await db
-		.update(emailLog)
-		.set({ toEmail: ANONYMIZED_EMAIL, data: {}, updatedAt: new Date() })
-		.where(eq(emailLog.toEmail, email))
-		.returning({ id: emailLog.id });
-
-	return {
-		ok: true,
-		value: {
-			subscriberDeleted,
-			quizResultsUnlinked,
-			ordersAnonymized: anonymizedOrders.length,
-			emailLogAnonymized: anonymizedLog.length
+	// One transaction: erasure is all-or-nothing, so a mid-way failure can't
+	// leave a half-erased account behind a CLI that reported the error.
+	return deps.db.transaction(async (tx): Promise<EraseResult> => {
+		let subscriberDeleted = false;
+		let quizResultsUnlinked = 0;
+		const [subscriber] = await tx.select().from(subscribers).where(eq(subscribers.email, email));
+		if (subscriber) {
+			const unlinked = await tx
+				.update(quizResults)
+				.set({ subscriberId: null })
+				.where(eq(quizResults.subscriberId, subscriber.id))
+				.returning({ id: quizResults.id });
+			quizResultsUnlinked = unlinked.length;
+			await tx.delete(subscribers).where(eq(subscribers.id, subscriber.id));
+			subscriberDeleted = true;
 		}
-	};
+
+		const anonymizedOrders = await tx
+			.update(orders)
+			.set({ email: ANONYMIZED_EMAIL, shippingAddress: null })
+			.where(eq(orders.email, email))
+			.returning({ id: orders.id });
+
+		const anonymizedLog = await tx
+			.update(emailLog)
+			.set({ toEmail: ANONYMIZED_EMAIL, data: {}, updatedAt: new Date() })
+			.where(eq(emailLog.toEmail, email))
+			.returning({ id: emailLog.id });
+
+		return {
+			ok: true,
+			value: {
+				subscriberDeleted,
+				quizResultsUnlinked,
+				ordersAnonymized: anonymizedOrders.length,
+				emailLogAnonymized: anonymizedLog.length
+			}
+		};
+	});
 }

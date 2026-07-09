@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { withDbFault } from '../../../../tests/helpers/db-fault.ts';
 import { createDb, type Db } from '../../db/client.ts';
 import { subscribers } from '../crm/schema.ts';
 import { emailLog } from '../email/schema.ts';
@@ -121,5 +122,42 @@ describe('eraseSubscriberData', () => {
 			ordersAnonymized: 0,
 			emailLogAnonymized: 0
 		});
+	});
+
+	it('is all-or-nothing: a failure mid-erasure leaves every row untouched (audit Theme B)', async () => {
+		const email = 'gdpr-atomic@example.com';
+		await db.insert(subscribers).values({
+			id: 'gdpr-atomic-sub',
+			email,
+			consents: { newsletter: { granted: true, at: '2026-07-01T00:00:00Z', source: 'test' } },
+			unsubscribeToken: 'gdpr-atomic-token'
+		});
+		await db.insert(emailLog).values({
+			id: 'gdpr-atomic-log',
+			idempotencyKey: 'gdpr-atomic-key',
+			toEmail: email,
+			template: 'newsletter-confirm',
+			subject: 'Confirmă',
+			data: { name: 'Atomic', confirmUrl: 'https://example.com/atomic' },
+			status: 'dryrun'
+		});
+
+		// The email-log anonymization is the LAST write — fail it and assert the
+		// earlier subscriber delete rolled back with it.
+		const { db: faultyDb, fault } = withDbFault(db, 'update', emailLog);
+		fault.arm();
+		await expect(eraseSubscriberData({ db: faultyDb }, email)).rejects.toThrow(
+			'injected update fault'
+		);
+		expect(await db.select().from(subscribers).where(eq(subscribers.email, email))).toHaveLength(1);
+
+		// The retry completes the erasure in full.
+		fault.disarm();
+		const retried = await eraseSubscriberData({ db: faultyDb }, email);
+		expect(retried.ok).toBe(true);
+		if (!retried.ok) return;
+		expect(retried.value.subscriberDeleted).toBe(true);
+		expect(retried.value.emailLogAnonymized).toBe(1);
+		expect(await db.select().from(subscribers).where(eq(subscribers.email, email))).toHaveLength(0);
 	});
 });
