@@ -35,13 +35,18 @@ async function bounded(run: () => Promise<unknown>, timeoutMs: number): Promise<
 	}
 }
 
+/**
+ * A `null` dependency means it could not even be constructed (missing env) —
+ * that is an immediate 'error', reported as 503 by the route, never a 500
+ * with a stack (audit resilience #9).
+ */
 export async function checkHealth(
-	deps: { db: Db; storage: Pick<Storage, 'headBucket'> },
+	deps: { db: Db | null; storage: Pick<Storage, 'headBucket'> | null },
 	timeoutMs = HEALTH_CHECK_TIMEOUT_MS
 ): Promise<HealthReport> {
 	const [db, storage] = await Promise.all([
-		bounded(() => deps.db.execute(sql`select 1`), timeoutMs),
-		bounded(() => deps.storage.headBucket(), timeoutMs)
+		deps.db ? bounded(() => deps.db!.execute(sql`select 1`), timeoutMs) : 'error',
+		deps.storage ? bounded(() => deps.storage!.headBucket(), timeoutMs) : 'error'
 	]);
 	return { healthy: db === 'ok' && storage === 'ok', checks: { db, storage } };
 }
