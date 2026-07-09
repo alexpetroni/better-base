@@ -1,15 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { APIError } from 'better-auth';
 import { getDb } from '$lib/db';
-import {
-	clearAttempts,
-	getAttemptState,
-	getAuth,
-	isRateLimited,
-	rateLimitKey,
-	recordFailure,
-	saveAttemptState
-} from '$lib/modules/auth';
+import { clearAttempts, getAuth, rateLimitKey, registerLoginAttempt } from '$lib/modules/auth';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -27,9 +19,11 @@ export const actions: Actions = {
 
 		const db = getDb();
 		const key = rateLimitKey(event.getClientAddress(), email);
-		const now = new Date();
-		const state = await getAttemptState(db, key);
-		if (isRateLimited(state, now)) return fail(429, { error: 'rate_limited' as const, email });
+		// Count the attempt atomically BEFORE checking the password: the cap
+		// decision comes from the post-increment count, so a concurrent burst
+		// cannot slip past it (a successful login clears the counter below).
+		const attempt = await registerLoginAttempt(db, key);
+		if (attempt.limited) return fail(429, { error: 'rate_limited' as const, email });
 
 		try {
 			await getAuth().api.signInEmail({
@@ -38,7 +32,6 @@ export const actions: Actions = {
 			});
 		} catch (e) {
 			if (e instanceof APIError) {
-				await saveAttemptState(db, key, recordFailure(state, now));
 				return fail(400, { error: 'invalid_credentials' as const, email });
 			}
 			throw e;

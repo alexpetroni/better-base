@@ -14,13 +14,8 @@ export {
 export {
 	LOGIN_RATE_LIMIT,
 	clearAttempts,
-	getAttemptState,
-	isRateLimited,
 	rateLimitKey,
-	recordFailure,
-	saveAttemptState,
-	type AttemptState,
-	type RateLimitConfig
+	registerLoginAttempt
 } from './rate-limit.ts';
 export { upsertStaffUser, type UpsertStaffUserInput, type UpsertStaffUserResult } from './staff.ts';
 export {

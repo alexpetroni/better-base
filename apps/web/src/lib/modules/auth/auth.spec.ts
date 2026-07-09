@@ -4,7 +4,13 @@ import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
 import { createAuth, type Auth } from './auth.ts';
-import { sessions, users } from './schema.ts';
+import {
+	LOGIN_RATE_LIMIT,
+	clearAttempts,
+	rateLimitKey,
+	registerLoginAttempt
+} from './rate-limit.ts';
+import { loginAttempts, sessions, users } from './schema.ts';
 import { upsertStaffUser } from './staff.ts';
 
 // Integration test against the compose Postgres (TEST_DATABASE_URL), reset and
@@ -113,5 +119,38 @@ describe('sign-in', () => {
 				body: { email: 'new@example.com', password: PASSWORD, name: 'New' }
 			})
 		).rejects.toMatchObject({ status: 'BAD_REQUEST' });
+	});
+});
+
+describe('login rate limiting (atomic, regression for audit security H1)', () => {
+	// Fixed, window-aligned time: deterministic regardless of when the suite runs.
+	const NOW = new Date('2026-03-02T10:00:00Z');
+
+	it('never loses increments under parallel attempts and blocks past the cap', async () => {
+		const key = rateLimitKey('203.0.113.50', 'race@example.com');
+		const results = await Promise.all(
+			Array.from({ length: 20 }, () => registerLoginAttempt(db, key, NOW))
+		);
+
+		// Every attempt saw a distinct post-increment count: 1..20, no lost
+		// writes. The pre-fix read-modify-write code collapses these to ~1.
+		const counts = results.map((r) => r.count).sort((a, b) => a - b);
+		expect(counts).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+		expect(results.filter((r) => !r.limited)).toHaveLength(LOGIN_RATE_LIMIT.max);
+
+		const [row] = await db.select().from(loginAttempts).where(eq(loginAttempts.key, key));
+		expect(row.count).toBe(20);
+
+		// The next attempt is still refused.
+		const next = await registerLoginAttempt(db, key, NOW);
+		expect(next.limited).toBe(true);
+	});
+
+	it('a successful login clears the counter', async () => {
+		const key = rateLimitKey('203.0.113.51', 'clear@example.com');
+		for (let i = 0; i < LOGIN_RATE_LIMIT.max + 1; i++) await registerLoginAttempt(db, key, NOW);
+		expect((await registerLoginAttempt(db, key, NOW)).limited).toBe(true);
+		await clearAttempts(db, key);
+		expect((await registerLoginAttempt(db, key, NOW)).limited).toBe(false);
 	});
 });
