@@ -3,7 +3,7 @@ import { config } from 'dotenv';
 import path from 'node:path';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
-import { seedDemoArticles, seedPillars } from '../src/lib/db/seed.ts';
+import { seedDemoArticles, seedDemoQuiz, seedPillars } from '../src/lib/db/seed.ts';
 
 config({ path: path.resolve(import.meta.dirname, '../../../.env') });
 
@@ -16,4 +16,6 @@ const count = await seedPillars(db, site.pillars);
 console.log(`Seeded ${count} pillar(s) for site "${site.id}"`);
 const articleCount = await seedDemoArticles(db);
 console.log(`Seeded ${articleCount} demo article(s)`);
+const quizSlug = await seedDemoQuiz(db);
+console.log(`Seeded demo quiz "/quiz/${quizSlug}"`);
 await db.$client.end();

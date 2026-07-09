@@ -3,6 +3,7 @@
 	import type { ResolvedPathname } from '$app/types';
 	import Seo from '$lib/components/Seo.svelte';
 	import { m } from '$lib/paraglide/messages';
+	import { NewsletterSignup } from '$lib/modules/crm';
 	import { Img } from '$lib/modules/media';
 
 	let { data } = $props();
@@ -80,3 +81,7 @@
 		</nav>
 	{/if}
 {/if}
+
+<div class="mt-12 rounded-xl border border-(--color-brand-soft) bg-(--color-brand-soft)/20 p-6">
+	<NewsletterSignup source="blog" />
+</div>

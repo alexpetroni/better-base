@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Pathname } from '$app/types';
 	import { resolve } from '$app/paths';
+	import { NewsletterSignup } from '$lib/modules/crm';
 
 	let { data, children } = $props();
 </script>
@@ -23,3 +24,10 @@
 <main class="mx-auto max-w-4xl px-4 py-8">
 	{@render children()}
 </main>
+
+<footer class="mt-12 border-t border-(--color-brand-soft) bg-(--color-brand-soft)/20">
+	<div class="mx-auto max-w-4xl px-4 py-10">
+		<NewsletterSignup source="footer" />
+		<p class="mt-8 text-sm text-(--color-ink)/60">© {data.site.name}</p>
+	</div>
+</footer>

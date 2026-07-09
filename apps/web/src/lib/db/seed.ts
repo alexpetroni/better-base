@@ -1,6 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { PILLARS_BY_SLUG } from '../config/pillars.ts';
 import { articlePillars, articles } from '../modules/blog/schema.ts';
+import { quizzes } from '../modules/quiz/schema.ts';
+import { SLEEP_QUIZ_SEED } from '../modules/quiz/seed-quiz.ts';
+import { validateForPublish } from '../modules/quiz/validate.ts';
 import type { Db } from './client.ts';
 import { pillars } from './schema/core.ts';
 
@@ -62,6 +65,40 @@ const DEMO_ARTICLES = [
 		publishedAt: new Date('2026-06-20T08:00:00Z')
 	}
 ];
+
+/**
+ * The demo-able sleep screening quiz, published and tagged `somn` (active on
+ * both sites). Idempotent: fixed id + upsert-by-slug.
+ */
+export async function seedDemoQuiz(db: Db): Promise<string> {
+	const errors = validateForPublish(SLEEP_QUIZ_SEED.formSchema, SLEEP_QUIZ_SEED.scoring);
+	if (errors.length) throw new Error(`Seed quiz is not publishable: ${errors.join(' ')}`);
+	const [pillar] = await db
+		.select()
+		.from(pillars)
+		.where(eq(pillars.slug, SLEEP_QUIZ_SEED.pillarSlug));
+	if (!pillar) {
+		throw new Error(
+			`Cannot seed the demo quiz: pillar "${SLEEP_QUIZ_SEED.pillarSlug}" is not seeded`
+		);
+	}
+	const { id, slug, title, introMd, resultTemplateKey, formSchema, scoring } = SLEEP_QUIZ_SEED;
+	const values = {
+		slug,
+		title,
+		introMd,
+		resultTemplateKey,
+		formSchema,
+		scoring,
+		pillarId: pillar.id,
+		status: 'published' as const
+	};
+	await db
+		.insert(quizzes)
+		.values({ id, ...values })
+		.onConflictDoUpdate({ target: quizzes.slug, set: { ...values, updatedAt: new Date() } });
+	return SLEEP_QUIZ_SEED.slug;
+}
 
 export async function seedDemoArticles(db: Db): Promise<number> {
 	const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
