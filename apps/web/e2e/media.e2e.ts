@@ -1,17 +1,10 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import path from 'node:path';
 import { E2E_ADMIN } from './env.ts';
+import { login } from './helpers.ts';
 
 const FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/test-image.png');
 const FIXTURE_NAME = 'test-image.png';
-
-async function login(page: Page, credentials: { email: string; password: string }) {
-	await page.goto('/admin/login');
-	await page.locator('input[name="email"]').fill(credentials.email);
-	await page.locator('input[name="password"]').fill(credentials.password);
-	await page.locator('button[type="submit"]').click();
-	await expect(page).toHaveURL(/\/admin$/);
-}
 
 test('admin uploads an image, sees its thumbnail, edits alt text, deletes it', async ({ page }) => {
 	await login(page, E2E_ADMIN);

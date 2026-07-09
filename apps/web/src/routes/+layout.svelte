@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { locales, localizeHref } from '$lib/paraglide/runtime';
@@ -6,6 +7,12 @@
 	import favicon from '$lib/assets/favicon.svg';
 
 	let { data, children } = $props();
+
+	// E2E hydration marker: tests must not type into inputs with a server-echoed
+	// `value` before hydration, because hydration resets them (see e2e/helpers.ts).
+	onMount(() => {
+		document.documentElement.dataset.hydrated = 'true';
+	});
 
 	const themeStyle = $derived(
 		Object.entries(data.site.theme)

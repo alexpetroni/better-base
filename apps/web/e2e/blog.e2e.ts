@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 import { E2E_EDITOR } from './env.ts';
+import { login } from './helpers.ts';
 
 // Full blog flow, on BOTH sites: an editor uploads a cover to the media
 // library, writes + publishes an article tagged `somn`, and the public site
@@ -17,14 +18,6 @@ const TITLE = 'Articol de test E2E';
 const SLUG = 'articol-de-test-e2e';
 const SEO_TITLE = 'Titlu SEO E2E';
 const SEO_DESCRIPTION = 'Descriere SEO pentru articolul de test.';
-
-async function login(page: Page, credentials: { email: string; password: string }) {
-	await page.goto('/admin/login');
-	await page.locator('input[name="email"]').fill(credentials.email);
-	await page.locator('input[name="password"]').fill(credentials.password);
-	await page.locator('button[type="submit"]').click();
-	await expect(page).toHaveURL(/\/admin$/);
-}
 
 async function expectRenderedImage(page: Page, scope: ReturnType<Page['locator']>) {
 	const img = scope.locator('img').first();

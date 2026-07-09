@@ -4,6 +4,7 @@ import { createDb } from '../src/lib/db/client.ts';
 import { emailLog } from '../src/lib/modules/email/schema.ts';
 import { subscribers } from '../src/lib/modules/crm/schema.ts';
 import { E2E_ADMIN, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
+import { login } from './helpers.ts';
 
 // The full lead funnel, on BOTH sites, against the seeded sleep quiz
 // (`somn` is active on sleep AND life): a visitor completes the quiz, sees
@@ -12,14 +13,6 @@ import { E2E_ADMIN, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
 // link revokes → the admin sees the subscriber and the quiz result.
 
 const QUIZ_SLUG = 'evaluare-somn';
-
-async function login(page: Page, credentials: { email: string; password: string }) {
-	await page.goto('/admin/login');
-	await page.locator('input[name="email"]').fill(credentials.email);
-	await page.locator('input[name="password"]').fill(credentials.password);
-	await page.locator('button[type="submit"]').click();
-	await expect(page).toHaveURL(/\/admin$/);
-}
 
 /** Pick an option by question id + option value (stable against copy edits). */
 async function pick(page: Page, questionId: string, value: string) {

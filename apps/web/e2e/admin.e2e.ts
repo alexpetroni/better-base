@@ -1,12 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { E2E_ADMIN, E2E_EDITOR } from './env.ts';
-
-async function login(page: Page, credentials: { email: string; password: string }) {
-	await page.goto('/admin/login');
-	await page.locator('input[name="email"]').fill(credentials.email);
-	await page.locator('input[name="password"]').fill(credentials.password);
-	await page.locator('button[type="submit"]').click();
-}
+import { login, submitLogin } from './helpers.ts';
 
 test('anonymous visitors are redirected from /admin to the login page', async ({ page }) => {
 	await page.goto('/admin');
@@ -19,11 +13,11 @@ test('wrong password stays out; the 6th attempt is rate-limited', async ({ page 
 	// Dedicated email: the counter is keyed by IP+email, so other tests are unaffected.
 	const target = { email: 'e2e-ratelimit@example.com', password: 'definitely-wrong-1' };
 	for (let attempt = 1; attempt <= 5; attempt++) {
-		await login(page, target);
+		await submitLogin(page, target);
 		await expect(page.getByTestId('login-error'), `attempt ${attempt}`).toBeVisible();
 		await expect(page).toHaveURL(/\/admin\/login$/);
 	}
-	await login(page, target);
+	await submitLogin(page, target);
 	await expect(page.getByTestId('login-rate-limited')).toBeVisible();
 	await expect(page).toHaveURL(/\/admin\/login$/);
 });
