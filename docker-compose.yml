@@ -1,7 +1,8 @@
 # Local development services: Postgres, MinIO (S3-compatible storage) and
 # imgproxy (on-the-fly image transforms, signed URLs, reads from MinIO).
-# All dev credentials/keys below are defaults for local use only; every one of
-# them can be overridden from the environment / root .env.
+# Postgres/MinIO dev credentials have local-only defaults overridable from the
+# environment / root .env. The imgproxy signing key/salt deliberately have NO
+# defaults — set IMGPROXY_KEY/IMGPROXY_SALT in .env (see .env.example).
 services:
   db:
     image: postgres:16
@@ -44,9 +45,22 @@ services:
     image: ghcr.io/imgproxy/imgproxy:v3
     restart: unless-stopped
     environment:
-      # Signature is mandatory: without valid key/salt-signed URLs imgproxy 403s.
-      IMGPROXY_KEY: ${IMGPROXY_KEY:-bfd9adf6c395743b3c86b59c5ba7c418986de2ce4f2d6828812a8bf02ae838fb}
-      IMGPROXY_SALT: ${IMGPROXY_SALT:-04efffdcb59e1b8953506cfd05e0f30de80767ef4c5710ecf514f49a6352fec5}
+      # Signature is mandatory: without valid key/salt-signed URLs imgproxy
+      # 403s. NO fallback values on purpose (audit H3): a committed default
+      # pair would make signing forgeable on any deploy that inherits it, and
+      # an EMPTY pair would disable signing entirely. Compose refuses to start
+      # until .env provides both — generate with `openssl rand -hex 32`.
+      IMGPROXY_KEY: ${IMGPROXY_KEY:?generate with `openssl rand -hex 32` and put in .env}
+      IMGPROXY_SALT: ${IMGPROXY_SALT:?generate with `openssl rand -hex 32` and put in .env}
+      # SVG sources pass through unrasterized, so strip scripts/event handlers
+      # before serving (audit M1 — stored XSS via a crafted SVG upload). The
+      # app additionally serves SVGs with Content-Disposition: attachment.
+      IMGPROXY_SANITIZE_SVG: 'true'
+      # Source caps (audit L7): refuse sources bigger than the app's upload
+      # limit (15 MiB, MAX_UPLOAD_BYTES) or denser than 50 megapixels, so a
+      # decompression-bomb object can't pin the transformer.
+      IMGPROXY_MAX_SRC_FILE_SIZE: '15728640'
+      IMGPROXY_MAX_SRC_RESOLUTION: '50'
       # Source images come from the s3:// bucket; inside the compose network
       # MinIO is reached by service name, not the host-published port.
       IMGPROXY_USE_S3: 'true'
