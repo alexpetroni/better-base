@@ -76,7 +76,11 @@
 					{m.quiz_email_already()}
 				</p>
 			{/if}
-			{#if form?.error}
+			{#if form?.error === 'rate-limited'}
+				<p data-testid="result-email-error" class="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">
+					{m.quiz_email_rate_limited()}
+				</p>
+			{:else if form?.error}
 				<p data-testid="result-email-error" class="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">
 					{m.quiz_email_invalid()}
 				</p>

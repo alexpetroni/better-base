@@ -1,6 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { claimQuizResult, getQuizFunnelDeps, getResultWithQuiz } from '$lib/modules/quiz/server';
+import { consumePublicEmailBudget } from '$lib/server/rate-limit';
 import { getSite } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -19,8 +20,13 @@ export const load: PageServerLoad = async ({ params }) => {
 export const actions: Actions = {
 	// The email step is OPTIONAL — the result above stays visible without it.
 	// Consent checkboxes arrive only when explicitly ticked (GDPR default-off).
-	email: async ({ params, request }) => {
+	email: async ({ params, request, getClientAddress }) => {
 		const form = await request.formData();
+		// This action emails a visitor-supplied address: throttle per IP and
+		// globally before doing anything (a CAPTCHA check would slot in here —
+		// see $lib/server/rate-limit/public-email.ts).
+		const budget = await consumePublicEmailBudget(getDb(), 'quiz-email', getClientAddress());
+		if (budget.limited) return fail(429, { error: 'rate-limited' as const });
 		const outcome = await claimQuizResult(getQuizFunnelDeps(), {
 			resultId: params.resultId,
 			email: String(form.get('email') ?? ''),

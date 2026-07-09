@@ -38,6 +38,7 @@ export default async function globalSetup() {
 			await upsertStaffUser(auth, { ...E2E_ADMIN, role: 'admin' });
 			await upsertStaffUser(auth, { ...E2E_EDITOR, role: 'editor' });
 			await db.execute(sql`delete from login_attempts`);
+			await db.execute(sql`delete from rate_limits`);
 			// Content is created by the tests themselves; leftovers from a failed
 			// earlier run would break slug and filename assumptions. Articles and
 			// shop rows go first — they reference media (FKs + delete-refusal

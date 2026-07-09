@@ -35,6 +35,10 @@
 			<p data-testid="newsletter-error" class="mb-4 rounded bg-red-50 p-3 text-sm text-red-700">
 				{m.newsletter_consent_required()}
 			</p>
+		{:else if form?.error === 'rate_limited'}
+			<p data-testid="newsletter-error" class="mb-4 rounded bg-red-50 p-3 text-sm text-red-700">
+				{m.newsletter_rate_limited()}
+			</p>
 		{/if}
 		<NewsletterSignup source="newsletter-page" />
 	{/if}
