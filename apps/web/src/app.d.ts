@@ -4,7 +4,11 @@ import type { StaffRole } from '$lib/modules/auth';
 
 declare global {
 	namespace App {
-		// interface Error {}
+		interface Error {
+			message: string;
+			/** Correlates the user-visible error with the structured server log line. */
+			errorId?: string;
+		}
 		interface Locals {
 			/** Authenticated staff user, resolved by hooks.server.ts on /admin requests. */
 			user: {

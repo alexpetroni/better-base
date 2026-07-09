@@ -2,6 +2,7 @@ import {
 	CreateBucketCommand,
 	DeleteObjectCommand,
 	GetObjectCommand,
+	HeadBucketCommand,
 	HeadObjectCommand,
 	PutObjectCommand,
 	S3Client
@@ -51,6 +52,15 @@ export function createStorage(cfg: StorageConfig) {
 				}
 				throw err;
 			}
+		},
+
+		/**
+		 * Reachability + bucket-existence probe (health checks). Throws when the
+		 * endpoint is down or the bucket is missing — a HEAD on an object cannot
+		 * tell those apart from a missing key.
+		 */
+		async headBucket(): Promise<void> {
+			await client.send(new HeadBucketCommand({ Bucket: bucket }));
 		},
 
 		/**

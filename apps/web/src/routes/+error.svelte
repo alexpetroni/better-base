@@ -15,4 +15,9 @@
 	</p>
 	<a href={resolve('/')} class="font-medium text-(--color-brand) underline">{m.error_back_home()}</a
 	>
+	{#if page.error?.errorId}
+		<p class="mt-8 text-xs text-(--color-ink)/50" data-testid="error-id">
+			ID: {page.error.errorId}
+		</p>
+	{/if}
 </div>

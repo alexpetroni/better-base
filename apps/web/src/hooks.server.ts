@@ -1,8 +1,9 @@
-import { error, redirect, type Handle } from '@sveltejs/kit';
+import { error, redirect, type Handle, type HandleServerError } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { deLocalizeUrl, getTextDirection } from '$lib/paraglide/runtime';
 import { paraglideMiddleware } from '$lib/paraglide/server';
 import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
+import { formatServerError } from '$lib/server/log';
 // Side effect: registers the blog's and shop's media reference checks before
 // any request can delete media (they live in the server barrels' module init).
 import '$lib/modules/blog/server';
@@ -48,3 +49,24 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 };
 
 export const handle: Handle = sequence(handleParaglide, handleAdminGuard);
+
+/**
+ * Every unexpected server error is logged as one structured JSON line and
+ * surfaced to the client only as a generic message plus an errorId that can
+ * be grepped in the logs. Expected errors (error(404), redirects) never
+ * reach this hook.
+ */
+export const handleError: HandleServerError = ({ error: err, event, status, message }) => {
+	const errorId = crypto.randomUUID();
+	console.error(
+		formatServerError({
+			error: err,
+			errorId,
+			status,
+			method: event.request.method,
+			path: event.url.pathname,
+			message
+		})
+	);
+	return { message, errorId };
+};
