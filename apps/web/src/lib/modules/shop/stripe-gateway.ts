@@ -1,13 +1,35 @@
 import Stripe from 'stripe';
 import type { CheckoutSessionView, StripeGateway } from './gateway.ts';
 
+/** Default per-request cap (Stripe's own default is 80s); override via STRIPE_TIMEOUT_MS. */
+export const STRIPE_TIMEOUT_MS_DEFAULT = 20_000;
+/** Bounded retries; stripe-node attaches idempotency keys to retried requests. */
+export const STRIPE_MAX_NETWORK_RETRIES = 2;
+
+export interface StripeGatewayOptions {
+	timeoutMs?: number;
+	maxNetworkRetries?: number;
+	/** Test seam: route Stripe's HTTP through this fetch. Never set in app code. */
+	fetchFn?: typeof fetch;
+}
+
 /**
  * The real Stripe-backed gateway. Framework-free (the secret key is passed
  * in); only ever constructed when STRIPE_SECRET_KEY is set — tests and dev
  * default to the mock. Test-mode keys (`sk_test_…`) are expected outside prod.
+ *
+ * Every call is bounded by `timeout` + `maxNetworkRetries` (audit Theme C):
+ * a hung Stripe socket must reject as a handled error, never pin the request.
  */
-export function createStripeGateway(secretKey: string): StripeGateway {
-	const stripe = new Stripe(secretKey);
+export function createStripeGateway(
+	secretKey: string,
+	options: StripeGatewayOptions = {}
+): StripeGateway {
+	const stripe = new Stripe(secretKey, {
+		timeout: options.timeoutMs ?? STRIPE_TIMEOUT_MS_DEFAULT,
+		maxNetworkRetries: options.maxNetworkRetries ?? STRIPE_MAX_NETWORK_RETRIES,
+		...(options.fetchFn ? { httpClient: Stripe.createFetchHttpClient(options.fetchFn) } : {})
+	});
 
 	return {
 		async createProduct(input) {

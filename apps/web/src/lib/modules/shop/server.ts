@@ -3,10 +3,11 @@
 // registration below runs before any admin request can delete media.
 import { env } from '$env/dynamic/private';
 import { registerMediaReferenceCheck } from '$lib/modules/media/server';
+import { positiveIntEnv } from '$lib/server/env';
 import type { StripeGateway } from './gateway.ts';
 import { createMockStripeGateway } from './mock-gateway.ts';
 import { productsMediaReferenceCheck } from './media-ref.ts';
-import { createStripeGateway } from './stripe-gateway.ts';
+import { createStripeGateway, STRIPE_TIMEOUT_MS_DEFAULT } from './stripe-gateway.ts';
 
 export {
 	buildCartMetadata,
@@ -51,7 +52,12 @@ export {
 	type ShopError,
 	type ShopResult
 } from './service.ts';
-export { createStripeGateway } from './stripe-gateway.ts';
+export {
+	createStripeGateway,
+	STRIPE_MAX_NETWORK_RETRIES,
+	STRIPE_TIMEOUT_MS_DEFAULT,
+	type StripeGatewayOptions
+} from './stripe-gateway.ts';
 export { syncProductToStripe, type SyncDeps, type SyncOutcome } from './sync.ts';
 export {
 	decrementedStock,
@@ -73,7 +79,9 @@ let gatewayInstance: StripeGateway | undefined;
  */
 export function getStripeGateway(): StripeGateway {
 	gatewayInstance ??= env.STRIPE_SECRET_KEY
-		? createStripeGateway(env.STRIPE_SECRET_KEY)
+		? createStripeGateway(env.STRIPE_SECRET_KEY, {
+				timeoutMs: positiveIntEnv(env.STRIPE_TIMEOUT_MS, STRIPE_TIMEOUT_MS_DEFAULT)
+			})
 		: createMockStripeGateway();
 	return gatewayInstance;
 }
