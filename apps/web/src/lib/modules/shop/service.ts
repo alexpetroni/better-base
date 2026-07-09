@@ -45,19 +45,6 @@ export function isOutOfStock(product: Pick<ProductRow, 'stock'>): boolean {
 	return product.stock !== null && product.stock <= 0;
 }
 
-/** May this product be bought on a site with the given active pillars? */
-export function isPurchasable(
-	product: Pick<ProductRow, 'status' | 'stock'>,
-	productPillarSlugs: string[],
-	sitePillarSlugs: string[]
-): boolean {
-	return (
-		product.status === 'active' &&
-		!isOutOfStock(product) &&
-		productPillarSlugs.some((slug) => sitePillarSlugs.includes(slug))
-	);
-}
-
 const PRODUCT_SLUGS = { table: products, id: products.id, slug: products.slug };
 
 const PRODUCT_PILLARS: PillarJoin<typeof productPillars> = {

@@ -9,7 +9,6 @@ import { createStripeGateway, STRIPE_TIMEOUT_MS_DEFAULT } from './stripe-gateway
 
 export {
 	buildCartMetadata,
-	CART_METADATA_KEY,
 	createCheckoutFromCart,
 	loadCartDetails,
 	parseCartMetadata,
@@ -27,18 +26,13 @@ export type {
 	StripeGateway
 } from './gateway.ts';
 export { productsMediaReferenceCheck } from './media-ref.ts';
-export {
-	createMockStripeGateway,
-	MOCK_CHECKOUT_URL_BASE,
-	type MockStripeGateway
-} from './mock-gateway.ts';
+export { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
 export { orderItems, orders, productPillars, products } from './schema.ts';
 export {
 	createProduct,
 	getProduct,
 	getProductBySlug,
 	isOutOfStock,
-	isPurchasable,
 	listProducts,
 	listVisibleProducts,
 	updateProduct,
@@ -49,12 +43,7 @@ export {
 	type ShopError,
 	type ShopResult
 } from './service.ts';
-export {
-	createStripeGateway,
-	STRIPE_MAX_NETWORK_RETRIES,
-	STRIPE_TIMEOUT_MS_DEFAULT,
-	type StripeGatewayOptions
-} from './stripe-gateway.ts';
+export { createStripeGateway, type StripeGatewayOptions } from './stripe-gateway.ts';
 export { syncProductToStripe, type SyncDeps, type SyncOutcome } from './sync.ts';
 export {
 	getOrderBySessionId,

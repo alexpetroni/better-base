@@ -3,7 +3,6 @@
 export { default as NewsletterSignup } from './NewsletterSignup.svelte';
 export {
 	applyConsents,
-	CONSENT_KEYS,
 	hasConsent,
 	revokeAllConsents,
 	type ConsentChanges,

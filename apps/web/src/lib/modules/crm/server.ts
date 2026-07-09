@@ -4,11 +4,9 @@ import { tokenSecretFrom } from '$lib/server/secrets';
 
 export { subscribers, type SubscriberRow } from './schema.ts';
 export {
-	CONFIRM_TOKEN_TTL_SECONDS,
 	confirmSubscriber,
 	getSubscriber,
 	listSubscribers,
-	NEWSLETTER_CONFIRM_PURPOSE,
 	requestNewsletterSignup,
 	sendNewsletterConfirmEmail,
 	subscribersCsv,

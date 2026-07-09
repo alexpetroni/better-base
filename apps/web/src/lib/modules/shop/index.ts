@@ -4,8 +4,6 @@
 export {
 	addToCart,
 	CART_COOKIE,
-	CART_MAX_LINES,
-	CART_MAX_QTY,
 	cartCount,
 	cartTotalCents,
 	parseCartCookie,

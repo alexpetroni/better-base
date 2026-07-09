@@ -4,7 +4,6 @@ export { default as CookieConsent } from './CookieConsent.svelte';
 export {
 	analyticsAllowed,
 	CONSENT_COOKIE,
-	CONSENT_MAX_AGE_SECONDS,
 	consentCookieString,
 	parseCookieConsent,
 	type CookieConsentValue

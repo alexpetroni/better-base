@@ -10,9 +10,6 @@ import type { ChatProvider } from './provider.ts';
 import { selectChatProvider } from './select.ts';
 
 export {
-	ANTHROPIC_CHAT_MODEL,
-	ANTHROPIC_MAX_RETRIES,
-	ANTHROPIC_TIMEOUT_MS_DEFAULT,
 	createAnthropicChatProvider,
 	type AnthropicProviderOptions
 } from './anthropic-provider.ts';
@@ -30,8 +27,6 @@ export {
 } from './schema.ts';
 export { selectChatProvider, type ChatProviderSelection } from './select.ts';
 export {
-	CHAT_MAX_TOKENS,
-	CHAT_RETENTION_DAYS,
 	handleChatMessage,
 	pruneChatSessions,
 	type ChatDeps,
@@ -39,7 +34,6 @@ export {
 	type ChatOutcome
 } from './service.ts';
 export { signSessionToken, verifySessionToken } from './token.ts';
-export { HISTORY_LIMIT, MAX_MESSAGE_CHARS } from './validate.ts';
 
 export const CHAT_SESSION_COOKIE = 'chat_session';
 

@@ -6,7 +6,6 @@
 	"error_not_found": "Pagina căutată nu există.",
 	"error_generic": "A apărut o eroare. Încearcă din nou.",
 	"error_back_home": "Înapoi la prima pagină",
-	"dev_form_heading": "Test de integrare formcomp",
 	"admin_login_title": "Autentificare",
 	"admin_login_email": "Email",
 	"admin_login_password": "Parolă",

@@ -13,14 +13,6 @@ import type { MediaRow } from './schema.ts';
 import { createStorage, type Storage } from './storage.ts';
 
 export { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
-export {
-	buildImgUrl,
-	buildSrcset,
-	createImgUrl,
-	imageSources,
-	imgproxyPath,
-	signImgproxyPath
-} from './imgproxy.ts';
 export { media } from './schema.ts';
 export {
 	confirmUpload,
@@ -37,15 +29,9 @@ export {
 	type Result,
 	type UploadTicket
 } from './service.ts';
-export {
-	createStorage,
-	PRESIGN_EXPIRES_SECONDS,
-	type Storage,
-	type StorageConfig
-} from './storage.ts';
+export { createStorage, type Storage, type StorageConfig } from './storage.ts';
 export {
 	signUploadTicket,
-	UPLOAD_TICKET_TTL_SECONDS,
 	verifyUploadTicket,
 	type UploadTicketVerification
 } from './upload-ticket.ts';

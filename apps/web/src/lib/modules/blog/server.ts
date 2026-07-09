@@ -14,7 +14,6 @@ export { ARTICLE_IMAGE_WIDTH, renderArticleHtml } from './render.ts';
 export { articlePillars, articles } from './schema.ts';
 export {
 	createArticle,
-	DEFAULT_PAGE_SIZE,
 	getArticle,
 	getBySlug,
 	listArticles,

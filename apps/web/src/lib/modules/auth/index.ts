@@ -4,19 +4,13 @@
 export { createAuth, MIN_PASSWORD_LENGTH, type Auth, type CreateAuthOptions } from './auth.ts';
 export { getAuth } from './server.ts';
 export {
-	ADMIN_ONLY_SECTIONS,
 	canAccessSection,
 	guardAdminPath,
 	isStaffRole,
 	type AdminGuardDecision,
 	type StaffRole
 } from './guards.ts';
-export {
-	LOGIN_RATE_LIMIT,
-	clearAttempts,
-	rateLimitKey,
-	registerLoginAttempt
-} from './rate-limit.ts';
+export { clearAttempts, rateLimitKey, registerLoginAttempt } from './rate-limit.ts';
 export { upsertStaffUser, type UpsertStaffUserInput, type UpsertStaffUserResult } from './staff.ts';
 export {
 	users,

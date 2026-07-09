@@ -62,11 +62,6 @@ export function buildImgUrl(cfg: ImgproxyConfig, key: string, opts: ImgOptions =
 	return `${cfg.baseUrl.replace(/\/$/, '')}/${signImgproxyPath(path, cfg.key, cfg.salt)}${path}`;
 }
 
-/** `imgUrl(key, opts)` bound to a config — the shape services and loads use. */
-export function createImgUrl(cfg: ImgproxyConfig) {
-	return (key: string, opts: ImgOptions = {}) => buildImgUrl(cfg, key, opts);
-}
-
 /** 1x/2x srcset for one format, e.g. `https://…/… 1x, https://…/… 2x`. */
 export function buildSrcset(cfg: ImgproxyConfig, key: string, opts: ImgOptions = {}): string {
 	return [1, 2].map((dpr) => `${buildImgUrl(cfg, key, { ...opts, dpr })} ${dpr}x`).join(', ');
