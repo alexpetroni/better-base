@@ -43,6 +43,12 @@ export {
 	type Storage,
 	type StorageConfig
 } from './storage.ts';
+export {
+	signUploadTicket,
+	UPLOAD_TICKET_TTL_SECONDS,
+	verifyUploadTicket,
+	type UploadTicketVerification
+} from './upload-ticket.ts';
 
 /** Env-bound singletons for the running app (scripts/tests pass config explicitly). */
 

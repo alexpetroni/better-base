@@ -36,7 +36,7 @@
 			body: JSON.stringify({ op: 'presign', filename: file.name, mime: file.type, size: file.size })
 		});
 		if (!presignRes.ok) return reasonMessage((await presignRes.json()).error ?? '');
-		const { key, uploadUrl } = await presignRes.json();
+		const { key, uploadUrl, ticket } = await presignRes.json();
 
 		const putRes = await fetch(uploadUrl, {
 			method: 'PUT',
@@ -48,7 +48,7 @@
 		const confirmRes = await fetch('/admin/media/upload', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ op: 'confirm', key, filename: file.name })
+			body: JSON.stringify({ op: 'confirm', key, ticket, filename: file.name })
 		});
 		if (!confirmRes.ok) return reasonMessage((await confirmRes.json()).error ?? '');
 		return null;

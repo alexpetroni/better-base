@@ -1,6 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { getQuizBySlug, sanitizeSubmittedAnswers, submitQuiz } from '$lib/modules/quiz/server';
+import { readJsonBounded } from '$lib/server/body';
 import { getSite } from '$lib/server/site';
 import type { RequestHandler } from './$types';
 
@@ -16,14 +17,14 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	const found = await getQuizBySlug({ db }, params.slug);
 	if (!found || !found.pillarSlug || !getSite().pillars.includes(found.pillarSlug)) error(404);
 
-	const contentLength = Number(request.headers.get('content-length') ?? 0);
-	if (contentLength > MAX_BODY_BYTES) error(413);
-	let body: unknown;
-	try {
-		body = await request.json();
-	} catch {
+	// Byte-bounded read (audit L1): the cap holds even when Content-Length is
+	// absent or lies — the stream is abandoned as soon as it crosses the cap.
+	const parsed = await readJsonBounded(request, MAX_BODY_BYTES);
+	if (!parsed.ok) {
+		if (parsed.reason === 'too-large') error(413);
 		error(400, 'Invalid JSON');
 	}
+	const body = parsed.value;
 
 	const rawAnswers = (body as { answers?: unknown } | null)?.answers;
 	const answers = sanitizeSubmittedAnswers(rawAnswers, found.quiz.formSchema);

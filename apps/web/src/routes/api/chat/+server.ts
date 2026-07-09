@@ -9,10 +9,14 @@ import {
 	getChatSecret,
 	handleChatMessage
 } from '$lib/modules/chat/server';
+import { readJsonBounded } from '$lib/server/body';
 import { getSite } from '$lib/server/site';
 import type { RequestHandler } from './$types';
 
 const SESSION_COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // matches the 30-day retention
+
+// Generous for a ≤2000-char message even fully \uXXXX-escaped, tiny for abuse.
+const CHAT_MAX_BODY_BYTES = 32 * 1024;
 
 /**
  * Advice chat endpoint: accepts `{ message }`, streams the assistant reply as
@@ -21,12 +25,14 @@ const SESSION_COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // matches the 30-day retentio
  * ro message the widget renders verbatim.
  */
 export const POST: RequestHandler = async ({ request, cookies, getClientAddress }) => {
-	let body: unknown;
-	try {
-		body = await request.json();
-	} catch {
-		return json({ error: CHAT_ERRORS.invalid }, { status: 400 });
+	const parsed = await readJsonBounded(request, CHAT_MAX_BODY_BYTES);
+	if (!parsed.ok) {
+		return json(
+			{ error: CHAT_ERRORS.invalid },
+			{ status: parsed.reason === 'too-large' ? 413 : 400 }
+		);
 	}
+	const body = parsed.value;
 
 	const site = getSite();
 	const persona = resolvePersona(site.chatPersonaKey);

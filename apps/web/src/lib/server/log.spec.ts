@@ -31,4 +31,18 @@ describe('formatServerError', () => {
 		expect(parsed.message).toBe('Internal Error');
 		expect(parsed.stack).toBeUndefined();
 	});
+
+	it('redacts capability tokens from logged paths (audit L2)', () => {
+		const token = 'eyJzdWIiOiJzLTEifQ.c2lnbmF0dXJl';
+		for (const path of [`/newsletter/confirm/${token}`, `/unsubscribe/${token}`]) {
+			const line = formatServerError({ ...base, path, error: new Error('boom') });
+			expect(line).not.toContain(token);
+			expect(JSON.parse(line).path).toMatch(/\[redacted\]$/);
+		}
+		// Non-token paths stay verbatim — greppability matters.
+		const parsed = JSON.parse(
+			formatServerError({ ...base, path: '/blog/un-articol', error: new Error('x') })
+		);
+		expect(parsed.path).toBe('/blog/un-articol');
+	});
 });
