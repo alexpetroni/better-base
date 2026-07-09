@@ -18,7 +18,6 @@ export { articlePillars, articles } from './schema.ts';
 export {
 	createArticle,
 	DEFAULT_PAGE_SIZE,
-	ensureUniqueSlug,
 	getArticle,
 	getBySlug,
 	listArticles,

@@ -37,7 +37,6 @@ export {
 export { orderItems, orders, productPillars, products } from './schema.ts';
 export {
 	createProduct,
-	ensureUniqueProductSlug,
 	getProduct,
 	getProductBySlug,
 	isOutOfStock,

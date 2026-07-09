@@ -1,10 +1,17 @@
-import { and, desc, eq, exists, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, inArray, ilike, or, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
-import { pillars } from '../../db/schema/core.ts';
+import {
+	pillarSlugsFor,
+	resolvePillarRows,
+	setPillars,
+	type PillarJoin
+} from '../../db/pillar-tags.ts';
+import { pillars, type Pillar } from '../../db/schema/core.ts';
+import { ensureUniqueSlug, slugTaken } from '../../db/unique-slug.ts';
+import type { Result } from '../../util/result.ts';
+import { slugify } from '../../util/slug.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import { articlePillars, articles, type ArticleRow, type ArticleStatus } from './schema.ts';
-import type { Result } from '../../util/result.ts';
-import { nextUniqueSlug, slugify } from '../../util/slug.ts';
 
 /**
  * Blog service. Framework-free: the db is passed in so the same functions
@@ -27,24 +34,18 @@ export interface ArticleWithPillars {
 	cover: MediaRow | null;
 }
 
-async function slugTaken(db: Db, slug: string, excludeId?: string): Promise<boolean> {
-	const rows = await db.select({ id: articles.id }).from(articles).where(eq(articles.slug, slug));
-	return rows.some((r) => r.id !== excludeId);
-}
+const ARTICLE_SLUGS = { table: articles, id: articles.id, slug: articles.slug };
+
+const ARTICLE_PILLARS: PillarJoin<typeof articlePillars> = {
+	table: articlePillars,
+	parentId: articlePillars.articleId,
+	pillarId: articlePillars.pillarId,
+	link: (articleId, pillarId) => ({ articleId, pillarId })
+};
 
 /** Derive a free slug from a title (or explicit base), suffixing `-2`, `-3`, … on collision. */
-export async function ensureUniqueSlug(
-	deps: BlogDeps,
-	base: string,
-	excludeId?: string
-): Promise<string> {
-	const root = slugify(base) || 'articol';
-	const taken = await deps.db
-		.select({ slug: articles.slug, id: articles.id })
-		.from(articles)
-		.where(or(eq(articles.slug, root), ilike(articles.slug, `${root}-%`)));
-	const takenSet = new Set(taken.filter((r) => r.id !== excludeId).map((r) => r.slug));
-	return nextUniqueSlug(root, (slug) => takenSet.has(slug));
+function uniqueArticleSlug(db: Db, base: string, excludeId?: string): Promise<string> {
+	return ensureUniqueSlug(db, ARTICLE_SLUGS, base, 'articol', excludeId);
 }
 
 export async function createArticle(
@@ -53,7 +54,7 @@ export async function createArticle(
 ): Promise<BlogResult<ArticleRow>> {
 	const title = input.title.trim();
 	if (!title) return { ok: false, error: 'invalid-title' };
-	const slug = await ensureUniqueSlug(deps, title);
+	const slug = await uniqueArticleSlug(deps.db, title);
 	const [row] = await deps.db
 		.insert(articles)
 		.values({ id: crypto.randomUUID(), slug, title, createdBy: input.createdBy })
@@ -89,8 +90,8 @@ export async function updateArticle(
 	if (patch.slug !== undefined) {
 		const normalized = slugify(patch.slug);
 		if (!normalized) return { ok: false, error: 'invalid-slug' };
-		if (await slugTaken(deps.db, normalized, id)) {
-			set.slug = await ensureUniqueSlug(deps, normalized, id);
+		if (await slugTaken(deps.db, ARTICLE_SLUGS, normalized, id)) {
+			set.slug = await uniqueArticleSlug(deps.db, normalized, id);
 		} else {
 			set.slug = normalized;
 		}
@@ -101,32 +102,20 @@ export async function updateArticle(
 	if (patch.seoTitle !== undefined) set.seoTitle = patch.seoTitle || null;
 	if (patch.seoDescription !== undefined) set.seoDescription = patch.seoDescription || null;
 
-	let pillarRows: Array<typeof pillars.$inferSelect> | null = null;
+	let pillarRows: Pillar[] | null = null;
 	if (patch.pillarSlugs !== undefined) {
-		const unique = [...new Set(patch.pillarSlugs)];
-		const rows = unique.length
-			? await deps.db.select().from(pillars).where(inArray(pillars.slug, unique))
-			: [];
-		if (rows.length !== unique.length) {
-			const known = new Set(rows.map((r) => r.slug));
-			const missing = unique.filter((s) => !known.has(s));
-			return { ok: false, error: 'unknown-pillar', detail: missing.join(', ') };
+		const resolved = await resolvePillarRows(deps.db, patch.pillarSlugs);
+		if (!resolved.ok) {
+			return { ok: false, error: 'unknown-pillar', detail: resolved.missing.join(', ') };
 		}
-		pillarRows = rows;
+		pillarRows = resolved.rows;
 	}
 
 	// Retag + row update commit together: a failure between the join-table
 	// delete and re-insert must not strip the article's tags — that would
 	// silently hide it from every site.
 	const row = await deps.db.transaction(async (tx) => {
-		if (pillarRows !== null) {
-			await tx.delete(articlePillars).where(eq(articlePillars.articleId, id));
-			if (pillarRows.length) {
-				await tx
-					.insert(articlePillars)
-					.values(pillarRows.map((p) => ({ articleId: id, pillarId: p.id })));
-			}
-		}
+		if (pillarRows !== null) await setPillars(tx, ARTICLE_PILLARS, id, pillarRows);
 		const [updated] = await tx.update(articles).set(set).where(eq(articles.id, id)).returning();
 		return updated;
 	});
@@ -159,16 +148,6 @@ export async function unpublishArticle(
 	return row ? { ok: true, value: row } : { ok: false, error: 'not-found' };
 }
 
-async function pillarSlugsFor(db: Db, articleId: string): Promise<string[]> {
-	const rows = await db
-		.select({ slug: pillars.slug })
-		.from(articlePillars)
-		.innerJoin(pillars, eq(articlePillars.pillarId, pillars.id))
-		.where(eq(articlePillars.articleId, articleId))
-		.orderBy(pillars.sort);
-	return rows.map((r) => r.slug);
-}
-
 async function coverFor(db: Db, article: ArticleRow): Promise<MediaRow | null> {
 	if (!article.coverMediaId) return null;
 	const [row] = await db.select().from(media).where(eq(media.id, article.coverMediaId));
@@ -180,7 +159,7 @@ export async function getArticle(deps: BlogDeps, id: string): Promise<ArticleWit
 	if (!article) return null;
 	return {
 		article,
-		pillarSlugs: await pillarSlugsFor(deps.db, id),
+		pillarSlugs: await pillarSlugsFor(deps.db, ARTICLE_PILLARS, id),
 		cover: await coverFor(deps.db, article)
 	};
 }
@@ -196,7 +175,7 @@ export async function getBySlug(
 	if (article.status !== 'published' && !opts.includeDrafts) return null;
 	return {
 		article,
-		pillarSlugs: await pillarSlugsFor(deps.db, article.id),
+		pillarSlugs: await pillarSlugsFor(deps.db, ARTICLE_PILLARS, article.id),
 		cover: await coverFor(deps.db, article)
 	};
 }

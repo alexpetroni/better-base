@@ -1,8 +1,15 @@
-import { and, desc, eq, exists, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, inArray, sql, ilike, or } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
-import { pillars } from '../../db/schema/core.ts';
+import {
+	pillarSlugsFor,
+	resolvePillarRows,
+	setPillars,
+	type PillarJoin
+} from '../../db/pillar-tags.ts';
+import { pillars, type Pillar } from '../../db/schema/core.ts';
+import { ensureUniqueSlug, slugTaken } from '../../db/unique-slug.ts';
 import type { Result } from '../../util/result.ts';
-import { nextUniqueSlug, slugify } from '../../util/slug.ts';
+import { slugify } from '../../util/slug.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import { productPillars, products, type ProductRow, type ProductStatus } from './schema.ts';
 
@@ -51,23 +58,18 @@ export function isPurchasable(
 	);
 }
 
-async function slugTaken(db: Db, slug: string, excludeId?: string): Promise<boolean> {
-	const rows = await db.select({ id: products.id }).from(products).where(eq(products.slug, slug));
-	return rows.some((r) => r.id !== excludeId);
-}
+const PRODUCT_SLUGS = { table: products, id: products.id, slug: products.slug };
 
-export async function ensureUniqueProductSlug(
-	deps: ShopDeps,
-	base: string,
-	excludeId?: string
-): Promise<string> {
-	const root = slugify(base) || 'produs';
-	const taken = await deps.db
-		.select({ slug: products.slug, id: products.id })
-		.from(products)
-		.where(or(eq(products.slug, root), ilike(products.slug, `${root}-%`)));
-	const takenSet = new Set(taken.filter((r) => r.id !== excludeId).map((r) => r.slug));
-	return nextUniqueSlug(root, (slug) => takenSet.has(slug));
+const PRODUCT_PILLARS: PillarJoin<typeof productPillars> = {
+	table: productPillars,
+	parentId: productPillars.productId,
+	pillarId: productPillars.pillarId,
+	link: (productId, pillarId) => ({ productId, pillarId })
+};
+
+/** Derive a free slug from a name (or explicit base), suffixing `-2`, `-3`, … on collision. */
+function uniqueProductSlug(db: Db, base: string, excludeId?: string): Promise<string> {
+	return ensureUniqueSlug(db, PRODUCT_SLUGS, base, 'produs', excludeId);
 }
 
 export async function createProduct(
@@ -76,7 +78,7 @@ export async function createProduct(
 ): Promise<ShopResult<ProductRow>> {
 	const name = input.name.trim();
 	if (!name) return { ok: false, error: 'invalid-name' };
-	const slug = await ensureUniqueProductSlug(deps, name);
+	const slug = await uniqueProductSlug(deps.db, name);
 	const [row] = await deps.db
 		.insert(products)
 		.values({ id: crypto.randomUUID(), slug, name })
@@ -115,8 +117,8 @@ export async function updateProduct(
 	if (patch.slug !== undefined) {
 		const normalized = slugify(patch.slug);
 		if (!normalized) return { ok: false, error: 'invalid-slug' };
-		set.slug = (await slugTaken(deps.db, normalized, id))
-			? await ensureUniqueProductSlug(deps, normalized, id)
+		set.slug = (await slugTaken(deps.db, PRODUCT_SLUGS, normalized, id))
+			? await uniqueProductSlug(deps.db, normalized, id)
 			: normalized;
 	}
 	if (patch.priceCents !== undefined) {
@@ -136,49 +138,24 @@ export async function updateProduct(
 	if (patch.coverMediaId !== undefined) set.coverMediaId = patch.coverMediaId;
 	if (patch.gallery !== undefined) set.gallery = patch.gallery;
 
-	let pillarRows: Array<typeof pillars.$inferSelect> | null = null;
+	let pillarRows: Pillar[] | null = null;
 	if (patch.pillarSlugs !== undefined) {
-		const unique = [...new Set(patch.pillarSlugs)];
-		const rows = unique.length
-			? await deps.db.select().from(pillars).where(inArray(pillars.slug, unique))
-			: [];
-		if (rows.length !== unique.length) {
-			const known = new Set(rows.map((r) => r.slug));
-			return {
-				ok: false,
-				error: 'unknown-pillar',
-				detail: unique.filter((s) => !known.has(s)).join(', ')
-			};
+		const resolved = await resolvePillarRows(deps.db, patch.pillarSlugs);
+		if (!resolved.ok) {
+			return { ok: false, error: 'unknown-pillar', detail: resolved.missing.join(', ') };
 		}
-		pillarRows = rows;
+		pillarRows = resolved.rows;
 	}
 
 	// Retag + row update commit together: a failure between the join-table
 	// delete and re-insert must not strip the product's tags — that would
 	// silently hide it from every site.
 	const row = await deps.db.transaction(async (tx) => {
-		if (pillarRows !== null) {
-			await tx.delete(productPillars).where(eq(productPillars.productId, id));
-			if (pillarRows.length) {
-				await tx
-					.insert(productPillars)
-					.values(pillarRows.map((p) => ({ productId: id, pillarId: p.id })));
-			}
-		}
+		if (pillarRows !== null) await setPillars(tx, PRODUCT_PILLARS, id, pillarRows);
 		const [updated] = await tx.update(products).set(set).where(eq(products.id, id)).returning();
 		return updated;
 	});
 	return { ok: true, value: row };
-}
-
-async function pillarSlugsFor(db: Db, productId: string): Promise<string[]> {
-	const rows = await db
-		.select({ slug: pillars.slug })
-		.from(productPillars)
-		.innerJoin(pillars, eq(productPillars.pillarId, pillars.id))
-		.where(eq(productPillars.productId, productId))
-		.orderBy(pillars.sort);
-	return rows.map((r) => r.slug);
 }
 
 async function mediaFor(
@@ -201,7 +178,7 @@ export async function getProduct(deps: ShopDeps, id: string): Promise<ProductWit
 	if (!product) return null;
 	return {
 		product,
-		pillarSlugs: await pillarSlugsFor(deps.db, id),
+		pillarSlugs: await pillarSlugsFor(deps.db, PRODUCT_PILLARS, id),
 		...(await mediaFor(deps.db, product))
 	};
 }
@@ -217,7 +194,7 @@ export async function getProductBySlug(
 ): Promise<ProductWithPillars | null> {
 	const [product] = await deps.db.select().from(products).where(eq(products.slug, slug));
 	if (!product) return null;
-	const pillarSlugs = await pillarSlugsFor(deps.db, product.id);
+	const pillarSlugs = await pillarSlugsFor(deps.db, PRODUCT_PILLARS, product.id);
 	if (!opts.includeHidden) {
 		if (product.status !== 'active') return null;
 		if (!pillarSlugs.some((s) => opts.sitePillarSlugs.includes(s))) return null;

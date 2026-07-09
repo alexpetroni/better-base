@@ -3,8 +3,9 @@ import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FormConfig } from 'formcomp';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
+import { ensureUniqueSlug } from '../../db/unique-slug.ts';
 import type { Result } from '../../util/result.ts';
-import { nextUniqueSlug, slugify } from '../../util/slug.ts';
+import { slugify } from '../../util/slug.ts';
 import { subscribers } from '../crm/schema.ts';
 import {
 	quizResults,
@@ -39,14 +40,10 @@ export type QuizError =
 
 export type QuizOpResult<T> = Result<T, QuizError>;
 
-async function ensureUniqueQuizSlug(deps: QuizDeps, base: string, excludeId?: string) {
-	const root = slugify(base) || 'chestionar';
-	const taken = await deps.db
-		.select({ slug: quizzes.slug, id: quizzes.id })
-		.from(quizzes)
-		.where(or(eq(quizzes.slug, root), ilike(quizzes.slug, `${root}-%`)));
-	const takenSet = new Set(taken.filter((r) => r.id !== excludeId).map((r) => r.slug));
-	return nextUniqueSlug(root, (slug) => takenSet.has(slug));
+const QUIZ_SLUGS = { table: quizzes, id: quizzes.id, slug: quizzes.slug };
+
+function uniqueQuizSlug(db: Db, base: string, excludeId?: string): Promise<string> {
+	return ensureUniqueSlug(db, QUIZ_SLUGS, base, 'chestionar', excludeId);
 }
 
 export async function createQuiz(
@@ -55,7 +52,7 @@ export async function createQuiz(
 ): Promise<QuizOpResult<QuizRow>> {
 	const title = input.title.trim();
 	if (!title) return { ok: false, error: 'invalid-title' };
-	const slug = await ensureUniqueQuizSlug(deps, title);
+	const slug = await uniqueQuizSlug(deps.db, title);
 	const [row] = await deps.db
 		.insert(quizzes)
 		.values({ id: crypto.randomUUID(), slug, title, createdBy: input.createdBy })
@@ -91,7 +88,7 @@ export async function updateQuiz(
 	if (patch.slug !== undefined) {
 		const normalized = slugify(patch.slug);
 		if (!normalized) return { ok: false, error: 'invalid-slug' };
-		set.slug = await ensureUniqueQuizSlug(deps, normalized, id);
+		set.slug = await uniqueQuizSlug(deps.db, normalized, id);
 	}
 	if (patch.introMd !== undefined) set.introMd = patch.introMd;
 	if (patch.resultTemplateKey !== undefined) set.resultTemplateKey = patch.resultTemplateKey;

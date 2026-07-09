@@ -1,7 +1,8 @@
 import { asc, eq } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { ensureUniqueSlug } from '../../db/unique-slug.ts';
 import type { Result } from '../../util/result.ts';
-import { nextUniqueSlug, slugify } from '../../util/slug.ts';
+import { slugify } from '../../util/slug.ts';
 import { pages, type PageRow } from './schema.ts';
 
 export interface PagesDeps {
@@ -9,6 +10,8 @@ export interface PagesDeps {
 }
 
 export type PagesResult<T> = Result<T, 'not-found' | 'invalid-title'>;
+
+const PAGE_SLUGS = { table: pages, id: pages.id, slug: pages.slug };
 
 export async function getPageBySlug(deps: PagesDeps, slug: string): Promise<PageRow | null> {
 	const [row] = await deps.db.select().from(pages).where(eq(pages.slug, slug));
@@ -33,10 +36,7 @@ export async function createPage(
 	if (!title) return { ok: false, error: 'invalid-title' };
 	const base = slugify(title);
 	if (!base) return { ok: false, error: 'invalid-title' };
-	const existing = new Set(
-		(await deps.db.select({ slug: pages.slug }).from(pages)).map((r) => r.slug)
-	);
-	const slug = nextUniqueSlug(base, (candidate) => existing.has(candidate));
+	const slug = await ensureUniqueSlug(deps.db, PAGE_SLUGS, base, 'pagina');
 	const [row] = await deps.db
 		.insert(pages)
 		.values({ id: crypto.randomUUID(), slug, title })
