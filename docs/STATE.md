@@ -1,4 +1,53 @@
-# STATE — after FIX-1 (atomic rate limiting + email-endpoint throttling)
+# STATE — after FIX-2 (transactional writes)
+
+## Remediation FIX-2 (audit Theme B / resilience #1 — after FIX-1)
+
+- **Order creation is all-or-nothing** (`modules/shop/webhook.ts`): the order
+  insert (the `stripeSessionId` idempotency claim), the order_items snapshot
+  and the stock decrement now run in ONE `db.transaction()`. A mid-flight
+  failure rolls back the claim too, so a Stripe redelivery retries the whole
+  unit — the old "customer charged, order has zero items, unrecoverable"
+  state can no longer exist.
+- **Confirmation email is post-commit**: a mail failure can never roll back a
+  paid order. The duplicate-delivery path now RE-ATTEMPTS the idempotent send
+  (`order-confirmation:<orderId>`) — the email module skips it unless the
+  previous attempt errored or never happened, so a redelivery is exactly the
+  retry signal for a failed send. An email sender that throws makes the
+  webhook 500 (order already committed) → Stripe redelivers → duplicate path
+  retries the email; a transport-level error (sender returns status `error`)
+  still yields 200 `order-created` and is retried only on a later redelivery.
+- **Pillar retagging is atomic** (`blog/service.ts updateArticle`,
+  `shop/service.ts updateProduct`): the join-table delete + re-insert + row
+  update commit together — a failure can no longer strip an article/product
+  of all tags (which silently hid it from every site).
+- **GDPR erasure is all-or-nothing** (`gdpr/erase.ts`): quiz unlink +
+  subscriber delete + order/email-log anonymization in one transaction; a
+  mid-way failure leaves everything untouched and the CLI exits nonzero.
+- **Deliberately NOT transactional** (audited, documented in code comments):
+  - `quiz/funnel.ts claimQuizResult` — interleaves external email sends;
+    every step is individually idempotent, a retry of the whole action heals.
+  - `media/service.ts confirmUpload`/`deleteMedia` — storage is external and
+    can't join a DB tx; failure modes are an orphan bucket object (harmless)
+    or a 404-ing thumbnail healed by retrying the delete.
+  - `chat/service.ts` — assistant reply persisted only after the external
+    stream finishes; a mid-stream failure records a user message with no
+    reply, which is accurate, not corrupt.
+  - `crm/service.ts upsertSubscriber` consent merge is a read-modify-write
+    (concurrent upserts with DIFFERENT grants could last-write-win); reviewed
+    and left — the funnel/newsletter actions are single-user flows and a
+    retry re-applies the grant. Revisit only if consents ever get bulk
+    writers.
+- **Tests**: `tests/helpers/db-fault.ts` — a Proxy wrapper around a Drizzle
+  client that makes `insert`/`update`/`delete` on ONE chosen table throw
+  while armed, transparently across `db.transaction()`. Used by 7 new
+  regression tests (all FAILED pre-fix): webhook items-insert / stock-update
+  faults commit NOTHING and the same event redelivers into exactly one
+  complete order; concurrent duplicate deliveries; email transport error /
+  throwing sender never roll back or duplicate an order and a redelivery
+  retries the send (`shop.spec.ts`); article + product retag faults keep the
+  old tags (`blog.spec.ts`, `shop.spec.ts`); erase fault leaves the
+  subscriber untouched (`erase.spec.ts`).
+- No schema changes, no new env vars, no new scripts.
 
 ## Remediation FIX-1 (audit Themes A & F — after Phase 7)
 
