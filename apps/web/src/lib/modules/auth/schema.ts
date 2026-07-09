@@ -1,22 +1,39 @@
-import { boolean, index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+	boolean,
+	index,
+	integer,
+	pgTable,
+	text,
+	timestamp,
+	uniqueIndex
+} from 'drizzle-orm/pg-core';
 
 /**
  * Staff users (better-auth "user" model, plural table names via `usePlural`).
  * Public signup is disabled; rows are created only by the user:create CLI or
  * (in later phases) by an admin. `role` is a better-auth additionalField.
  */
-export const users = pgTable('users', {
-	id: text('id').primaryKey(),
-	name: text('name').notNull(),
-	email: text('email').notNull().unique(),
-	emailVerified: boolean('emailVerified').notNull().default(false),
-	image: text('image'),
-	role: text('role', { enum: ['admin', 'editor'] })
-		.notNull()
-		.default('editor'),
-	createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
-	updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow()
-});
+export const users = pgTable(
+	'users',
+	{
+		id: text('id').primaryKey(),
+		name: text('name').notNull(),
+		email: text('email').notNull().unique(),
+		emailVerified: boolean('emailVerified').notNull().default(false),
+		image: text('image'),
+		role: text('role', { enum: ['admin', 'editor'] })
+			.notNull()
+			.default('editor'),
+		createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [
+		// better-auth lowercases emails, but a bypassing writer (CLI, script)
+		// must not be able to create `A@x.com` next to `a@x.com`.
+		uniqueIndex('users_email_lower_uq').on(sql`lower(${table.email})`)
+	]
+);
 
 export const sessions = pgTable(
 	'sessions',

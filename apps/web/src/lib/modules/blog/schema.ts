@@ -28,7 +28,11 @@ export const articles = pgTable(
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
-	(table) => [index('articles_status_published_at_idx').on(table.status, table.publishedAt)]
+	(table) => [
+		index('articles_status_published_at_idx').on(table.status, table.publishedAt),
+		index('articles_cover_media_id_idx').on(table.coverMediaId),
+		index('articles_created_by_idx').on(table.createdBy)
+	]
 );
 
 export const articlePillars = pgTable(

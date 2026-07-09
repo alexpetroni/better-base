@@ -32,7 +32,10 @@ export const products = pgTable(
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
-	(table) => [index('products_status_idx').on(table.status)]
+	(table) => [
+		index('products_status_idx').on(table.status),
+		index('products_cover_media_id_idx').on(table.coverMediaId)
+	]
 );
 
 export const productPillars = pgTable(
@@ -81,7 +84,12 @@ export const orders = pgTable(
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
-	(table) => [index('orders_created_at_idx').on(table.createdAt)]
+	(table) => [
+		index('orders_created_at_idx').on(table.createdAt),
+		// GDPR erase anonymizes by email; the refund webhook matches by intent.
+		index('orders_email_idx').on(table.email),
+		index('orders_stripe_payment_intent_idx').on(table.stripePaymentIntent)
+	]
 );
 
 export const orderItems = pgTable(
@@ -98,7 +106,10 @@ export const orderItems = pgTable(
 		priceCents: integer('price_cents').notNull(),
 		qty: integer('qty').notNull()
 	},
-	(table) => [index('order_items_order_id_idx').on(table.orderId)]
+	(table) => [
+		index('order_items_order_id_idx').on(table.orderId),
+		index('order_items_product_id_idx').on(table.productId)
+	]
 );
 
 export type ProductRow = typeof products.$inferSelect;

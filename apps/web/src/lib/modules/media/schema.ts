@@ -32,6 +32,7 @@ export const media = pgTable(
 	},
 	(table) => [
 		index('media_created_at_idx').on(table.createdAt),
+		index('media_created_by_idx').on(table.createdBy),
 		check(
 			'media_kind_shape',
 			sql`(${table.kind} = 'image' and ${table.key} is not null and ${table.filename} is not null and ${table.mime} is not null and ${table.size} is not null)
