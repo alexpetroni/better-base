@@ -36,6 +36,13 @@
       "when": 1783559011337,
       "tag": "0004_small_mauler",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783559531081,
+      "tag": "0005_rapid_owl",
+      "breakpoints": true
     }
   ]
 }

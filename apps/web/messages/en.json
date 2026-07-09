@@ -87,5 +87,10 @@
 	"blog_page_of": "Page {page} of {pageCount}",
 	"blog_published_on": "Published on {date}",
 	"pillar_articles_heading": "Recent articles",
-	"pillar_articles_all": "All articles"
+	"pillar_articles_all": "All articles",
+	"newsletter_heading": "Subscribe to the newsletter",
+	"newsletter_blurb": "Practical guides and tips, about once a week.",
+	"newsletter_email_placeholder": "you@example.com",
+	"newsletter_submit": "Subscribe",
+	"newsletter_consent_label": "I agree to receive the newsletter by email. I can unsubscribe at any time."
 }

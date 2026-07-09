@@ -87,5 +87,10 @@
 	"blog_page_of": "Pagina {page} din {pageCount}",
 	"blog_published_on": "Publicat pe {date}",
 	"pillar_articles_heading": "Articole recente",
-	"pillar_articles_all": "Toate articolele"
+	"pillar_articles_all": "Toate articolele",
+	"newsletter_heading": "Abonează-te la newsletter",
+	"newsletter_blurb": "Ghiduri și sfaturi practice, aproximativ o dată pe săptămână.",
+	"newsletter_email_placeholder": "adresa@exemplu.ro",
+	"newsletter_submit": "Mă abonez",
+	"newsletter_consent_label": "Sunt de acord să primesc newsletterul prin email. Mă pot dezabona oricând."
 }
