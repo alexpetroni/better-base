@@ -1,10 +1,9 @@
-import { PILLARS_BY_SLUG } from '$lib/config';
 import { getDb } from '$lib/db';
 import type { ImageSources } from '$lib/modules/media';
 import { imgSources } from '$lib/modules/media/server';
 import { isOutOfStock, listVisibleProducts } from '$lib/modules/shop/server';
 import { canonicalUrl } from '$lib/seo';
-import { getSite } from '$lib/server/site';
+import { getSite, resolveSitePillars } from '$lib/server/site';
 import type { PageServerLoad } from './$types';
 
 export interface ProductCard {
@@ -36,10 +35,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	}));
 
 	// A pillar filter bar only makes sense on multi-pillar sites (better-life).
-	const pillarFilters =
-		site.pillars.length > 1
-			? site.pillars.map((slug) => ({ slug, name: PILLARS_BY_SLUG.get(slug)?.name ?? slug }))
-			: [];
+	const pillarFilters = site.pillars.length > 1 ? resolveSitePillars() : [];
 
 	return {
 		cards,

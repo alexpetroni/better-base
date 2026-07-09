@@ -13,6 +13,7 @@ import {
 	listMedia,
 	updateMediaAlt
 } from '$lib/modules/media/server';
+import { formStr } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
 export interface MediaListItem {
@@ -36,8 +37,8 @@ export const load: PageServerLoad = async () => {
 export const actions: Actions = {
 	updateAlt: async ({ request }) => {
 		const form = await request.formData();
-		const id = String(form.get('id') ?? '');
-		const alt = String(form.get('alt') ?? '').trim();
+		const id = formStr(form, 'id');
+		const alt = formStr(form, 'alt').trim();
 		const result = await updateMediaAlt({ db: getDb() }, id, alt);
 		if (!result.ok) return fail(404, { error: result.error });
 		return { updated: id };
@@ -45,7 +46,7 @@ export const actions: Actions = {
 
 	delete: async ({ request }) => {
 		const form = await request.formData();
-		const id = String(form.get('id') ?? '');
+		const id = formStr(form, 'id');
 		const result = await deleteMedia({ db: getDb(), storage: getStorage() }, id);
 		if (!result.ok) {
 			if (result.error === 'referenced') {

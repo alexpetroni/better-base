@@ -1,5 +1,5 @@
 import { env } from '$env/dynamic/private';
-import { resolveSiteConfig, type SiteConfig } from '$lib/config';
+import { PILLARS_BY_SLUG, resolveSiteConfig, type SiteConfig } from '$lib/config';
 
 let site: SiteConfig | undefined;
 
@@ -7,4 +7,12 @@ let site: SiteConfig | undefined;
 export function getSite(): SiteConfig {
 	site ??= resolveSiteConfig(env.SITE_ID);
 	return site;
+}
+
+/** The active site's pillars as `{ slug, name }`, for pillar pickers and filters. */
+export function resolveSitePillars(): Array<{ slug: string; name: string }> {
+	return getSite().pillars.map((slug) => ({
+		slug,
+		name: PILLARS_BY_SLUG.get(slug)?.name ?? slug
+	}));
 }

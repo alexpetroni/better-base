@@ -1,23 +1,19 @@
-import { fail, redirect } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { createQuiz, listQuizzes } from '$lib/modules/quiz/server';
+import { createEntityAction, parseListFilter } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
-	const statusParam = url.searchParams.get('status');
-	const status = statusParam === 'draft' || statusParam === 'published' ? statusParam : undefined;
-	const search = url.searchParams.get('q') ?? '';
+	const { status, search, filter } = parseListFilter(url, ['draft', 'published']);
 	const quizzes = await listQuizzes({ db: getDb() }, { status, search });
-	return { quizzes, filter: { status: status ?? 'all', search } };
+	return { quizzes, filter };
 };
 
 export const actions: Actions = {
-	create: async ({ request, locals }) => {
-		const form = await request.formData();
-		const title = String(form.get('title') ?? '');
+	create: createEntityAction({
+		field: 'title',
 		// The admin hook guard guarantees a staff user here.
-		const result = await createQuiz({ db: getDb() }, { title, createdBy: locals.user!.id });
-		if (!result.ok) return fail(400, { error: result.error });
-		redirect(303, `/admin/quizzes/${result.value.id}`);
-	}
+		create: (title, locals) => createQuiz({ db: getDb() }, { title, createdBy: locals.user!.id }),
+		redirectTo: (quiz) => `/admin/quizzes/${quiz.id}`
+	})
 };

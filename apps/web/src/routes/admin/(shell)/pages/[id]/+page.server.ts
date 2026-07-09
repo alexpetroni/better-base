@@ -1,6 +1,7 @@
-import { error, fail } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { getPage, updatePage } from '$lib/modules/pages/server';
+import { failResult, formStr } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -13,11 +14,11 @@ export const actions: Actions = {
 	save: async ({ params, request }) => {
 		const form = await request.formData();
 		const result = await updatePage({ db: getDb() }, params.id, {
-			title: String(form.get('title') ?? ''),
-			bodyMd: String(form.get('bodyMd') ?? ''),
-			seoDescription: String(form.get('seoDescription') ?? '').trim() || null
+			title: formStr(form, 'title'),
+			bodyMd: formStr(form, 'bodyMd'),
+			seoDescription: formStr(form, 'seoDescription').trim() || null
 		});
-		if (!result.ok) return fail(result.error === 'not-found' ? 404 : 400, { error: result.error });
+		if (!result.ok) return failResult(result);
 		return { saved: true };
 	}
 };

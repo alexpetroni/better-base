@@ -1,5 +1,4 @@
 import { error, fail } from '@sveltejs/kit';
-import { PILLARS_BY_SLUG } from '$lib/config';
 import { getDb } from '$lib/db';
 import { EMAIL_TEMPLATE_KEYS } from '$lib/modules/email';
 import {
@@ -8,24 +7,20 @@ import {
 	publishQuiz,
 	unpublishQuiz,
 	updateQuiz,
-	type QuizOpResult,
 	type QuizPatch
 } from '$lib/modules/quiz/server';
-import { getSite } from '$lib/server/site';
+import { failResult, formStr } from '$lib/server/forms';
+import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getQuiz({ db: getDb() }, params.id);
 	if (!found) error(404);
 
-	const site = getSite();
 	return {
 		quiz: found.quiz,
 		pillarSlug: found.pillarSlug,
-		sitePillars: site.pillars.map((slug) => ({
-			slug,
-			name: PILLARS_BY_SLUG.get(slug)?.name ?? slug
-		})),
+		sitePillars: resolveSitePillars(),
 		templateKeys: EMAIL_TEMPLATE_KEYS,
 		results: await latestResultsWithEmail({ db: getDb() }, params.id)
 	};
@@ -40,8 +35,8 @@ interface ParsedPatch {
 
 /** Both JSON editors must parse before anything is saved. */
 function patchFrom(form: FormData): ParsedPatch {
-	const formSchemaText = String(form.get('formSchema') ?? '');
-	const scoringText = String(form.get('scoring') ?? '');
+	const formSchemaText = formStr(form, 'formSchema');
+	const scoringText = formStr(form, 'scoring');
 	const echo = { formSchemaText, scoringText };
 
 	let formSchema: QuizPatch['formSchema'];
@@ -59,11 +54,11 @@ function patchFrom(form: FormData): ParsedPatch {
 
 	return {
 		patch: {
-			title: String(form.get('title') ?? ''),
-			slug: String(form.get('slug') ?? ''),
-			introMd: String(form.get('introMd') ?? ''),
-			pillarSlug: String(form.get('pillar') ?? '') || null,
-			resultTemplateKey: String(form.get('resultTemplateKey') ?? '') || 'quiz-result',
+			title: formStr(form, 'title'),
+			slug: formStr(form, 'slug'),
+			introMd: formStr(form, 'introMd'),
+			pillarSlug: formStr(form, 'pillar') || null,
+			resultTemplateKey: formStr(form, 'resultTemplateKey') || 'quiz-result',
 			formSchema,
 			scoring
 		},
@@ -71,20 +66,12 @@ function patchFrom(form: FormData): ParsedPatch {
 	};
 }
 
-function failOf(result: QuizOpResult<unknown> & { ok: false }, echo: ParsedPatch['echo']) {
-	return fail(result.error === 'not-found' ? 404 : 400, {
-		error: result.error,
-		detail: result.detail ?? '',
-		...echo
-	});
-}
-
 async function saveFrom(request: Request, id: string) {
 	const form = await request.formData();
 	const { patch, failure, echo } = patchFrom(form);
 	if (!patch) return { response: fail(400, { ...failure!, ...echo }) };
 	const result = await updateQuiz({ db: getDb() }, id, patch);
-	if (!result.ok) return { response: failOf(result, echo) };
+	if (!result.ok) return { response: failResult(result, echo) };
 	return { saved: result.value };
 }
 
@@ -100,7 +87,7 @@ export const actions: Actions = {
 		const outcome = await saveFrom(request, params.id);
 		if (outcome.response) return outcome.response;
 		const result = await publishQuiz({ db: getDb() }, params.id);
-		if (!result.ok) return failOf(result, { formSchemaText: '', scoringText: '' });
+		if (!result.ok) return failResult(result, { formSchemaText: '', scoringText: '' });
 		return { saved: true, slug: result.value.slug };
 	},
 
@@ -108,7 +95,7 @@ export const actions: Actions = {
 		const outcome = await saveFrom(request, params.id);
 		if (outcome.response) return outcome.response;
 		const result = await unpublishQuiz({ db: getDb() }, params.id);
-		if (!result.ok) return failOf(result, { formSchemaText: '', scoringText: '' });
+		if (!result.ok) return failResult(result, { formSchemaText: '', scoringText: '' });
 		return { saved: true, slug: result.value.slug };
 	}
 };

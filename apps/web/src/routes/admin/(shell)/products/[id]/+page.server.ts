@@ -1,5 +1,4 @@
 import { error, fail } from '@sveltejs/kit';
-import { PILLARS_BY_SLUG } from '$lib/config';
 import { getDb } from '$lib/db';
 import { parseLeiToCents } from '$lib/util/money';
 import type { ProductStatus } from '$lib/modules/shop';
@@ -8,27 +7,21 @@ import {
 	getStripeGateway,
 	syncProductToStripe,
 	updateProduct,
-	type ProductPatch,
-	type ShopResult
+	type ProductPatch
 } from '$lib/modules/shop/server';
+import { failResult, formStr, formStrAll } from '$lib/server/forms';
 import { loadLibraryImages } from '$lib/server/media-library';
-import { getSite } from '$lib/server/site';
+import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getProduct({ db: getDb() }, params.id);
 	if (!found) error(404);
 
-	const site = getSite();
-	const sitePillars = site.pillars.map((slug) => ({
-		slug,
-		name: PILLARS_BY_SLUG.get(slug)?.name ?? slug
-	}));
-
 	return {
 		product: found.product,
 		pillarSlugs: found.pillarSlugs,
-		sitePillars,
+		sitePillars: resolveSitePillars(),
 		library: await loadLibraryImages()
 	};
 };
@@ -38,38 +31,30 @@ const STATUSES: ProductStatus[] = ['draft', 'active', 'archived'];
 type ParseError = { error: string; detail: string };
 
 function patchFrom(form: FormData): ProductPatch | ParseError {
-	const priceCents = parseLeiToCents(String(form.get('price') ?? ''));
+	const priceCents = parseLeiToCents(formStr(form, 'price'));
 	if (priceCents === null) return { error: 'invalid-price', detail: '' };
 
-	const stockRaw = String(form.get('stock') ?? '').trim();
+	const stockRaw = formStr(form, 'stock').trim();
 	let stock: number | null = null;
 	if (stockRaw !== '') {
 		stock = Number(stockRaw);
 		if (!Number.isInteger(stock) || stock < 0) return { error: 'invalid-stock', detail: '' };
 	}
 
-	const statusRaw = String(form.get('status') ?? '');
-	const cover = String(form.get('coverMediaId') ?? '');
+	const statusRaw = formStr(form, 'status');
 	return {
-		name: String(form.get('name') ?? ''),
-		slug: String(form.get('slug') ?? ''),
-		descriptionMd: String(form.get('descriptionMd') ?? ''),
+		name: formStr(form, 'name'),
+		slug: formStr(form, 'slug'),
+		descriptionMd: formStr(form, 'descriptionMd'),
 		priceCents,
 		stock,
 		status: STATUSES.includes(statusRaw as ProductStatus)
 			? (statusRaw as ProductStatus)
 			: undefined,
-		coverMediaId: cover || null,
-		gallery: form.getAll('gallery').map(String).filter(Boolean),
-		pillarSlugs: form.getAll('pillars').map(String)
+		coverMediaId: formStr(form, 'coverMediaId') || null,
+		gallery: formStrAll(form, 'gallery').filter(Boolean),
+		pillarSlugs: formStrAll(form, 'pillars')
 	};
-}
-
-function failOf(result: ShopResult<unknown> & { ok: false }) {
-	return fail(result.error === 'not-found' ? 404 : 400, {
-		error: result.error,
-		detail: result.detail ?? ''
-	});
 }
 
 export const actions: Actions = {
@@ -79,7 +64,7 @@ export const actions: Actions = {
 		if ('error' in patch) return fail(400, patch);
 
 		const result = await updateProduct({ db: getDb() }, params.id, patch);
-		if (!result.ok) return failOf(result);
+		if (!result.ok) return failResult(result);
 
 		// Mirror into the Stripe catalog on every save. A gateway failure keeps
 		// the save (retried on the next save) and is surfaced as a warning.
