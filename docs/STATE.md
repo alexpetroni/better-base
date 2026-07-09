@@ -1,4 +1,92 @@
-# STATE — after FIX-5 (FK indexes, media refs, email uniqueness, idempotency)
+# STATE — after FIX-6 (fail-fast boot, health 503, security hardening)
+
+## Remediation FIX-6 (audit resilience #9/#10, security H3/M1/M2/L1–L7 — after FIX-5)
+
+- **Fail-fast boot env validation** (resilience #10): `$lib/server/boot.ts`
+  `assertBootEnv()` runs at `hooks.server.ts` module init — a deploy missing
+  any of `SITE_ID`, `DATABASE_URL`, `PUBLIC_SITE_URL`, `BETTER_AUTH_SECRET`,
+  `TOKEN_SECRET`, `S3_*` (4), `IMGPROXY_URL/KEY/SALT` refuses to start with
+  ONE message listing every problem. Conditionals: `RESEND_API_KEY` required
+  when `EMAIL_DRYRUN=false`; `STRIPE_WEBHOOK_SECRET` required when a real
+  `STRIPE_SECRET_KEY` is set; `TOKEN_SECRET === BETTER_AUTH_SECRET` refused.
+  Verified against the adapter-node build (process dies at import with the
+  message). Any NEW required env var must be added to `REQUIRED_BOOT_ENV`
+  (or as a conditional) in boot.ts + .env.example + DEPLOYMENT.md §2.
+- **`/api/health` never 500s on missing env** (resilience #9): the route
+  wraps `getDb()`/`getStorage()` construction (`tryConstruct`) and
+  `checkHealth` now takes nullable deps — an unconstructable dependency is an
+  immediate `'error'` check, answered 503 `{status:'degraded', checks}`.
+- **NEW ENV VAR `TOKEN_SECRET`** (L5): dedicated HMAC secret for newsletter
+  confirm tokens (`crm getTokenSecret`), chat session cookies
+  (`chat getChatSecret`), quiz funnel confirm links (`getQuizFunnelDeps`)
+  and the new upload tickets — all via shared `$lib/server/secrets.ts`
+  `tokenSecretFrom(env)` which throws if unset OR equal to
+  `BETTER_AUTH_SECRET`. **Rotating/introducing it invalidates outstanding
+  confirm links and chat cookies** (chat: verify fails → 403 until the widget
+  is reset or DELETE /api/chat — documented, accepted). BETTER_AUTH_SECRET
+  now signs staff sessions ONLY.
+- **imgproxy secret hygiene** (H3): docker-compose `IMGPROXY_KEY/SALT` use
+  `${VAR:?}` — NO committed fallback pair anywhere (an empty pair would
+  disable signing entirely; the old committed pair is burned in git history —
+  never reuse it). `.env.example` ships empty placeholders + `openssl rand
+  -hex 32` instructions; local dev `.env` values were rotated this phase.
+  Rotation procedure documented in DEPLOYMENT.md §6.
+- **SVG uploads stay allowed but defanged** (M1 — option B; dropping svg
+  would have broken the seeded product covers): compose/prod imgproxy get
+  `IMGPROXY_SANITIZE_SVG=true` (scripts/handlers stripped — integration-
+  tested against the live container with a malicious SVG) and `imageSources`
+  signs `att:1` into every SVG URL (`ImgOptions.attachment`) so direct
+  navigation downloads instead of rendering in the imgproxy origin. Also
+  added source caps `IMGPROXY_MAX_SRC_FILE_SIZE=15 MiB` /
+  `IMGPROXY_MAX_SRC_RESOLUTION=50` (L7). The imgproxy container must be
+  RECREATED (`docker compose up -d imgproxy`) after pulling this phase.
+- **Proxy IP trust documented** (M2): DEPLOYMENT.md §3 "Client IPs behind
+  the proxy" — `ADDRESS_HEADER`/`XFF_DEPTH` per topology (1 proxy → xff/1;
+  Cloudflare → cf-connecting-ip; direct → neither; never a header the edge
+  doesn't strip). Commented stubs in .env.example. No code change needed —
+  adapter-node reads these at runtime.
+- **Bounded request bodies** (L1): `$lib/server/body.ts` `readJsonBounded`
+  reads the stream and bails the moment the cap is crossed (content-length
+  is treated as a hint only — it's client-forgeable and absent on chunked).
+  Chat: 32 KiB → 413; quiz submit: 256 KiB → 413 (was a header-only check).
+  Reuse this helper for any new JSON endpoint. adapter-node's default 512 KiB
+  `BODY_SIZE_LIMIT` remains the global backstop (form actions rely on it).
+- **Log redaction** (L2): `formatServerError` passes the path through
+  `redactLogPath` — `/newsletter/confirm/…` and `/unsubscribe/…` log as
+  `…/[redacted]`. Any NEW token-in-path route must be added to
+  `TOKEN_PATH_PREFIXES` in `$lib/server/log.ts`.
+- **Upload confirm bound to presign** (L3): presign now returns a signed
+  `ticket` (`media/upload-ticket.ts`, HMAC over key+exp, 1h TTL, secret =
+  TOKEN_SECRET) which confirm requires for that exact key (403 `ticket`
+  otherwise) — a staff session can no longer register arbitrary bucket
+  objects (seed assets, others' pending uploads) as its media rows. Ticket
+  check lives in the ROUTE; the framework-free media service API is
+  unchanged (scripts/specs/content-import unaffected).
+- **Deliberately deferred — L6** (Stripe `processed_events` ledger): both
+  handled event types are already idempotent by domain keys (orders' unique
+  `stripe_session_id` claim-by-insert; `charge.refunded` is an idempotent
+  status flip); a persistent event-id table would add retention burden
+  without closing a real hole. Revisit only if a NON-idempotent event
+  handler is ever added.
+- **Tests** (fail-against-old verified via targeted stash runs where
+  non-obvious): `boot.spec.ts` (parameterized missing-var, dryrun/stripe
+  conditionals, secret-equality), `secrets.spec.ts` (pure + wiring: getters
+  return TOKEN_SECRET; tokens signed by the app do NOT verify under
+  BETTER_AUTH_SECRET), `health-route.spec.ts` (503 not 500 — mocks `$lib/db`
+  + media server barrel to throw), `body.spec.ts` (endless chunked stream
+  abandoned within ~cap bytes; header-only rejection), `chat-route.spec.ts`
+  (413 before any dependency is touched), `upload-ticket.spec.ts`,
+  log redaction cases, imgproxy `att:1` unit + live sanitize/attachment
+  integration test in `media.spec.ts`.
+- No schema changes, no new migrations. New env var: `TOKEN_SECRET`
+  (REQUIRED everywhere; e2e/preview inherit it from root `.env`). New
+  exports: `assertBootEnv`/`bootEnvProblems`/`REQUIRED_BOOT_ENV`
+  (`$lib/server/boot`), `tokenSecretFrom` (`$lib/server/secrets`),
+  `readJsonBounded` (`$lib/server/body`), `redactLogPath` (log.ts),
+  `signUploadTicket`/`verifyUploadTicket`/`UPLOAD_TICKET_TTL_SECONDS`
+  (media server barrel), `ImgOptions.attachment` (imgproxy). Gate green;
+  both sites boot from the adapter-node build (home 200 + health ok);
+  media+chat e2e re-run green on both sites.
 
 ## Remediation FIX-5 (audit Theme E + data HIGH-3/LOW-2, resilience #6/#7/#8 — after FIX-4)
 
@@ -821,7 +909,9 @@ Not run in CI/agent runs — do this by hand when you have keys:
 
 - `.env` lives at the **repo root** (see `.env.example`): `SITE_ID`, `DATABASE_URL`,
   `TEST_DATABASE_URL`, `PUBLIC_SITE_URL`, `DB_PORT`, `BETTER_AUTH_SECRET` (new in
-  Phase 1 — better-auth session secret; generate a real one outside dev). It is loaded by `vite.config.ts`
+  Phase 1 — better-auth session secret; generate a real one outside dev) and
+  `TOKEN_SECRET` (new in FIX-6 — signs consent/chat/upload tokens; must differ
+  from the auth secret). It is loaded by `vite.config.ts`
   (dotenv, never overrides real env), `drizzle.config.ts`, `scripts/seed.ts`, and the
   vitest setup file. In this agent container all service hosts are
   `host.docker.internal` (compose containers are siblings); `.env.example`

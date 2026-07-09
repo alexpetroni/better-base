@@ -8,8 +8,7 @@
  */
 
 export type BoundedJsonResult =
-	| { ok: true; value: unknown }
-	| { ok: false; reason: 'too-large' | 'invalid' };
+	{ ok: true; value: unknown } | { ok: false; reason: 'too-large' | 'invalid' };
 
 export async function readJsonBounded(
 	request: Request,

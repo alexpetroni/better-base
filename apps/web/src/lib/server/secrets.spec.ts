@@ -10,7 +10,9 @@ describe('tokenSecretFrom', () => {
 	});
 
 	it('throws a clear message when TOKEN_SECRET is unset', () => {
-		expect(() => tokenSecretFrom({ BETTER_AUTH_SECRET: 'auth' })).toThrow(/TOKEN_SECRET is not set/);
+		expect(() => tokenSecretFrom({ BETTER_AUTH_SECRET: 'auth' })).toThrow(
+			/TOKEN_SECRET is not set/
+		);
 		expect(() => tokenSecretFrom({ TOKEN_SECRET: '' })).toThrow(/TOKEN_SECRET is not set/);
 	});
 

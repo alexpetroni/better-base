@@ -45,8 +45,8 @@ export async function checkHealth(
 	timeoutMs = HEALTH_CHECK_TIMEOUT_MS
 ): Promise<HealthReport> {
 	const [db, storage] = await Promise.all([
-		deps.db ? bounded(() => deps.db!.execute(sql`select 1`), timeoutMs) : 'error',
-		deps.storage ? bounded(() => deps.storage!.headBucket(), timeoutMs) : 'error'
+		deps.db ? bounded(() => deps.db!.execute(sql`select 1`), timeoutMs) : ('error' as const),
+		deps.storage ? bounded(() => deps.storage!.headBucket(), timeoutMs) : ('error' as const)
 	]);
 	return { healthy: db === 'ok' && storage === 'ok', checks: { db, storage } };
 }

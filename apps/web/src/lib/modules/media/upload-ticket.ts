@@ -25,8 +25,7 @@ export function signUploadTicket(secret: string, key: string, now: Date): string
 }
 
 export type UploadTicketVerification =
-	| { ok: true }
-	| { ok: false; reason: 'malformed' | 'signature' | 'expired' };
+	{ ok: true } | { ok: false; reason: 'malformed' | 'signature' | 'expired' };
 
 export function verifyUploadTicket(
 	secret: string,
