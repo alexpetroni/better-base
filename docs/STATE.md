@@ -1,4 +1,108 @@
-# STATE — after FIX-6 (fail-fast boot, health 503, security hardening)
+# STATE — after FIX-7 (module boundaries + simplification)
+
+## Remediation FIX-7 (audit Theme G, architecture #1, simplification #1–#10 — after FIX-6)
+
+Quality phase — refactor only. No schema changes, no migrations, no new env
+vars, no new scripts. The one deliberate rendering change is the pinned
+timezone in `formatDate` (below).
+
+- **Module-boundary policy is now real and enforced** (Theme G). ESLint
+  (`eslint.config.js`, `@typescript-eslint/no-restricted-imports` scoped to
+  `src/lib/modules/**`) forbids `../<sibling-module>/…` imports EXCEPT:
+  - `../<module>/schema.ts` at **runtime** — FK relations/joins in one shared
+    db legitimately need sibling table objects;
+  - `import type` of anything — erased at runtime, rename-safe via tsc;
+  - `*.spec.ts` files — integration specs deliberately wire modules together.
+  Everything else must go through `$lib/util`, `$lib/db`, `$lib/server` or a
+  module barrel (`$lib/modules/<name>[/server]`). Enforcement was proven with
+  a probe fixture (runtime `../crm/service.ts` errors; schema + type-only
+  pass). **Plain-node entry points** (`scripts/*`, `db/seed.ts`) still import
+  module files relatively — node cannot resolve `$lib` — but they live
+  outside `src/lib/modules` and are deliberately not governed by the rule.
+  The three runtime violations flushed out were FIXED, not exempted:
+  blog/render → `$lib/modules/media/server` (barrel now re-exports
+  `imageSources`), quiz/funnel → `$lib/modules/crm/server`,
+  extractMediaRefs → `$lib/util/media-refs.ts`. Consequence: `blog/render.ts`
+  and `quiz/funnel.ts` are now Vite-only (they import barrels) — do NOT
+  import them from plain-node scripts.
+- **NEW shared layer `$lib/util`** (universal, framework-free, node-safe):
+  `slug.ts` + `money.ts` (moved verbatim from blog/shop — the blog/shop
+  barrels no longer re-export them, routes import `$lib/util/{slug,money}`),
+  `result.ts` (generic `Result<T,E>` — the 7 per-module envelopes and gdpr's
+  EraseResult are now aliases keeping only their error unions), `email.ts`
+  (`EMAIL_RE` + `normalizeEmail`, also used by auth/staff), `object.ts`
+  (`isRecord`, was triplicated), `date.ts` (below), `media-refs.ts`
+  (`MEDIA_REF_PREFIX` + `extractMediaRefs` — the `media:` convention shared
+  by blog markdown, shop description scan and the content CLI).
+- **NEW shared db helpers `$lib/db`** (node-safe, imported relatively by
+  modules): `unique-slug.ts` — generic `slugTaken`/`ensureUniqueSlug(db,
+  {table,id,slug}, base, fallback, excludeId)` replacing the triplicated
+  per-table copies (blog/shop/quiz) and pages' collect-all variant;
+  `pillar-tags.ts` — `resolvePillarRows`/`setPillars`/`pillarSlugsFor` over a
+  `PillarJoin` descriptor replacing the duplicated validate+replace+read in
+  blog and shop. Quiz keeps its single `pillar_id` column logic. Any NEW
+  sluggable/pillar-tagged entity must use these. Covered by
+  `db/pillar-tags.spec.ts`.
+- **NEW route helpers**: `$lib/server/forms.ts` — `formStr`/`formStrAll`
+  (~40 `String(form.get())` reads), `failResult` (not-found→404-else-400 +
+  detail echo; replaces 3 `failOf` copies + pages' inline map),
+  `parseListFilter(url, statuses)` (admin list ?status/?q parsing + filter
+  echo), `createEntityAction` (the identical create→303-to-editor action on
+  all 4 admin list pages; hooks for createdBy + products' post-create Stripe
+  sync). `$lib/server/site.ts` gained `resolveSitePillars()` (the
+  {slug,name} mapping previously ×4). Public routes (newsletter, cos, login,
+  quiz result) still read forms inline — they were not part of the repeated
+  admin boilerplate.
+- **`formatDate(d, style)`** (`$lib/util/date.ts`): styles
+  medium/long/medium-time/long-time, always ro-RO, **timezone pinned to
+  Europe/Bucharest** — replaces 11 per-page `Intl.DateTimeFormat`
+  declarations and closes the SSR/client hydration mismatch near midnight
+  (server UTC vs visitors UTC+2/+3). Dates can render one day different from
+  a UTC server's old output — that is the fix, not a regression.
+- **Shared editor components**: `$lib/components/CoverField.svelte` and
+  `PillarChecklist.svelte` replace the duplicated cover card + pillar
+  checkbox list in the article and product editors (labels/testids/aspect
+  come in as props — message keys are per-editor). The quiz editor's pillar
+  control is a single-select `<select name="pillar">` with a none-option — a
+  different control, deliberately left alone.
+- **Media delete protection is explicit, not an import side effect**
+  (simplification #10): `registerMediaReferenceCheck` and its hidden global
+  array are GONE. `deleteMedia(deps, id)` takes `MediaDeleteDeps` whose
+  REQUIRED `referenceChecks` field carries the list; the app's one wiring is
+  `MEDIA_REFERENCE_CHECKS` in `$lib/server/media-library.ts` (articles +
+  products). **Any NEW module that stores media ids/keys must add its check
+  there** — `media-library.spec.ts` pins the wired names so a silent drop
+  fails CI. hooks.server.ts no longer imports blog/shop server barrels for
+  side effects (chat's fail-fast import stays — that one is env validation).
+- **Dead code removed** (each verified reference-free across
+  src/tests/e2e/scripts): `isPurchasable`, `createImgUrl`, media/server.ts's
+  raw imgproxy re-export block, the public unguarded `/dev/form` page (+ its
+  `dev_form_heading` message key, en+ro), and ~24 never-imported const
+  barrel re-exports (ADMIN_ONLY_SECTIONS, LOGIN_RATE_LIMIT,
+  DEFAULT_PAGE_SIZE, HISTORY_LIMIT, MAX_MESSAGE_CHARS, CHAT_MAX_TOKENS,
+  CHAT_RETENTION_DAYS, ANTHROPIC_*, BUNDLE_EXCLUDED_COLUMNS,
+  CONTENT_BUNDLE_VERSION, CONTENT_TYPES, CONSENT_KEYS,
+  CONFIRM_TOKEN_TTL_SECONDS, NEWSLETTER_CONFIRM_PURPOSE,
+  CONSENT_MAX_AGE_SECONDS, PRESIGN_EXPIRES_SECONDS,
+  UPLOAD_TICKET_TTL_SECONDS, CART_MAX_LINES/QTY, CART_METADATA_KEY,
+  MOCK_CHECKOUT_URL_BASE, STRIPE_MAX_NETWORK_RETRIES/TIMEOUT_MS_DEFAULT).
+  The underlying consts remain where internally used; only the barrel lines
+  went. If a later phase needs one publicly, re-export it again deliberately.
+- **Tests**: new `db/pillar-tags.spec.ts`, `util/date.spec.ts`,
+  `server/media-library.spec.ts`; `util/slug.spec.ts` + `util/money.spec.ts`
+  moved with their modules' files; media.spec now injects its fake reference
+  check. Full gate green (lint incl. the new boundary rule, check, 389 unit
+  tests), e2e green on both sites, both SITE_IDs boot.
+- **Runner gotcha discovered this phase**: this host has NO chromium system
+  libraries (`libnspr4` etc.) and no root — a bare `pnpm test:e2e` fails all
+  tests in ms with `browserType.launch … error while loading shared
+  libraries`. Workaround that produced this phase's green run: `apt-get
+  download` the ~16 debs with user-writable state dirs (`-o
+  Dir::State::Lists=… -o Dir::Cache=…`), `dpkg-deb -x` into a scratch root,
+  and run `LD_LIBRARY_PATH=<scratch>/usr/lib/x86_64-linux-gnu:… pnpm
+  test:e2e`. If /tmp was wiped, redo it (or `playwright install-deps` where
+  root exists). Both sites verified booting from the adapter-node build
+  (home 200, /api/health ok) with the same env as DEPLOYMENT.md.
 
 ## Remediation FIX-6 (audit resilience #9/#10, security H3/M1/M2/L1–L7 — after FIX-5)
 
