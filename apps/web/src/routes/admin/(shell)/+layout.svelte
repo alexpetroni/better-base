@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Pathname } from '$app/types';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages';
@@ -31,7 +30,7 @@
 				{#each data.adminNav as item (item.href)}
 					<li>
 						<a
-							href={resolve(item.href as Pathname)}
+							href={resolve(item.href as '/admin')}
 							data-testid="admin-nav-{item.message}"
 							class="block rounded px-3 py-2 text-sm hover:bg-(--color-brand-soft)
 								{page.url.pathname === item.href ? 'bg-(--color-brand-soft) font-semibold' : ''}"

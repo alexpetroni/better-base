@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Pathname } from '$app/types';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { locales, localizeHref } from '$lib/paraglide/runtime';
@@ -25,6 +24,9 @@
 
 <div style="display:none">
 	{#each locales as locale (locale)}
-		<a href={resolve(localizeHref(page.url.pathname, { locale }) as Pathname)}>{locale}</a>
+		<!-- Cast to a static route type: the value is a plain pathname and the
+		     Pathname union (which now contains dynamic routes) defeats resolve()'s
+		     overloads. -->
+		<a href={resolve(localizeHref(page.url.pathname, { locale }) as '/')}>{locale}</a>
 	{/each}
 </div>

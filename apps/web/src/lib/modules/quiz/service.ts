@@ -3,6 +3,7 @@ import type { FormConfig } from 'formcomp';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
 import { nextUniqueSlug, slugify } from '../blog/slug.ts';
+import { subscribers } from '../crm/schema.ts';
 import {
 	quizResults,
 	quizzes,
@@ -274,6 +275,21 @@ export async function getResultWithQuiz(
 		.innerJoin(quizzes, eq(quizResults.quizId, quizzes.id))
 		.where(eq(quizResults.id, resultId));
 	return row ?? null;
+}
+
+/** Latest results with the (optional) claiming subscriber's email — admin view. */
+export async function latestResultsWithEmail(
+	deps: QuizDeps,
+	quizId: string,
+	limit = 20
+): Promise<Array<{ result: QuizResultRow; email: string | null }>> {
+	return deps.db
+		.select({ result: quizResults, email: subscribers.email })
+		.from(quizResults)
+		.leftJoin(subscribers, eq(quizResults.subscriberId, subscribers.id))
+		.where(eq(quizResults.quizId, quizId))
+		.orderBy(desc(quizResults.createdAt), desc(quizResults.id))
+		.limit(limit);
 }
 
 /** Latest results for the admin quiz page. */

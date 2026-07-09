@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Pathname } from '$app/types';
 	import { resolve } from '$app/paths';
 	import { NewsletterSignup } from '$lib/modules/crm';
 
@@ -13,7 +12,9 @@
 			<ul class="flex gap-4">
 				{#each data.site.nav as item (item.href)}
 					<li>
-						<a href={resolve(item.href as Pathname)} class="hover:underline">{item.label}</a>
+						<!-- Static config hrefs; cast to a static route type because the Pathname
+					     union (with dynamic routes) defeats resolve()'s overloads. -->
+						<a href={resolve(item.href as '/')} class="hover:underline">{item.label}</a>
 					</li>
 				{/each}
 			</ul>

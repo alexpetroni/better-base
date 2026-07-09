@@ -19,6 +19,7 @@ export {
 	getQuizBySlug,
 	getResultWithQuiz,
 	latestResults,
+	latestResultsWithEmail,
 	listQuizzes,
 	publishQuiz,
 	sanitizeSubmittedAnswers,
