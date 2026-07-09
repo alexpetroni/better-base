@@ -10,7 +10,9 @@ import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
 import { emailLog } from '../email/schema.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
+import { media } from '../media/schema.ts';
 import { buildCartMetadata, createCheckoutFromCart, loadCartDetails } from './checkout.ts';
+import { productsMediaReferenceCheck } from './media-ref.ts';
 import { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
 import { orderItems, orders, productPillars, products } from './schema.ts';
 import {
@@ -115,6 +117,41 @@ describe('product CRUD', () => {
 			.from(productPillars)
 			.where(eq(productPillars.productId, row.id));
 		expect(joins.map((j) => j.pillarId)).toEqual([somn.id]);
+	});
+});
+
+describe('products media reference check (audit data HIGH-3)', () => {
+	async function insertImage(id: string, key: string) {
+		await db.insert(media).values({
+			id,
+			kind: 'image',
+			key,
+			filename: path.basename(key),
+			mime: 'image/png',
+			size: 123
+		});
+	}
+
+	it('claims covers, gallery entries and markdown description refs; frees the rest', async () => {
+		await insertImage('pm-cover', 'uploads/p/cover.png');
+		await insertImage('pm-gallery', 'uploads/p/gallery.png');
+		await insertImage('pm-desc-id', 'uploads/p/desc-id.png');
+		await insertImage('pm-desc-key', 'uploads/p/desc-key.png');
+		await insertImage('pm-free', 'uploads/p/free.png');
+
+		const row = await makeProduct({ name: 'Produs cu media' });
+		await updateProduct(deps, row.id, {
+			coverMediaId: 'pm-cover',
+			gallery: ['pm-gallery'],
+			descriptionMd: 'detalii ![a](media:pm-desc-id) și ![b](media:uploads/p/desc-key.png)'
+		});
+
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-cover')).toBe(true);
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-gallery')).toBe(true);
+		// The description refs dangled before FIX-5 — the check only saw cover + gallery.
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-desc-id')).toBe(true);
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-desc-key')).toBe(true);
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-free')).toBe(false);
 	});
 });
 
