@@ -1,4 +1,55 @@
-# STATE — after FIX-2 (transactional writes)
+# STATE — after FIX-3 (timeouts, pool limits, stream abort)
+
+## Remediation FIX-3 (audit Theme C / resilience #2/#3/#4 — after FIX-2)
+
+- **DB pool bounded** (`db/client.ts`): `createDb(url, config?)` now takes a
+  `DbPoolConfig` defaulting to `poolConfigFromEnv(process.env)` (the app's
+  `getDb()` passes `$env/dynamic/private` explicitly). Defaults: `max` 10,
+  `connectionTimeoutMillis` 5s (a checkout that can't get a connection FAILS
+  instead of queueing forever), `idleTimeoutMillis` 30s, and a server-side
+  `statement_timeout` 30s sent in the startup packet — Postgres itself cancels
+  runaway queries. Consequences: every consumer of `createDb` (scripts, e2e,
+  specs) now has a 30s statement ceiling — a future long-running migration/
+  backfill script must pass its own config or set `DB_STATEMENT_TIMEOUT_MS`.
+  New shared helper `src/lib/server/env.ts` `positiveIntEnv(value, fallback)`
+  (framework-free) parses all the env knobs below.
+- **Every outbound call is time-bounded**; all factories keep a test seam for
+  fetch injection, all knobs live in `.env.example` (commented defaults):
+  - Resend (`email/resend.ts`): `AbortSignal.timeout` on the fetch,
+    `RESEND_TIMEOUT_MS` default 10s. A hang now surfaces through the existing
+    sender catch as a retryable `error` email_log row (webhook redelivery is
+    the retry signal, per FIX-2).
+  - Stripe (`shop/stripe-gateway.ts`): client constructed with `timeout`
+    (`STRIPE_TIMEOUT_MS`, default 20s) + `maxNetworkRetries: 2` (stripe-node
+    adds idempotency keys to retries). `createStripeGateway(key, options?)`.
+  - Anthropic (`chat/anthropic-provider.ts`): `timeout`
+    (`ANTHROPIC_TIMEOUT_MS`, default 60s) + `maxRetries: 2`. The SDK arms the
+    timer around reaching the API (headers), NOT the stream body — healthy
+    long replies are never cut off.
+- **Chat SSE aborts upstream on client disconnect**: the route builds its
+  response via `chatSseStream(chunks, abort)` (`chat/sse.ts`, exported from
+  the server barrel) whose `cancel()` fires an `AbortController`; the signal
+  travels `ChatInput.signal` → `ChatStreamOptions.signal` → the Anthropic
+  request (mock provider honors it too). On abort: the provider stream stops
+  (no tokens billed to a dead request), the assistant message is NOT
+  persisted (user message stays — accurate record), and nothing touches the
+  cancelled controller (`close()` on it would throw). Any NEW provider must
+  respect `ChatStreamOptions.signal`.
+- **Tests** (all demonstrably FAILED against the pre-fix code, verified by
+  temporarily reverting the fixes): `db/pool.spec.ts` (env parsing; pool
+  constructed with limits via `db.$client.options`; a silent TCP server that
+  accepts but never handshakes fails within the connection timeout — hung
+  before; `pg_sleep` cancelled by statement timeout — note drizzle wraps pg
+  errors, assert on the `cause` chain); resend + sender timeout specs in
+  `email.spec.ts`; `stripe-gateway.spec.ts` and Anthropic timeout/abort specs
+  in `provider.spec.ts` (hanging fetch honoring its abort signal, injected
+  via the factories' fetch seams); `sse.spec.ts` (framing, mid-stream error
+  frame, cancel aborts + stops); `chat.spec.ts` (integration: cancel mid-
+  stream → provider stops early, NO assistant row).
+- No schema changes, no new scripts. New env vars (all optional, documented):
+  `DB_POOL_MAX`, `DB_POOL_CONNECTION_TIMEOUT_MS`, `DB_POOL_IDLE_TIMEOUT_MS`,
+  `DB_STATEMENT_TIMEOUT_MS`, `RESEND_TIMEOUT_MS`, `STRIPE_TIMEOUT_MS`,
+  `ANTHROPIC_TIMEOUT_MS`.
 
 ## Remediation FIX-2 (audit Theme B / resilience #1 — after FIX-1)
 
