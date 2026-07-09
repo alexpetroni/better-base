@@ -71,13 +71,14 @@ export const verifications = pgTable(
 );
 
 /**
- * Fixed-window login rate limiting, keyed by IP + email
- * (see rate-limit.ts). Not a better-auth table.
+ * Sliding-window login rate limiting, keyed by IP + email (see rate-limit.ts,
+ * counter shape from $lib/server/rate-limit). Not a better-auth table.
  */
 export const loginAttempts = pgTable('login_attempts', {
 	id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
 	key: text('key').notNull().unique(),
 	count: integer('count').notNull(),
+	prevCount: integer('prev_count').notNull().default(0),
 	windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull()
 });
 

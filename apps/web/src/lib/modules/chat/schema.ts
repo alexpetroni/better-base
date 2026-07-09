@@ -32,12 +32,13 @@ export const chatMessages = pgTable(
 );
 
 /**
- * Fixed-window rate-limit counters, keyed `session:<id>` / `ip:<addr>` —
- * same pattern as auth's login_attempts.
+ * Sliding-window rate-limit counters, keyed `session:<id>` / `ip:<addr>` —
+ * counter shape from $lib/server/rate-limit, same as auth's login_attempts.
  */
 export const chatRateLimits = pgTable('chat_rate_limits', {
 	key: text('key').primaryKey(),
 	count: integer('count').notNull(),
+	prevCount: integer('prev_count').notNull().default(0),
 	windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull()
 });
 
