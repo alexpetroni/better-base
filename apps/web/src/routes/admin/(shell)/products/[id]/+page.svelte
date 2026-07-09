@@ -5,7 +5,9 @@
 	import { slugify } from '$lib/util/slug';
 	import { Img, type ImageSources } from '$lib/modules/media';
 	import { formatCents } from '$lib/util/money';
+	import CoverField from '$lib/components/CoverField.svelte';
 	import MediaPicker, { type LibraryImage } from '$lib/components/MediaPicker.svelte';
+	import PillarChecklist from '$lib/components/PillarChecklist.svelte';
 
 	let { data, form } = $props();
 
@@ -252,65 +254,24 @@
 	</div>
 
 	<aside class="space-y-6">
-		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
-			<h2 class="mb-2 text-sm font-semibold">{m.admin_product_cover()}</h2>
-			<input type="hidden" name="coverMediaId" value={draft.coverMediaId} />
-			{#if draft.coverThumb}
-				<Img
-					image={draft.coverThumb}
-					alt=""
-					decorative
-					class="mb-2 aspect-[4/3] w-full rounded bg-(--color-brand-soft)/20 object-cover"
-				/>
-			{:else}
-				<p data-testid="product-editor-cover-none" class="mb-2 text-sm text-(--color-ink)/60">
-					{m.admin_product_cover_none()}
-				</p>
-			{/if}
-			<div class="flex gap-2">
-				<button
-					type="button"
-					data-testid="product-editor-cover-pick"
-					class="rounded bg-(--color-brand-soft) px-3 py-1 text-sm hover:opacity-80"
-					onclick={() => (picker = 'cover')}
-				>
-					{m.admin_product_cover_pick()}
-				</button>
-				{#if draft.coverMediaId}
-					<button
-						type="button"
-						data-testid="product-editor-cover-remove"
-						class="rounded px-3 py-1 text-sm text-red-700 hover:bg-red-50"
-						onclick={() => {
-							draft.coverMediaId = '';
-							draft.coverThumb = null;
-						}}
-					>
-						{m.admin_product_cover_remove()}
-					</button>
-				{/if}
-			</div>
-		</div>
+		<CoverField
+			bind:coverMediaId={draft.coverMediaId}
+			bind:coverThumb={draft.coverThumb}
+			heading={m.admin_product_cover()}
+			noneText={m.admin_product_cover_none()}
+			pickText={m.admin_product_cover_pick()}
+			removeText={m.admin_product_cover_remove()}
+			aspectClass="aspect-[4/3]"
+			testidPrefix="product-editor"
+			onpick={() => (picker = 'cover')}
+		/>
 
-		<fieldset class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
-			<legend class="px-1 text-sm font-semibold">{m.admin_product_pillars()}</legend>
-			<ul class="space-y-1">
-				{#each data.sitePillars as pillar (pillar.slug)}
-					<li>
-						<label class="flex items-center gap-2 text-sm">
-							<input
-								type="checkbox"
-								name="pillars"
-								value={pillar.slug}
-								checked={draft.pillars.includes(pillar.slug)}
-								data-testid="product-editor-pillar-{pillar.slug}"
-							/>
-							{pillar.name}
-						</label>
-					</li>
-				{/each}
-			</ul>
-		</fieldset>
+		<PillarChecklist
+			pillars={data.sitePillars}
+			selected={draft.pillars}
+			legend={m.admin_product_pillars()}
+			testidPrefix="product-editor"
+		/>
 
 		<div class="space-y-2">
 			<button
