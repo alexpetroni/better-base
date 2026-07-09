@@ -2,6 +2,8 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages';
+	import { baseLocale, deLocalizeUrl, locales, localizeHref } from '$lib/paraglide/runtime';
+	import { canonicalUrl } from '$lib/seo';
 	import { ChatWidget } from '$lib/modules/chat';
 	import { NewsletterSignup } from '$lib/modules/crm';
 	import { CookieConsent } from '$lib/modules/gdpr';
@@ -11,7 +13,25 @@
 	// Merged page data, so a page load that mutates the cart cookie (checkout
 	// success) can override the count the layout load read before the mutation.
 	const cartCount = $derived(page.data.cartCount ?? 0);
+
+	// hreflang alternates for every public page: the locale-less (ro, base)
+	// pathname localized per locale, absolute via PUBLIC_SITE_URL. x-default
+	// points at the base locale.
+	const basePath = $derived(deLocalizeUrl(page.url).pathname);
+	const alternates = $derived([
+		...locales.map((locale) => ({
+			hreflang: locale as string,
+			href: canonicalUrl(localizeHref(basePath, { locale }))
+		})),
+		{ hreflang: 'x-default', href: canonicalUrl(localizeHref(basePath, { locale: baseLocale })) }
+	]);
 </script>
+
+<svelte:head>
+	{#each alternates as alt (alt.hreflang)}
+		<link rel="alternate" hreflang={alt.hreflang} href={alt.href} />
+	{/each}
+</svelte:head>
 
 <header class="border-b border-(--color-brand-soft) bg-(--color-brand) text-white">
 	<div class="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
@@ -54,7 +74,7 @@
 <footer class="mt-12 border-t border-(--color-brand-soft) bg-(--color-brand-soft)/20">
 	<div class="mx-auto max-w-4xl px-4 py-10">
 		<NewsletterSignup source="footer" />
-		<nav aria-label="Linkuri legale" class="mt-8">
+		<nav aria-label={m.footer_legal_aria()} class="mt-8">
 			<ul class="flex flex-wrap gap-4 text-sm">
 				{#each data.site.footerLinks as link (link.href)}
 					<li>

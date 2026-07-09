@@ -1,5 +1,7 @@
 import { getDb } from '$lib/db';
 import { listPublishedForSitemap } from '$lib/modules/blog/server';
+import { listPages } from '$lib/modules/pages/server';
+import { listVisibleProducts } from '$lib/modules/shop/server';
 import { canonicalUrl } from '$lib/seo';
 import { getSite } from '$lib/server/site';
 import type { RequestHandler } from './$types';
@@ -10,14 +12,32 @@ function xmlEscape(value: string): string {
 
 export const GET: RequestHandler = async () => {
 	const site = getSite();
-	const articles = await listPublishedForSitemap({ db: getDb() }, site.pillars);
+	const db = getDb();
+	const [articles, products, pages] = await Promise.all([
+		listPublishedForSitemap({ db }, site.pillars),
+		listVisibleProducts({ db }, { pillarSlugs: site.pillars }),
+		listPages({ db })
+	]);
 
-	const staticPaths = ['/', '/blog', ...site.pillars.map((slug) => `/sanatate/${slug}`)];
+	const staticPaths = [
+		'/',
+		'/blog',
+		'/magazin',
+		...site.pillars.map((slug) => `/sanatate/${slug}`)
+	];
 	const entries = [
 		...staticPaths.map((path) => ({ loc: canonicalUrl(path), lastmod: null as string | null })),
 		...articles.map((a) => ({
 			loc: canonicalUrl(`/blog/${a.slug}`),
 			lastmod: a.updatedAt.toISOString()
+		})),
+		...products.map(({ product }) => ({
+			loc: canonicalUrl(`/magazin/${product.slug}`),
+			lastmod: product.updatedAt.toISOString()
+		})),
+		...pages.map((p) => ({
+			loc: canonicalUrl(`/pagini/${p.slug}`),
+			lastmod: p.updatedAt.toISOString()
 		}))
 	];
 

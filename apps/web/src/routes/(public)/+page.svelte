@@ -1,13 +1,18 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
+	import Seo from '$lib/components/Seo.svelte';
+	import { canonicalUrl } from '$lib/seo';
 
 	let { data } = $props();
 </script>
 
-<svelte:head>
-	<title>{data.site.name}</title>
-</svelte:head>
+<Seo
+	title={`${data.site.name} — ${m.home_tagline()}`}
+	description={m.home_seo_description()}
+	canonical={canonicalUrl('/')}
+	siteName={data.site.name}
+/>
 
 <h1 class="mb-2 text-3xl font-bold">{data.site.name}</h1>
 <p class="mb-8 text-lg">{m.home_tagline()}</p>
