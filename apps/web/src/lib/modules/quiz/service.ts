@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FormConfig } from 'formcomp';
 import type { Db } from '../../db/client.ts';
@@ -236,10 +237,22 @@ export function sanitizeSubmittedAnswers(raw: unknown, form: FormConfig): Stored
 	return out;
 }
 
+/**
+ * Idempotency key stored in `quiz_results.client_token`: the visitor's
+ * per-attempt token scoped by a digest of the sanitized answers. A retried
+ * POST (refresh, network replay, double-submit) carries the same token and
+ * answers → same key → the original row is returned; going back and
+ * resubmitting EDITED answers changes the digest → a fresh result.
+ */
+export function submissionKey(clientToken: string, answers: StoredAnswer[]): string {
+	const digest = createHash('sha256').update(JSON.stringify(answers)).digest('hex');
+	return `${clientToken}.${digest}`;
+}
+
 /** Score and store one submission. The caller decides whether drafts may submit. */
 export async function submitQuiz(
 	deps: QuizDeps,
-	input: { quizId: string; answers: StoredAnswer[] }
+	input: { quizId: string; answers: StoredAnswer[]; clientToken?: string }
 ): Promise<QuizOpResult<QuizResultRow>> {
 	const [quiz] = await deps.db.select().from(quizzes).where(eq(quizzes.id, input.quizId));
 	if (!quiz) return { ok: false, error: 'not-found' };
@@ -247,6 +260,7 @@ export async function submitQuiz(
 		return { ok: false, error: 'invalid-scoring', detail: 'no bands' };
 	}
 	const profile = scoreQuiz(quiz.formSchema, quiz.scoring, answersFromSubmitAnswers(input.answers));
+	const clientToken = input.clientToken ? submissionKey(input.clientToken, input.answers) : null;
 	const [row] = await deps.db
 		.insert(quizResults)
 		.values({
@@ -254,10 +268,22 @@ export async function submitQuiz(
 			quizId: quiz.id,
 			answers: input.answers,
 			score: Math.round(profile.score),
-			profile
+			profile,
+			clientToken
 		})
+		.onConflictDoNothing({ target: [quizResults.quizId, quizResults.clientToken] })
 		.returning();
-	return { ok: true, value: row };
+	if (row) return { ok: true, value: row };
+	// Conflict: this exact attempt was already stored — return the original row.
+	const [existing] = await deps.db
+		.select()
+		.from(quizResults)
+		.where(and(eq(quizResults.quizId, quiz.id), eq(quizResults.clientToken, clientToken!)));
+	// No row despite the conflict only if the quiz (and its results) were
+	// deleted between the two statements.
+	return existing
+		? { ok: true, value: existing }
+		: { ok: false, error: 'not-found', detail: 'result gone after conflict' };
 }
 
 export interface ResultWithQuiz {

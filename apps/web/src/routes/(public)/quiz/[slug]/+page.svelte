@@ -22,7 +22,12 @@
 			submitErrorMessage: m.quiz_submit_error(),
 			...data.quiz.formSchema.settings
 		},
-		submit: { url: `/quiz/${data.quiz.slug}/submit` }
+		submit: {
+			url: `/quiz/${data.quiz.slug}/submit`,
+			// Per-attempt idempotency token: a retried/replayed POST of the same
+			// answers must not create a second result row (server dedupes on it).
+			headers: { 'x-quiz-attempt': crypto.randomUUID() }
+		}
 	});
 	const state = $derived(
 		createFormState(config, { storageKey: `quiz-${data.quiz.slug}`, version: data.quiz.version })

@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import type { FormConfig } from 'formcomp';
 import { pillars } from '../../db/schema/core.ts';
 import { users } from '../auth/schema.ts';
@@ -61,11 +61,18 @@ export const quizResults = pgTable(
 		answers: jsonb('answers').notNull().$type<StoredAnswer[]>().default([]),
 		score: integer('score').notNull(),
 		profile: jsonb('profile').notNull().$type<QuizProfile>(),
+		/**
+		 * Idempotency key for the public submit endpoint: per-attempt client
+		 * token + answers digest (see `submitQuiz`). Null for writers that have
+		 * no retry problem (nulls never collide in the unique index).
+		 */
+		clientToken: text('client_token'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [
 		index('quiz_results_quiz_id_created_at_idx').on(table.quizId, table.createdAt),
-		index('quiz_results_subscriber_id_idx').on(table.subscriberId)
+		index('quiz_results_subscriber_id_idx').on(table.subscriberId),
+		uniqueIndex('quiz_results_quiz_id_client_token_uq').on(table.quizId, table.clientToken)
 	]
 );
 

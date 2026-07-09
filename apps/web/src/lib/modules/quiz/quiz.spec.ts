@@ -208,6 +208,39 @@ describe('submission', () => {
 		expect(latest.map((r) => r.id)).toContain(submitted.value.id);
 	});
 
+	it('a double-submit with the same attempt token stores exactly one result (audit resilience #8)', async () => {
+		const quiz = await makePublishedQuiz('Idempotent');
+		const token = crypto.randomUUID();
+
+		// Race the duplicates like a real replay would — not one after the other.
+		const results = await Promise.all(
+			Array.from({ length: 5 }, () =>
+				submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS, clientToken: token })
+			)
+		);
+		const ids = results.map((r) => (r.ok ? r.value.id : r.error));
+		expect(new Set(ids).size).toBe(1);
+
+		// And a plain sequential refresh-resubmit returns the original row too.
+		const again = await submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS, clientToken: token });
+		expect(again.ok && again.value.id).toBe(ids[0]);
+
+		const stored = await db.select().from(quizResults).where(eq(quizResults.quizId, quiz.id));
+		expect(stored).toHaveLength(1);
+	});
+
+	it('the same token with EDITED answers is a new attempt; no token means no dedup', async () => {
+		const quiz = await makePublishedQuiz('Atenuare');
+		const token = crypto.randomUUID();
+		const first = await submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS, clientToken: token });
+		const edited = await submitQuiz(deps, { quizId: quiz.id, answers: [], clientToken: token });
+		expect(first.ok && edited.ok && first.value.id !== edited.value.id).toBe(true);
+
+		const a = await submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS });
+		const b = await submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS });
+		expect(a.ok && b.ok && a.value.id !== b.value.id).toBe(true);
+	});
+
 	it('lists quizzes with result counts for the admin', async () => {
 		const quiz = await makePublishedQuiz('Numărătoare');
 		await submitQuiz(deps, { quizId: quiz.id, answers: ANSWERS });

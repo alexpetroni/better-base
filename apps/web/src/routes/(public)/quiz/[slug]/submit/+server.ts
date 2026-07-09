@@ -6,6 +6,10 @@ import type { RequestHandler } from './$types';
 
 const MAX_BODY_BYTES = 256 * 1024;
 
+// Per-attempt idempotency token sent by the quiz page (a browser uuid). Bound
+// in length/alphabet so it can't smuggle arbitrary data into the DB.
+const ATTEMPT_TOKEN = /^[A-Za-z0-9-]{8,64}$/;
+
 /** Receives formcomp's submit POST, scores + stores, and redirects to the result page. */
 export const POST: RequestHandler = async ({ params, request }) => {
 	const db = getDb();
@@ -23,7 +27,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 	const rawAnswers = (body as { answers?: unknown } | null)?.answers;
 	const answers = sanitizeSubmittedAnswers(rawAnswers, found.quiz.formSchema);
-	const submitted = await submitQuiz({ db }, { quizId: found.quiz.id, answers });
+	// A double-submit/refresh replays the same token + answers → same result
+	// row. Clients without the header (or with a malformed one) just get no
+	// idempotency, like before.
+	const attemptToken = request.headers.get('x-quiz-attempt');
+	const clientToken = attemptToken && ATTEMPT_TOKEN.test(attemptToken) ? attemptToken : undefined;
+	const submitted = await submitQuiz({ db }, { quizId: found.quiz.id, answers, clientToken });
 	if (!submitted.ok) error(500, 'Could not store the submission');
 
 	return json({ redirectUrl: `/quiz/${params.slug}/rezultat/${submitted.value.id}` });
