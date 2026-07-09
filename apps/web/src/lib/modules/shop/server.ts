@@ -28,7 +28,11 @@ export type {
 	StripeGateway
 } from './gateway.ts';
 export { productsMediaReferenceCheck } from './media-ref.ts';
-export { createMockStripeGateway, MOCK_CHECKOUT_URL_BASE, type MockStripeGateway } from './mock-gateway.ts';
+export {
+	createMockStripeGateway,
+	MOCK_CHECKOUT_URL_BASE,
+	type MockStripeGateway
+} from './mock-gateway.ts';
 export { orderItems, orders, productPillars, products } from './schema.ts';
 export {
 	createProduct,

@@ -60,6 +60,10 @@ export async function syncProductToStripe(deps: SyncDeps, productId: string): Pr
 			.returning();
 		return { ok: true, product: updated, priceChanged };
 	} catch (err) {
-		return { ok: false, error: 'gateway', detail: err instanceof Error ? err.message : String(err) };
+		return {
+			ok: false,
+			error: 'gateway',
+			detail: err instanceof Error ? err.message : String(err)
+		};
 	}
 }

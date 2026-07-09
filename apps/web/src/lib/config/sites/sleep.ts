@@ -16,7 +16,8 @@ export const sleepSite: SiteConfig = {
 	nav: [
 		{ label: 'Acasă', href: '/' },
 		{ label: 'Somn', href: '/sanatate/somn' },
-		{ label: 'Blog', href: '/blog' }
+		{ label: 'Blog', href: '/blog' },
+		{ label: 'Magazin', href: '/magazin' }
 	],
 	chatPersonaKey: 'sleep-coach',
 	email: {

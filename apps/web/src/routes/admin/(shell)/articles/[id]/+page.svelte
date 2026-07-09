@@ -4,8 +4,7 @@
 	import { m } from '$lib/paraglide/messages';
 	import { slugify } from '$lib/modules/blog';
 	import { Img, type ImageSources } from '$lib/modules/media';
-	import MediaPicker from './MediaPicker.svelte';
-	import type { LibraryImage } from './+page.server';
+	import MediaPicker, { type LibraryImage } from '$lib/components/MediaPicker.svelte';
 
 	let { data, form } = $props();
 

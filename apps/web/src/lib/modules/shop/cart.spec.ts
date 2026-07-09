@@ -34,9 +34,9 @@ describe('parseCartCookie', () => {
 			{ productId: 'a', qty: CART_MAX_QTY }
 		]);
 		expect(parseCartCookie('[{"productId":"a","qty":0.5}]')).toEqual([{ productId: 'a', qty: 1 }]);
-		expect(
-			parseCartCookie('[{"productId":"a","qty":1},{"productId":"a","qty":9}]')
-		).toEqual([{ productId: 'a', qty: 1 }]);
+		expect(parseCartCookie('[{"productId":"a","qty":1},{"productId":"a","qty":9}]')).toEqual([
+			{ productId: 'a', qty: 1 }
+		]);
 		const overflow = JSON.stringify(
 			Array.from({ length: CART_MAX_LINES + 3 }, (_, i) => ({ productId: `p${i}`, qty: 1 }))
 		);

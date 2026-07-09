@@ -1,7 +1,19 @@
+<script lang="ts" module>
+	import type { ImageSources } from '$lib/modules/media';
+
+	/** One pickable library image, thumb pre-signed server-side. */
+	export interface LibraryImage {
+		id: string;
+		key: string;
+		filename: string;
+		alt: string;
+		thumb: ImageSources;
+	}
+</script>
+
 <script lang="ts">
 	import { m } from '$lib/paraglide/messages';
 	import { Img } from '$lib/modules/media';
-	import type { LibraryImage } from './+page.server';
 
 	let {
 		items,

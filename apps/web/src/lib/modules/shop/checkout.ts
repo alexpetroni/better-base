@@ -111,7 +111,9 @@ export async function loadCartDetails(
 	return {
 		lines,
 		totalCents: cartTotalCents(
-			lines.filter((l) => l.available).map((l) => ({ priceCents: l.product.priceCents, qty: l.qty }))
+			lines
+				.filter((l) => l.available)
+				.map((l) => ({ priceCents: l.product.priceCents, qty: l.qty }))
 		),
 		currency: lines[0]?.product.currency ?? 'ron'
 	};
@@ -161,6 +163,10 @@ export async function createCheckoutFromCart(
 		});
 		return { ok: true, sessionId: session.id, url: session.url };
 	} catch (err) {
-		return { ok: false, error: 'gateway', detail: err instanceof Error ? err.message : String(err) };
+		return {
+			ok: false,
+			error: 'gateway',
+			detail: err instanceof Error ? err.message : String(err)
+		};
 	}
 }

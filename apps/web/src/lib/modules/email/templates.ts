@@ -142,7 +142,8 @@ ${rows}
 		`Comanda ${data.orderId} a fost înregistrată și plătită.`,
 		'',
 		...data.items.map(
-			(item) => `${item.name} ×${item.qty} — ${formatCents(item.priceCents * item.qty, data.currency)}`
+			(item) =>
+				`${item.name} ×${item.qty} — ${formatCents(item.priceCents * item.qty, data.currency)}`
 		),
 		'',
 		`Total: ${formatCents(data.totalCents, data.currency)}`,

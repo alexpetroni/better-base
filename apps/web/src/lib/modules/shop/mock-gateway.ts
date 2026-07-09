@@ -27,7 +27,10 @@ export function createMockStripeGateway(): MockStripeGateway {
 	let seq = 0;
 	const next = (prefix: string) => `${prefix}_mock_${++seq}`;
 	const products = new Map<string, GatewayProductInput>();
-	const prices = new Map<string, { productId: string; unitAmountCents: number; currency: string }>();
+	const prices = new Map<
+		string,
+		{ productId: string; unitAmountCents: number; currency: string }
+	>();
 	const archivedPrices = new Set<string>();
 	const sessions = new Map<string, CheckoutSessionView & { input: CheckoutSessionInput }>();
 

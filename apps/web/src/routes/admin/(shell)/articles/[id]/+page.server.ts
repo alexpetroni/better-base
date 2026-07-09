@@ -10,18 +10,10 @@ import {
 	type ArticlePatch,
 	type BlogResult
 } from '$lib/modules/blog/server';
-import type { ImageSources } from '$lib/modules/media';
-import { getImgproxyConfig, imgSources, listMedia } from '$lib/modules/media/server';
+import { getImgproxyConfig, imgSources } from '$lib/modules/media/server';
+import { loadLibraryImages } from '$lib/server/media-library';
 import { getSite } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
-
-export interface LibraryImage {
-	id: string;
-	key: string;
-	filename: string;
-	alt: string;
-	thumb: ImageSources;
-}
 
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getArticle({ db: getDb() }, params.id);
@@ -33,15 +25,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		name: PILLARS_BY_SLUG.get(slug)?.name ?? slug
 	}));
 
-	const library: LibraryImage[] = (await listMedia({ db: getDb() }))
-		.filter((row) => row.kind === 'image' && row.key)
-		.map((row) => ({
-			id: row.id,
-			key: row.key!,
-			filename: row.filename ?? '',
-			alt: row.alt,
-			thumb: imgSources(row, { w: 240, h: 180, fit: 'fill' })
-		}));
+	const library = await loadLibraryImages();
 
 	return {
 		article: found.article,

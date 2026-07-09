@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { m } from '$lib/paraglide/messages';
 	import { NewsletterSignup } from '$lib/modules/crm';
 
 	let { data, children } = $props();
@@ -9,7 +10,7 @@
 	<div class="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
 		<a href={resolve('/')} class="text-lg font-bold">{data.site.name}</a>
 		<nav>
-			<ul class="flex gap-4">
+			<ul class="flex items-center gap-4">
 				{#each data.site.nav as item (item.href)}
 					<li>
 						<!-- Static config hrefs; cast to a static route type because the Pathname
@@ -17,6 +18,23 @@
 						<a href={resolve(item.href as '/')} class="hover:underline">{item.label}</a>
 					</li>
 				{/each}
+				<li>
+					<a
+						href={resolve('/(public)/cos')}
+						data-testid="cart-link"
+						class="flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20"
+					>
+						{m.shop_cart_link()}
+						{#if data.cartCount > 0}
+							<span
+								data-testid="cart-count"
+								class="rounded-full bg-(--color-accent) px-2 text-sm font-semibold"
+							>
+								{data.cartCount}
+							</span>
+						{/if}
+					</a>
+				</li>
 			</ul>
 		</nav>
 	</div>

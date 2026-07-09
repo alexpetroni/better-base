@@ -185,10 +185,7 @@ export async function getOrderWithItems(deps: Pick<WebhookDeps, 'db'>, orderId: 
 }
 
 export async function getOrderBySessionId(deps: Pick<WebhookDeps, 'db'>, sessionId: string) {
-	const [order] = await deps.db
-		.select()
-		.from(orders)
-		.where(eq(orders.stripeSessionId, sessionId));
+	const [order] = await deps.db.select().from(orders).where(eq(orders.stripeSessionId, sessionId));
 	if (!order) return null;
 	const items = await deps.db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
 	return { order, items };

@@ -171,8 +171,13 @@ async function pillarSlugsFor(db: Db, productId: string): Promise<string[]> {
 	return rows.map((r) => r.slug);
 }
 
-async function mediaFor(db: Db, product: ProductRow): Promise<Pick<ProductWithPillars, 'cover' | 'galleryMedia'>> {
-	const ids = [...new Set([product.coverMediaId, ...product.gallery].filter((v): v is string => !!v))];
+async function mediaFor(
+	db: Db,
+	product: ProductRow
+): Promise<Pick<ProductWithPillars, 'cover' | 'galleryMedia'>> {
+	const ids = [
+		...new Set([product.coverMediaId, ...product.gallery].filter((v): v is string => !!v))
+	];
 	const rows = ids.length ? await db.select().from(media).where(inArray(media.id, ids)) : [];
 	const byId = new Map(rows.map((r) => [r.id, r]));
 	return {

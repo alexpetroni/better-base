@@ -55,9 +55,7 @@ export function serializeCart(items: CartItem[]): string {
 export function addToCart(items: CartItem[], productId: string, qty = 1): CartItem[] {
 	const existing = items.find((i) => i.productId === productId);
 	if (existing) {
-		return items.map((i) =>
-			i.productId === productId ? { ...i, qty: clampQty(i.qty + qty) } : i
-		);
+		return items.map((i) => (i.productId === productId ? { ...i, qty: clampQty(i.qty + qty) } : i));
 	}
 	if (items.length >= CART_MAX_LINES) return items;
 	return [...items, { productId, qty: clampQty(qty) }];
