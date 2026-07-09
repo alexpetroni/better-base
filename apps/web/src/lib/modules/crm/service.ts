@@ -108,23 +108,16 @@ export type NewsletterSignupOutcome =
 	| { ok: false; error: 'invalid-email' };
 
 /**
- * Newsletter opt-in: record consent (timestamped, sourced), then start double
- * opt-in with a signed confirm link — unless this address already confirmed.
- * The idempotency key includes the consent timestamp: a NEW signup event may
- * re-send the confirm email (fresh token), a retried handler may not.
+ * Send the double opt-in confirm email for a subscriber with (unconfirmed)
+ * newsletter consent. The idempotency key includes the consent timestamp —
+ * stable across handler retries (applyConsents never re-stamps an unchanged
+ * grant), fresh when consent is newly (re-)granted.
  */
-export async function requestNewsletterSignup(
+export async function sendNewsletterConfirmEmail(
 	deps: NewsletterSignupDeps,
-	input: NewsletterSignupInput
-): Promise<NewsletterSignupOutcome> {
-	const upserted = await upsertSubscriber(deps, {
-		...input,
-		grants: { newsletter: true }
-	});
-	if (!upserted.ok) return upserted;
-	const subscriber = upserted.value;
-	if (subscriber.confirmedAt) return { ok: true, subscriber, confirm: 'already-confirmed' };
-
+	subscriber: SubscriberRow
+): Promise<SendEmailOutcome['status'] | 'already-confirmed'> {
+	if (subscriber.confirmedAt) return 'already-confirmed';
 	const token = signToken(deps.secret, {
 		sub: subscriber.id,
 		purpose: NEWSLETTER_CONFIRM_PURPOSE,
@@ -139,7 +132,25 @@ export async function requestNewsletterSignup(
 		},
 		idempotencyKey: `newsletter-confirm:${subscriber.id}:${subscriber.consents.newsletter?.at ?? ''}`
 	});
-	return { ok: true, subscriber, confirm: outcome.status };
+	return outcome.status;
+}
+
+/**
+ * Newsletter opt-in: record consent (timestamped, sourced), then start double
+ * opt-in with a signed confirm link — unless this address already confirmed.
+ */
+export async function requestNewsletterSignup(
+	deps: NewsletterSignupDeps,
+	input: NewsletterSignupInput
+): Promise<NewsletterSignupOutcome> {
+	const upserted = await upsertSubscriber(deps, {
+		...input,
+		grants: { newsletter: true }
+	});
+	if (!upserted.ok) return upserted;
+	const subscriber = upserted.value;
+	const confirm = await sendNewsletterConfirmEmail(deps, subscriber);
+	return { ok: true, subscriber, confirm };
 }
 
 export type ConfirmOutcome =

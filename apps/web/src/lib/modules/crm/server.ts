@@ -10,6 +10,7 @@ export {
 	NEWSLETTER_CONFIRM_PURPOSE,
 	normalizeEmail,
 	requestNewsletterSignup,
+	sendNewsletterConfirmEmail,
 	subscribersCsv,
 	unsubscribeByToken,
 	upsertSubscriber,

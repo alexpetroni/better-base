@@ -36,6 +36,14 @@ describe('applyConsents', () => {
 		});
 	});
 
+	it('re-affirming an unchanged consent keeps the original record', () => {
+		const current: Consents = {
+			newsletter: { granted: true, at: NOW.toISOString(), source: 'footer' }
+		};
+		const next = applyConsents(current, { newsletter: true }, 'quiz:x', LATER);
+		expect(next.newsletter).toEqual(current.newsletter);
+	});
+
 	it('does not mutate the input object', () => {
 		const current: Consents = {
 			newsletter: { granted: true, at: NOW.toISOString(), source: 'footer' }

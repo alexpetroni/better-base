@@ -33,6 +33,10 @@ export function applyConsents(
 	for (const key of CONSENT_KEYS) {
 		const granted = changes[key];
 		if (granted === undefined) continue;
+		// Re-affirming an unchanged state is not a consent CHANGE: the original
+		// record (the proof of when consent was first given) is kept, and
+		// retried handlers stay idempotent because the timestamp is stable.
+		if (current[key]?.granted === granted) continue;
 		next[key] = { granted, at: now.toISOString(), source };
 	}
 	return next;
