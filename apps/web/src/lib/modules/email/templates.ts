@@ -1,3 +1,5 @@
+import { formatCents } from '../shop/money.ts';
+
 /**
  * Email templates as typed functions: each key has its own data shape and
  * returns subject + html + text (ro copy). Pure — unit-testable offline.
@@ -23,13 +25,22 @@ export interface TemplateData {
 		siteName: string;
 		confirmUrl: string;
 	};
+	'order-confirmation': {
+		siteName: string;
+		orderId: string;
+		/** Snapshots as sold; prices are unit prices in integer cents. */
+		items: Array<{ name: string; qty: number; priceCents: number }>;
+		totalCents: number;
+		currency: string;
+	};
 }
 
 export type TemplateKey = keyof TemplateData;
 
 export const EMAIL_TEMPLATE_KEYS = [
 	'quiz-result',
-	'newsletter-confirm'
+	'newsletter-confirm',
+	'order-confirmation'
 ] as const satisfies readonly TemplateKey[];
 
 export function escapeHtml(value: string): string {
@@ -101,6 +112,48 @@ function renderNewsletterConfirm(data: TemplateData['newsletter-confirm']): Rend
 	return { subject, html, text };
 }
 
+function renderOrderConfirmation(data: TemplateData['order-confirmation']): RenderedEmail {
+	const subject = `Comanda ta la ${data.siteName} a fost înregistrată`;
+	const rows = data.items
+		.map(
+			(item) => `<tr>
+<td style="padding:4px 8px 4px 0;">${escapeHtml(item.name)}</td>
+<td style="padding:4px 8px;text-align:center;">×${item.qty}</td>
+<td style="padding:4px 0;text-align:right;">${escapeHtml(formatCents(item.priceCents * item.qty, data.currency))}</td>
+</tr>`
+		)
+		.join('\n');
+	const html = htmlShell(
+		data.siteName,
+		`<h1 style="font-size:20px;margin:0 0 16px;">Îți mulțumim pentru comandă!</h1>
+<p style="margin:0 0 16px;">Comanda <strong>${escapeHtml(data.orderId)}</strong> a fost înregistrată și plătită.</p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+${rows}
+<tr>
+<td colspan="2" style="padding:8px 8px 0 0;border-top:1px solid #e5e7eb;"><strong>Total</strong></td>
+<td style="padding:8px 0 0;border-top:1px solid #e5e7eb;text-align:right;"><strong>${escapeHtml(formatCents(data.totalCents, data.currency))}</strong></td>
+</tr>
+</table>
+<p style="margin:24px 0 0;">Te anunțăm când comanda pleacă spre tine.</p>`
+	);
+	const text = [
+		'Îți mulțumim pentru comandă!',
+		'',
+		`Comanda ${data.orderId} a fost înregistrată și plătită.`,
+		'',
+		...data.items.map(
+			(item) => `${item.name} ×${item.qty} — ${formatCents(item.priceCents * item.qty, data.currency)}`
+		),
+		'',
+		`Total: ${formatCents(data.totalCents, data.currency)}`,
+		'',
+		'Te anunțăm când comanda pleacă spre tine.',
+		'',
+		data.siteName
+	].join('\n');
+	return { subject, html, text };
+}
+
 export function renderEmailTemplate<K extends TemplateKey>(
 	template: K,
 	data: TemplateData[K]
@@ -110,6 +163,8 @@ export function renderEmailTemplate<K extends TemplateKey>(
 			return renderQuizResult(data as TemplateData['quiz-result']);
 		case 'newsletter-confirm':
 			return renderNewsletterConfirm(data as TemplateData['newsletter-confirm']);
+		case 'order-confirmation':
+			return renderOrderConfirmation(data as TemplateData['order-confirmation']);
 		default:
 			throw new Error(`Unknown email template "${template}"`);
 	}
