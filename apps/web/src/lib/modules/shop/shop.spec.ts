@@ -130,9 +130,7 @@ describe('public visibility (active + tagged to a site pillar)', () => {
 
 	it('getProductBySlug hides non-active and foreign-pillar products unless includeHidden', async () => {
 		const draft = await makeProduct({ name: 'Slug ciornă', status: 'draft' });
-		expect(
-			await getProductBySlug(deps, draft.slug, { sitePillarSlugs: SLEEP_PILLARS })
-		).toBeNull();
+		expect(await getProductBySlug(deps, draft.slug, { sitePillarSlugs: SLEEP_PILLARS })).toBeNull();
 		const admin = await getProductBySlug(deps, draft.slug, {
 			sitePillarSlugs: SLEEP_PILLARS,
 			includeHidden: true
@@ -210,12 +208,16 @@ describe('cart details and checkout session', () => {
 		const b = await makeProduct({ name: 'Coș B', priceCents: 12550 });
 		const out = await makeProduct({ name: 'Coș epuizat', stock: 0 });
 
-		const details = await loadCartDetails({ db }, [
-			{ productId: a.id, qty: 2 },
-			{ productId: b.id, qty: 1 },
-			{ productId: out.id, qty: 1 },
-			{ productId: 'missing-product', qty: 3 }
-		], SLEEP_PILLARS);
+		const details = await loadCartDetails(
+			{ db },
+			[
+				{ productId: a.id, qty: 2 },
+				{ productId: b.id, qty: 1 },
+				{ productId: out.id, qty: 1 },
+				{ productId: 'missing-product', qty: 3 }
+			],
+			SLEEP_PILLARS
+		);
 
 		// The missing product is dropped; the out-of-stock one is kept but flagged.
 		expect(details.lines).toHaveLength(3);
@@ -372,10 +374,7 @@ describe('webhook: checkout.session.completed', () => {
 		// Tracked stock decremented; untracked left null.
 		const [afterTracked] = await db.select().from(products).where(eq(products.id, tracked.id));
 		expect(afterTracked.stock).toBe(3);
-		const [afterUntracked] = await db
-			.select()
-			.from(products)
-			.where(eq(products.id, untracked.id));
+		const [afterUntracked] = await db.select().from(products).where(eq(products.id, untracked.id));
 		expect(afterUntracked.stock).toBeNull();
 
 		// Exactly one order-confirmation email, dry-run, keyed on the order id.
@@ -399,10 +398,7 @@ describe('webhook: checkout.session.completed', () => {
 		const second = await processStripeEvent(webhookDeps, event);
 		expect(second.kind).toBe('duplicate-session');
 
-		const rows = await db
-			.select()
-			.from(orders)
-			.where(eq(orders.stripeSessionId, 'cs_duplicate'));
+		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_duplicate'));
 		expect(rows).toHaveLength(1);
 		const items = await db.select().from(orderItems).where(eq(orderItems.orderId, rows[0].id));
 		expect(items).toHaveLength(1);
