@@ -76,6 +76,13 @@ export function createStorage(cfg: StorageConfig) {
 			);
 		},
 
+		/** Direct server-side upload (seeds/scripts; browsers use presigned PUTs). */
+		async putObject(key: string, body: Uint8Array | string, mime: string): Promise<void> {
+			await client.send(
+				new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: mime })
+			);
+		},
+
 		/** Object metadata, or null when the key does not exist. */
 		async statObject(key: string): Promise<{ size: number; mime: string | undefined } | null> {
 			try {

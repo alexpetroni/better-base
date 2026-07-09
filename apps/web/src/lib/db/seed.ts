@@ -1,9 +1,13 @@
 import { eq } from 'drizzle-orm';
 import { PILLARS_BY_SLUG } from '../config/pillars.ts';
 import { articlePillars, articles } from '../modules/blog/schema.ts';
+import { media } from '../modules/media/schema.ts';
+import type { Storage } from '../modules/media/storage.ts';
 import { quizzes } from '../modules/quiz/schema.ts';
 import { SLEEP_QUIZ_SEED } from '../modules/quiz/seed-quiz.ts';
 import { validateForPublish } from '../modules/quiz/validate.ts';
+import { productPillars, products } from '../modules/shop/schema.ts';
+import { DEMO_PRODUCTS } from '../modules/shop/seed-products.ts';
 import type { Db } from './client.ts';
 import { pillars } from './schema/core.ts';
 
@@ -98,6 +102,61 @@ export async function seedDemoQuiz(db: Db): Promise<string> {
 		.values({ id, ...values })
 		.onConflictDoUpdate({ target: quizzes.slug, set: { ...values, updatedAt: new Date() } });
 	return SLEEP_QUIZ_SEED.slug;
+}
+
+/**
+ * Three active demo products (ro), tagged `somn`, with SVG placeholder
+ * images uploaded to storage. Idempotent: fixed media/product ids + fixed
+ * storage keys + upsert-by-slug; re-running never duplicates.
+ */
+export async function seedDemoProducts(db: Db, storage: Storage): Promise<number> {
+	const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
+	if (!somn) throw new Error('Cannot seed demo products: the "somn" pillar is not seeded');
+
+	for (const demo of DEMO_PRODUCTS) {
+		for (const image of [demo.cover, ...demo.gallery]) {
+			const bytes = Buffer.from(image.svg, 'utf8');
+			await storage.putObject(image.key, bytes, 'image/svg+xml');
+			await db
+				.insert(media)
+				.values({
+					id: image.id,
+					kind: 'image',
+					key: image.key,
+					filename: image.filename,
+					mime: 'image/svg+xml',
+					size: bytes.byteLength,
+					width: image.width,
+					height: image.height,
+					alt: image.alt
+				})
+				.onConflictDoUpdate({
+					target: media.id,
+					set: { alt: image.alt, filename: image.filename, size: bytes.byteLength }
+				});
+		}
+
+		const values = {
+			slug: demo.slug,
+			name: demo.name,
+			descriptionMd: demo.descriptionMd,
+			priceCents: demo.priceCents,
+			stock: demo.stock,
+			status: 'active' as const,
+			coverMediaId: demo.cover.id,
+			gallery: demo.gallery.map((g) => g.id)
+		};
+		const [row] = await db
+			.insert(products)
+			.values({ id: demo.id, ...values })
+			.onConflictDoUpdate({ target: products.slug, set: { ...values, updatedAt: new Date() } })
+			.returning();
+		await db
+			.insert(productPillars)
+			.values({ productId: row.id, pillarId: somn.id })
+			.onConflictDoNothing();
+	}
+	return DEMO_PRODUCTS.length;
 }
 
 export async function seedDemoArticles(db: Db): Promise<number> {
