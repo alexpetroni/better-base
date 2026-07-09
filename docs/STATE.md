@@ -1,4 +1,4 @@
-# STATE — after Phase 5 (Shop: products, cart, Stripe Checkout, orders)
+# STATE — after Phase 6 (Chat: pillar-persona assistant)
 
 ## What exists
 
@@ -370,6 +370,60 @@ filename, mime, size}` (validates, returns `{key, uploadUrl}`) → browser PUTs
   binaries in the repo; fixed ids/keys, idempotent — `seed-products.ts`).
   NOTE: seeding needs MinIO up (it PUTs the SVGs).
 
+## Chat (Phase 6)
+
+- **modules/chat** (`apps/web/src/lib/modules/chat/`, split barrels):
+  - `$lib/modules/chat` (universal): `ChatWidget`/`ChatPanel` components, the
+    `ChatProvider`/`ChatMessage` types, pure helpers (`selectChatProvider`,
+    `validateChatMessage` ≤2000 chars, `capHistory` last 20, `mockReplyFor`)
+    and `CHAT_ERRORS` (ro API error copy the widget renders verbatim).
+  - `$lib/modules/chat/server`: schema, `handleChatMessage`, token helpers and
+    the env-bound `getChatProvider()` singleton. The barrel calls it at module
+    init and `hooks.server.ts` imports it, so `CHAT_PROVIDER=anthropic` without
+    `ANTHROPIC_API_KEY` refuses to boot (fail fast, never a silent fallback).
+- **Providers**: `MockChatProvider` — deterministic keyword-based canned ro
+  answers (somn/salut/test keywords + generic fallback, all with the
+  no-medical-advice stance), streams word chunks; `AnthropicChatProvider` —
+  `@anthropic-ai/sdk`, model `claude-sonnet-5`, `client.messages.stream()`
+  yielding text deltas. Selection (`select.ts`, pure): mock by default;
+  anthropic ONLY when `CHAT_PROVIDER=anthropic` AND a key is set. Dev, vitest
+  and e2e all run on the mock — an ambient key alone never activates the live
+  provider (unit-tested; playwright forces `CHAT_PROVIDER=mock` +
+  `ANTHROPIC_API_KEY=''` into both preview servers).
+- **Personas** (`src/lib/config/personas/{sleep-coach,life-coach}.ts`): ro
+  system prompts keyed by the site config's `chatPersonaKey`, resolved via
+  `resolvePersona()` (throws on unknown). Prompts take `{ siteName }` at
+  runtime — brand strings stay in `config/sites/*`. Both carry: pillar scope
+  (sleep: somn only; life: all 9 from `CANONICAL_PILLARS`), a firm
+  not-medical-advice stance, off-topic refusal style, and quiz-funnel nudges.
+- **Schema** (migration `0008`): `chat_sessions` (text id, `anonymous_token`,
+  created_at, `message_count`), `chat_messages` (session FK cascade, role
+  `user|assistant`, content, created_at), `chat_rate_limits` (key, count,
+  window_started_at — same fixed-window pattern as `login_attempts`).
+- **Session ownership**: signed httpOnly cookie `chat_session` =
+  `<sessionId>.<anonToken>.<HMAC>` (secret = `BETTER_AUTH_SECRET`). Tampered/
+  foreign-secret token → 403; valid token whose session was pruned starts a
+  fresh conversation. No expiry claim — retention is row pruning.
+- **Rate limiting**: 20 user messages/hour, per session AND per IP
+  (`CHAT_RATE_LIMIT`), checked before anything is persisted → 429 with a
+  friendly ro message rendered in the widget.
+- **API `POST /api/chat`**: thin glue around framework-free
+  `handleChatMessage(deps, { message, sessionToken, ip })`. Streams SSE
+  `data: {"delta": …}` frames then `{"done": true}`; the assistant message is
+  persisted only after the stream is fully consumed; provider history is the
+  last 20 stored messages; `maxTokens` 1024. Errors are JSON `{ error }` (ro)
+  with 400/403/429. `DELETE /api/chat` clears the cookie ("new conversation").
+- **UI**: `ChatWidget` (floating, bottom-right, rendered on all `(public)`
+  pages when the site config's `chatWidget` flag is true — both sites: true)
+  and `/asistent` full page (`ChatPanel variant="page"`; nav gained an
+  `Asistent` entry). Streaming rendering via fetch + SSE parsing, disclaimer
+  line above the input (`chat_disclaimer` message), reset button. Conversation
+  display is client-local (no history-restore GET endpoint yet — the cookie
+  only gives the provider context continuity across widget reopenings).
+- **Retention**: `pnpm chat:prune` deletes sessions older than 30 days
+  (messages cascade); wire into cron at deploy time. Logic is
+  `pruneChatSessions()` (integration-tested).
+
 ### Manual end-to-end verification with real Stripe (test mode)
 
 Not run in CI/agent runs — do this by hand when you have keys:
@@ -399,6 +453,8 @@ Not run in CI/agent runs — do this by hand when you have keys:
   `SITE_ID` is read at runtime.
 - `pnpm user:create -- --email … --password … --role admin|editor` — create/update
   a staff user in the `DATABASE_URL` database.
+- `pnpm chat:prune` — delete chat sessions older than 30 days from the
+  `DATABASE_URL` database (wire into cron at deploy time).
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site
   prefix e.g. `SITE_ID=life DATABASE_URL=postgres://better:better@host.docker.internal:5433/better_life`.
 - `pnpm --filter web db:generate` — generate a new migration after schema changes.
@@ -418,6 +474,12 @@ Not run in CI/agent runs — do this by hand when you have keys:
   real `whsec_…` from the dashboard or `stripe listen` otherwise). The
   playwright config forces `STRIPE_SECRET_KEY=''` and a fixed e2e webhook
   secret into both preview servers.
+- Phase 6 env vars: `CHAT_PROVIDER` (**`mock` is the default** — deterministic
+  canned ro answers; dev and all tests run on the mock) and `ANTHROPIC_API_KEY`
+  (empty in dev/tests, never required there). `CHAT_PROVIDER=anthropic`
+  requires the key at boot — the server refuses to start without it. The
+  playwright config forces `CHAT_PROVIDER=mock` + `ANTHROPIC_API_KEY=''` into
+  both preview servers; no test can ever reach the Anthropic API.
 - Phase 4 env vars: `EMAIL_DRYRUN` (**defaults to true** — record to
   `email_log` instead of sending; only `EMAIL_DRYRUN=false` AND a
   `RESEND_API_KEY` deliver for real; tests/e2e always run dry) and
@@ -550,6 +612,27 @@ Not run in CI/agent runs — do this by hand when you have keys:
   cleared), admin order list + detail; separate test: tracked stock 0 →
   disabled "Stoc epuizat" buy button + catalog badge.
 
+- Unit (Phase 6): provider selection incl. fail-fast and ambient-key
+  resistance + mock determinism with a fetch spy proving zero network
+  (`modules/chat/provider.spec.ts`), session token sign/verify/tamper
+  (`token.spec.ts`), fixed-window counters (`rate-limit.spec.ts`), message
+  validation + history capping (`validate.spec.ts`), persona resolution per
+  site config — sleep→sleep-coach, life→life-coach, prompts differ and carry
+  the required stances (`config/personas/personas.spec.ts`).
+- Integration (Phase 6, `modules/chat/chat.spec.ts`, TEST_DATABASE_URL, fresh
+  migrate, mock provider): streamed reply persists user+assistant rows and
+  bumps message_count; signed cookie continues the session; foreign token →
+  forbidden with nothing persisted; pruned-session token restarts cleanly;
+  provider receives exactly the last 20 messages and the persona system
+  prompt; 21st message in the window → rate-limited per session AND per IP,
+  window expiry unblocks; prune deletes old sessions + cascades messages.
+- E2E chat (`e2e/chat.e2e.ts`, both SITE_IDs, mock provider): open widget →
+  disclaimer visible, streamed canned reply renders, reset clears the
+  conversation + cookie and a fresh session works; `/asistent` full page
+  chats; exhausting the hourly IP budget surfaces the friendly ro 429 message
+  in the widget. Global setup clears chat tables (rate counters outlive a
+  run).
+
 ## For the next phase
 
 - Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
@@ -589,6 +672,10 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - New admin-only sections must be added to `ADMIN_ONLY_SECTIONS` in
   `modules/auth/guards.ts`; everything else under /admin is editor-accessible by
   default.
+- Chat has no history-restore endpoint: the widget's message list is
+  client-local; the cookie only carries session identity for provider
+  context. If a later phase needs it, add a GET to `/api/chat` that returns
+  the session's stored messages after `verifySessionToken`.
 - `locals.user` is available in all /admin server code (never null inside the
   shell). Add module schemas to the barrel as before — auth did:
   `export * from '../../modules/auth/schema.ts';`.
