@@ -136,6 +136,7 @@ export async function updateProduct(
 	if (patch.coverMediaId !== undefined) set.coverMediaId = patch.coverMediaId;
 	if (patch.gallery !== undefined) set.gallery = patch.gallery;
 
+	let pillarRows: Array<typeof pillars.$inferSelect> | null = null;
 	if (patch.pillarSlugs !== undefined) {
 		const unique = [...new Set(patch.pillarSlugs)];
 		const rows = unique.length
@@ -149,15 +150,24 @@ export async function updateProduct(
 				detail: unique.filter((s) => !known.has(s)).join(', ')
 			};
 		}
-		await deps.db.delete(productPillars).where(eq(productPillars.productId, id));
-		if (rows.length) {
-			await deps.db
-				.insert(productPillars)
-				.values(rows.map((p) => ({ productId: id, pillarId: p.id })));
-		}
+		pillarRows = rows;
 	}
 
-	const [row] = await deps.db.update(products).set(set).where(eq(products.id, id)).returning();
+	// Retag + row update commit together: a failure between the join-table
+	// delete and re-insert must not strip the product's tags — that would
+	// silently hide it from every site.
+	const row = await deps.db.transaction(async (tx) => {
+		if (pillarRows !== null) {
+			await tx.delete(productPillars).where(eq(productPillars.productId, id));
+			if (pillarRows.length) {
+				await tx
+					.insert(productPillars)
+					.values(pillarRows.map((p) => ({ productId: id, pillarId: p.id })));
+			}
+		}
+		const [updated] = await tx.update(products).set(set).where(eq(products.id, id)).returning();
+		return updated;
+	});
 	return { ok: true, value: row };
 }
 

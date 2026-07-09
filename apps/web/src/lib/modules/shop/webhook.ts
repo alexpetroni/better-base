@@ -65,6 +65,27 @@ function extractShipping(session: Stripe.Checkout.Session): ShippingAddress | nu
 	};
 }
 
+async function sendOrderConfirmation(
+	deps: WebhookDeps,
+	order: { id: string; email: string; amountTotalCents: number; currency: string },
+	items: Array<{ name: string; qty: number; priceCents: number }>
+): Promise<void> {
+	if (!order.email) return;
+	await deps.email.send({
+		to: order.email,
+		template: 'order-confirmation',
+		data: {
+			siteName: deps.siteName,
+			orderId: order.id,
+			items: items.map(({ name, qty, priceCents }) => ({ name, qty, priceCents })),
+			totalCents: order.amountTotalCents,
+			currency: order.currency
+		},
+		// The order id is stable across redeliveries — at most one email per order.
+		idempotencyKey: `order-confirmation:${order.id}`
+	});
+}
+
 async function handleCheckoutCompleted(
 	deps: WebhookDeps,
 	session: Stripe.Checkout.Session
@@ -78,70 +99,74 @@ async function handleCheckoutCompleted(
 			: (session.payment_intent?.id ?? null);
 	const amountFromCart = cart.reduce((sum, item) => sum + item.p * item.q, 0);
 
-	// Claim the session id by insert: the unique constraint makes duplicate
-	// (and concurrent) deliveries collapse to exactly one order.
-	const [order] = await deps.db
-		.insert(orders)
-		.values({
+	// All-or-nothing: the session-id claim, the item snapshots and the stock
+	// decrement commit together or not at all. A mid-flight failure rolls back
+	// the `stripeSessionId` claim too, so Stripe's redelivery retries the whole
+	// unit instead of hitting a headless "duplicate" order.
+	const created = await deps.db.transaction(async (tx) => {
+		// Claim the session id by insert: the unique constraint makes duplicate
+		// (and concurrent) deliveries collapse to exactly one order.
+		const [order] = await tx
+			.insert(orders)
+			.values({
+				id: crypto.randomUUID(),
+				email: session.customer_details?.email ?? '',
+				stripeSessionId: session.id,
+				stripePaymentIntent: paymentIntent,
+				amountTotalCents: session.amount_total ?? amountFromCart,
+				currency: session.currency ?? 'ron',
+				status: session.payment_status === 'paid' ? 'paid' : 'pending',
+				shippingAddress: extractShipping(session)
+			})
+			.onConflictDoNothing({ target: orders.stripeSessionId })
+			.returning();
+		if (!order) return null;
+
+		const productRows = await tx
+			.select({ id: products.id, name: products.name })
+			.from(products)
+			.where(
+				inArray(
+					products.id,
+					cart.map((item) => item.i)
+				)
+			);
+		const nameById = new Map(productRows.map((r) => [r.id, r.name]));
+
+		const items = cart.map((item) => ({
 			id: crypto.randomUUID(),
-			email: session.customer_details?.email ?? '',
-			stripeSessionId: session.id,
-			stripePaymentIntent: paymentIntent,
-			amountTotalCents: session.amount_total ?? amountFromCart,
-			currency: session.currency ?? 'ron',
-			status: session.payment_status === 'paid' ? 'paid' : 'pending',
-			shippingAddress: extractShipping(session)
-		})
-		.onConflictDoNothing({ target: orders.stripeSessionId })
-		.returning();
-	if (!order) return { kind: 'duplicate-session', sessionId: session.id };
+			orderId: order.id,
+			productId: nameById.has(item.i) ? item.i : null,
+			name: nameById.get(item.i) ?? 'Produs',
+			priceCents: item.p,
+			qty: item.q
+		}));
+		await tx.insert(orderItems).values(items);
 
-	const productRows = await deps.db
-		.select({ id: products.id, name: products.name })
-		.from(products)
-		.where(
-			inArray(
-				products.id,
-				cart.map((item) => item.i)
-			)
-		);
-	const nameById = new Map(productRows.map((r) => [r.id, r.name]));
+		// Decrement tracked stock, floored at 0; untracked (null) stock is left alone.
+		for (const item of cart) {
+			await tx
+				.update(products)
+				.set({ stock: sql`greatest(${products.stock} - ${item.q}, 0)` })
+				.where(and(eq(products.id, item.i), isNotNull(products.stock)));
+		}
 
-	const items = cart.map((item) => ({
-		id: crypto.randomUUID(),
-		orderId: order.id,
-		productId: nameById.has(item.i) ? item.i : null,
-		name: nameById.get(item.i) ?? 'Produs',
-		priceCents: item.p,
-		qty: item.q
-	}));
-	await deps.db.insert(orderItems).values(items);
+		return { order, items };
+	});
 
-	// Decrement tracked stock, floored at 0; untracked (null) stock is left alone.
-	for (const item of cart) {
-		await deps.db
-			.update(products)
-			.set({ stock: sql`greatest(${products.stock} - ${item.q}, 0)` })
-			.where(and(eq(products.id, item.i), isNotNull(products.stock)));
+	if (!created) {
+		// Redelivery of an already-committed order. The only work possibly left
+		// undone is the post-commit email, so re-attempt it — idempotency skips
+		// it unless the previous attempt failed (or never happened).
+		const existing = await getOrderBySessionId(deps, session.id);
+		if (existing) await sendOrderConfirmation(deps, existing.order, existing.items);
+		return { kind: 'duplicate-session', sessionId: session.id };
 	}
 
-	if (order.email) {
-		await deps.email.send({
-			to: order.email,
-			template: 'order-confirmation',
-			data: {
-				siteName: deps.siteName,
-				orderId: order.id,
-				items: items.map(({ name, qty, priceCents }) => ({ name, qty, priceCents })),
-				totalCents: order.amountTotalCents,
-				currency: order.currency
-			},
-			// The order id is stable across redeliveries — at most one email per order.
-			idempotencyKey: `order-confirmation:${order.id}`
-		});
-	}
-
-	return { kind: 'order-created', orderId: order.id };
+	// Deliberately AFTER the commit: a mail failure must never roll back a paid
+	// order — Stripe's redelivery retries the (idempotent) send instead.
+	await sendOrderConfirmation(deps, created.order, created.items);
+	return { kind: 'order-created', orderId: created.order.id };
 }
 
 async function handleChargeRefunded(

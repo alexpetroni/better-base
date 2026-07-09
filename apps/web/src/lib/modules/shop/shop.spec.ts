@@ -3,14 +3,16 @@ import path from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import Stripe from 'stripe';
+import { withDbFault } from '../../../../tests/helpers/db-fault.ts';
 import { resolveSiteConfig } from '../../config/index.ts';
 import { createDb, type Db } from '../../db/client.ts';
+import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
 import { emailLog } from '../email/schema.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { buildCartMetadata, createCheckoutFromCart, loadCartDetails } from './checkout.ts';
 import { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
-import { orderItems, orders, products } from './schema.ts';
+import { orderItems, orders, productPillars, products } from './schema.ts';
 import {
 	createProduct,
 	getProductBySlug,
@@ -93,6 +95,26 @@ describe('product CRUD', () => {
 		expect((await updateProduct(deps, row.id, { pillarSlugs: ['nope'] })).ok).toBe(false);
 		const ok = await updateProduct(deps, row.id, { priceCents: 12345, stock: null });
 		expect(ok.ok && ok.value.priceCents).toBe(12345);
+	});
+
+	it('retagging is atomic: a failed re-insert keeps the old pillar tags (audit Theme B)', async () => {
+		const row = await makeProduct({ name: 'Retag atomic', pillarSlugs: ['somn'] });
+		const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
+
+		const { db: faultyDb, fault } = withDbFault(db, 'insert', productPillars);
+		fault.arm();
+		await expect(
+			updateProduct({ db: faultyDb }, row.id, { pillarSlugs: ['nutritie'] })
+		).rejects.toThrow('injected insert fault');
+		expect(fault.hits).toBe(1);
+
+		// The delete must have rolled back with the failed insert — otherwise the
+		// product silently loses all tags and disappears from every site.
+		const joins = await db
+			.select()
+			.from(productPillars)
+			.where(eq(productPillars.productId, row.id));
+		expect(joins.map((j) => j.pillarId)).toEqual([somn.id]);
 	});
 });
 
@@ -433,6 +455,216 @@ describe('webhook: checkout.session.completed', () => {
 		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
 		const outcome = await processStripeEvent(webhookDeps, event);
 		expect(outcome).toEqual({ kind: 'ignored', type: 'payment_intent.created' });
+	});
+});
+
+describe('webhook: atomicity — a partial failure commits nothing (audit Theme B)', () => {
+	it('rolls back everything when the items insert fails; redelivery then creates the complete order exactly once', async () => {
+		const product = await makeProduct({ name: 'Atomic articole', priceCents: 4990, stock: 5 });
+		const cart = [{ productId: product.id, qty: 2, priceCents: 4990 }];
+		const payload = completedSessionEvent({
+			id: 'cs_atomic_items',
+			cart,
+			amountTotal: 9980,
+			email: 'atomic-items@example.ro'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+
+		const { db: faultyDb, fault } = withDbFault(db, 'insert', orderItems);
+		fault.arm();
+		await expect(processStripeEvent({ ...webhookDeps, db: faultyDb }, event)).rejects.toThrow(
+			'injected insert fault'
+		);
+		expect(fault.hits).toBe(1);
+
+		// NOTHING committed: the stripeSessionId claim rolled back with the
+		// failure, stock is untouched, no email attempted — so Stripe's
+		// redelivery genuinely retries instead of hitting a headless duplicate.
+		expect(
+			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_atomic_items'))
+		).toHaveLength(0);
+		const [afterFailure] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(afterFailure.stock).toBe(5);
+		expect(
+			await db.select().from(emailLog).where(eq(emailLog.toEmail, 'atomic-items@example.ro'))
+		).toHaveLength(0);
+
+		// The SAME event redelivered now succeeds as one complete unit.
+		fault.disarm();
+		const retried = await processStripeEvent({ ...webhookDeps, db: faultyDb }, event);
+		expect(retried.kind).toBe('order-created');
+		const rows = await db
+			.select()
+			.from(orders)
+			.where(eq(orders.stripeSessionId, 'cs_atomic_items'));
+		expect(rows).toHaveLength(1);
+		const items = await db.select().from(orderItems).where(eq(orderItems.orderId, rows[0].id));
+		expect(items).toHaveLength(1);
+		expect(items[0].qty).toBe(2);
+		const [afterRetry] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(afterRetry.stock).toBe(3);
+		const logs = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.idempotencyKey, `order-confirmation:${rows[0].id}`));
+		expect(logs).toHaveLength(1);
+		expect(logs[0].status).toBe('dryrun');
+	});
+
+	it('rolls back the order and items when the stock decrement fails', async () => {
+		const product = await makeProduct({ name: 'Atomic stoc', priceCents: 2000, stock: 4 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 2000 }];
+		const payload = completedSessionEvent({
+			id: 'cs_atomic_stock',
+			cart,
+			amountTotal: 2000,
+			email: 'atomic-stock@example.ro'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+
+		const { db: faultyDb, fault } = withDbFault(db, 'update', products);
+		fault.arm();
+		await expect(processStripeEvent({ ...webhookDeps, db: faultyDb }, event)).rejects.toThrow(
+			'injected update fault'
+		);
+		expect(
+			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_atomic_stock'))
+		).toHaveLength(0);
+		expect(
+			await db.select().from(emailLog).where(eq(emailLog.toEmail, 'atomic-stock@example.ro'))
+		).toHaveLength(0);
+
+		fault.disarm();
+		const retried = await processStripeEvent({ ...webhookDeps, db: faultyDb }, event);
+		expect(retried.kind).toBe('order-created');
+		const [after] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(after.stock).toBe(3);
+	});
+
+	it('concurrent deliveries of the same event yield exactly one complete order', async () => {
+		const product = await makeProduct({ name: 'Concurent', priceCents: 1500, stock: 6 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 1500 }];
+		const payload = completedSessionEvent({
+			id: 'cs_concurrent',
+			cart,
+			amountTotal: 1500,
+			email: 'concurrent@example.ro'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+
+		const outcomes = await Promise.all([
+			processStripeEvent(webhookDeps, event),
+			processStripeEvent(webhookDeps, event)
+		]);
+		expect(outcomes.map((o) => o.kind).sort()).toEqual(['duplicate-session', 'order-created']);
+
+		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_concurrent'));
+		expect(rows).toHaveLength(1);
+		expect(
+			await db.select().from(orderItems).where(eq(orderItems.orderId, rows[0].id))
+		).toHaveLength(1);
+		const [after] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(after.stock).toBe(5);
+		expect(
+			await db
+				.select()
+				.from(emailLog)
+				.where(eq(emailLog.idempotencyKey, `order-confirmation:${rows[0].id}`))
+		).toHaveLength(1);
+	});
+
+	it('an email transport failure never rolls back the order, and a redelivery retries the send', async () => {
+		const product = await makeProduct({ name: 'Email căzut', priceCents: 3000, stock: 2 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 3000 }];
+		const payload = completedSessionEvent({
+			id: 'cs_email_error',
+			cart,
+			amountTotal: 3000,
+			email: 'email-error@example.ro'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+
+		const failingEmail = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'test@example.ro',
+			transport: {
+				send: async () => {
+					throw new Error('resend down');
+				}
+			}
+		});
+		const first = await processStripeEvent(
+			{ db, email: failingEmail, siteName: 'Better Sleep' },
+			event
+		);
+		expect(first.kind).toBe('order-created');
+
+		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_error'));
+		expect(rows).toHaveLength(1);
+		const [afterFirst] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(afterFirst.stock).toBe(1);
+		const key = `order-confirmation:${rows[0].id}`;
+		const failedLogs = await db.select().from(emailLog).where(eq(emailLog.idempotencyKey, key));
+		expect(failedLogs).toHaveLength(1);
+		expect(failedLogs[0].status).toBe('error');
+
+		// Redelivery: still exactly one order (no double decrement), and the
+		// FAILED email is re-attempted — idempotency only skips delivered sends.
+		const second = await processStripeEvent(webhookDeps, event);
+		expect(second.kind).toBe('duplicate-session');
+		expect(
+			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_error'))
+		).toHaveLength(1);
+		const [afterSecond] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(afterSecond.stock).toBe(1);
+		const retriedLogs = await db.select().from(emailLog).where(eq(emailLog.idempotencyKey, key));
+		expect(retriedLogs).toHaveLength(1);
+		expect(retriedLogs[0].status).toBe('dryrun');
+	});
+
+	it('an email sender that throws outright cannot undo the committed order', async () => {
+		const product = await makeProduct({ name: 'Email aruncă', priceCents: 2500, stock: 3 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 2500 }];
+		const payload = completedSessionEvent({
+			id: 'cs_email_throw',
+			cart,
+			amountTotal: 2500,
+			email: 'email-throw@example.ro'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+
+		const throwingEmail: EmailSender = {
+			send: async () => {
+				throw new Error('email infrastructure down');
+			}
+		};
+		await expect(
+			processStripeEvent({ db, email: throwingEmail, siteName: 'Better Sleep' }, event)
+		).rejects.toThrow('email infrastructure down');
+
+		// The order was committed before the send, so it survives the throw.
+		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_throw'));
+		expect(rows).toHaveLength(1);
+		expect(
+			await db.select().from(orderItems).where(eq(orderItems.orderId, rows[0].id))
+		).toHaveLength(1);
+		const [after] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(after.stock).toBe(2);
+
+		// Stripe redelivers (the route 500s on the throw): no second order, and
+		// the email finally goes out.
+		const second = await processStripeEvent(webhookDeps, event);
+		expect(second.kind).toBe('duplicate-session');
+		expect(
+			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_throw'))
+		).toHaveLength(1);
+		const logs = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.idempotencyKey, `order-confirmation:${rows[0].id}`));
+		expect(logs).toHaveLength(1);
+		expect(logs[0].status).toBe('dryrun');
 	});
 });
 
