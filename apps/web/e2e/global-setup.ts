@@ -26,8 +26,10 @@ export default async function globalSetup() {
 			await upsertStaffUser(auth, { ...E2E_ADMIN, role: 'admin' });
 			await upsertStaffUser(auth, { ...E2E_EDITOR, role: 'editor' });
 			await db.execute(sql`delete from login_attempts`);
-			// Media uploads are created/deleted by the tests themselves; a failed
-			// earlier run must not leave cards behind that break filename filters.
+			// Content is created by the tests themselves; leftovers from a failed
+			// earlier run would break slug and filename assumptions. Articles go
+			// first — they reference media (cover FK + the delete-refusal check).
+			await db.execute(sql`delete from articles`);
 			await db.execute(sql`delete from media`);
 		} finally {
 			await db.$client.end();

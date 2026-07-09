@@ -63,8 +63,8 @@ test('editor sees content sections only and gets 403 on admin-only routes', asyn
 		expect(response?.status(), `/admin/${section}`).toBe(403);
 	}
 
-	// Content stubs still load.
+	// Content sections still load (articles is a real page since Phase 3).
 	const articles = await page.goto('/admin/articles');
 	expect(articles?.status()).toBe(200);
-	await expect(page.getByTestId('stub-note')).toBeVisible();
+	await expect(page.getByTestId('article-new-title')).toBeVisible();
 });

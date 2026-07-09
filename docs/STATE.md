@@ -1,4 +1,4 @@
-# STATE — after Phase 2 (Media pipeline)
+# STATE — after Phase 3 (Blog)
 
 ## What exists
 
@@ -137,6 +137,62 @@
   stack path — volume wiped, `up -d`, `storage:init`, full integration run —
   was exercised in this phase).
 
+## Blog (Phase 3)
+
+- **modules/blog** (`apps/web/src/lib/modules/blog/`), split barrels like media:
+  - `$lib/modules/blog` (universal): `slugify`/`nextUniqueSlug` (ro-diacritics
+    transliteration incl. legacy cedilla ş/ţ; suffix `-2`, `-3`, … on collision),
+    `extractMediaRefs`, `ArticleRow` types.
+  - `$lib/modules/blog/server`: services + rendering; importing it ALSO registers
+    the articles media-reference check (module init side effect). It is imported
+    for that side effect in `hooks.server.ts`, so the check is live before any
+    request can hit the media library's delete action.
+- **Schema** (migration `0003`): `articles` — text id (uuid), unique `slug`,
+  title, excerpt, `body_md`, `cover_media_id` FK→media (set null), status
+  `draft|published`, `published_at`, `seo_title`, `seo_description`,
+  created_by→users, timestamps; `article_pillars` (article_id, pillar_id, PK on
+  both, cascade). No site column anywhere — visibility is pillar tagging.
+- **Services** (`service.ts`, framework-free `{ db }` deps, `BlogResult<T>`):
+  `createArticle` (auto unique slug from title), `updateArticle` (patch incl.
+  slug normalize+dedupe — an explicitly taken slug gets suffixed, re-saving your
+  own doesn't; `pillarSlugs` replaces join rows, unknown slug → error),
+  `publishArticle` (stamps `publishedAt` ONCE — republishing keeps the original
+  date), `unpublishArticle`, `getArticle`, `getBySlug` (drafts only with
+  `includeDrafts`), `listPublished({pillarSlugs, page, pageSize=9})` (published
+  AND tagged to ≥1 given slug; empty list → nothing), `listArticles`
+  (admin: status filter + ilike search), `listPublishedForSitemap`.
+- **Markdown pipeline** (`markdown.ts` pure + `render.ts` db glue): marked with a
+  custom image renderer + sanitize-html allowlist over the OUTPUT (scripts,
+  event handlers, `javascript:` URLs, iframes to unknown hosts always stripped;
+  src-less iframe shells dropped). `![alt](media:<id-or-key>)` resolves via
+  `renderArticleHtml(deps, imgproxyCfg, bodyMd)` to `<picture>` markup
+  (avif/webp 1x/2x through imgproxy, w=768) or, for `video-embed` rows, an
+  iframe (youtube-nocookie / iframe.mediadelivery.net; external id validated
+  against `[A-Za-z0-9_/-]`). Unresolved refs render as nothing.
+- **Admin** `/admin/articles` (editor-accessible): create-by-title form → editor
+  at `/admin/articles/[id]`; list has status filter + search. Editor: title
+  (auto-suggests slug until slug manually edited — server dedupes on save),
+  slug, excerpt, markdown textarea with server-rendered preview toggle
+  (`?/preview` action), cover picker + inline-image inserter from the media
+  library (`MediaPicker.svelte`), pillar checkboxes (site's active pillars
+  only), SEO fields, save/publish/unpublish (publish/unpublish also persist the
+  form first).
+- **Public**: `/blog` (paginated cards, `?page=`), `/blog/[slug]` (drafts 404),
+  pillar landing pages list that pillar's latest 6. Site nav configs gained a
+  `Blog` entry.
+- **SEO**: shared `src/lib/components/Seo.svelte` (title, description, canonical,
+  OG, twitter card, optional JSON-LD — assembled with escaped `<` via
+  `jsonLdString`) + `src/lib/seo.ts` `canonicalUrl(path)` from `PUBLIC_SITE_URL`.
+  Article pages emit JSON-LD `Article` and a fixed-size 1200×630 jpg OG image
+  through imgproxy. `sitemap.xml` (static pages + active pillar pages +
+  site-visible published articles) and `robots.txt` (disallow /admin, sitemap
+  URL) are dynamic routes — the old `static/robots.txt` was REMOVED, don't
+  re-add it (it would shadow the route in the build output).
+- **Seed**: `pnpm db:seed` also upserts 3 published ro demo articles tagged
+  `somn` (fixed ids, upsert-by-slug, idempotent).
+- **Typography**: `@tailwindcss/typography` is installed (`@plugin` in
+  `routes/layout.css`); rendered article HTML gets `prose` classes.
+
 ## Key commands (all from repo root)
 
 - `docker compose up -d` — start Postgres + MinIO + imgproxy (`--wait` works, all
@@ -215,12 +271,32 @@
   e2e-admin/e2e-editor users and clears `login_attempts`;
   `playwright.config.ts` now injects a per-site `DATABASE_URL` into each preview
   server (derived from the root .env URL by swapping the db name).
+- Unit (blog): slug transliteration/collision (`modules/blog/slug.spec.ts`),
+  sanitizer XSS vectors + media-ref rendering (`modules/blog/markdown.spec.ts`).
+- Integration (`modules/blog/blog.spec.ts`, TEST_DATABASE_URL, fresh migrate,
+  all 9 pillars seeded): db slug dedupe, publish lifecycle (publishedAt stamped
+  once, drafts invisible via `getBySlug`), pillar visibility against the REAL
+  sleep/life config pillar lists (somn-tagged visible on both; nutritie-tagged
+  invisible on sleep; untagged invisible everywhere — the SITE_ID=life DoD
+  case), pagination, admin search, sitemap listing, `renderArticleHtml` by
+  id/key + video rows, media reference check (cover + body refs).
+- Integration (seed): `seedDemoArticles` idempotency in `db/seed.spec.ts`.
+- E2E blog (`e2e/blog.e2e.ts`, both SITE_IDs): editor uploads a cover
+  (own fixture `blog-cover.png` — media.e2e runs in parallel on the same
+  library, filenames must not collide), creates/fills/tags an article, preview
+  renders, draft 404s publicly and is absent from the sitemap, publish → card
+  with real imgproxy-rendered cover on /blog, article page renders body +
+  inline image, SEO assertions (title/description/canonical/og:type/og:image/
+  twitter card/JSON-LD Article), sitemap entry, pillar landing card, unpublish
+  → 404 again. Global setup now clears `articles` before `media`.
 
 ## For the next phase
 
 - Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
-  stub `+page.svelte` (they render `StubPage.svelte`). The sidebar entry already
-  exists; nav labels are paraglide messages (`admin_nav_*`).
+  stub `+page.svelte` (they render `StubPage.svelte`; remaining stubs: quizzes,
+  subscribers, products, orders, settings). The sidebar entry already exists;
+  nav labels are paraglide messages (`admin_nav_*`). The articles section is a
+  full reference implementation (list + editor + form actions).
 - To show an image: build `imgSources(row, { w })` in a `load` function
   (server barrel) and pass it to `<Img>` (universal barrel). Never import the
   server barrel from a component.
