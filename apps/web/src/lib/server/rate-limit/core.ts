@@ -100,3 +100,16 @@ export async function consumeRateLimit(
 	const counters = { count: Number(row.count), prevCount: Number(row.prev_count) };
 	return { ...counters, limited: isLimited(counters, config, now) };
 }
+
+/**
+ * Delete counter rows whose window started before `cutoff`. Counters are
+ * upserted per key and never deleted by `consumeRateLimit`, so every table
+ * with this shape (rate_limits, chat_rate_limits, login_attempts) grows with
+ * each new key forever unless a retention job sweeps it. A row untouched for
+ * two windows already weighs nothing in the sliding-window decision — any
+ * cutoff at least that old is safe.
+ */
+export async function pruneStaleRateLimits(db: Db, table: PgTable, cutoff: Date): Promise<number> {
+	const result = await db.execute(sql`delete from ${table} where window_started_at < ${cutoff}`);
+	return result.rowCount ?? 0;
+}

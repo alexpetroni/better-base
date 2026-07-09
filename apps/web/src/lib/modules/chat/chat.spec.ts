@@ -318,7 +318,7 @@ describe('pruneChatSessions', () => {
 			.where(eq(chatSessions.id, outcome.sessionId));
 
 		const deleted = await pruneChatSessions(db);
-		expect(deleted).toBe(1);
+		expect(deleted.sessions).toBe(1);
 
 		const rows = await db
 			.select()
@@ -329,5 +329,26 @@ describe('pruneChatSessions', () => {
 		// Recent sessions survive.
 		const remaining = await db.select().from(chatSessions);
 		expect(remaining.length).toBeGreaterThan(0);
+	});
+
+	it('deletes expired rate-limit counter rows, keeping live ones (audit resilience #6)', async () => {
+		const now = new Date();
+		const staleWindow = new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000);
+		await db.insert(chatRateLimits).values([
+			{ key: 'ip:198.51.100.250', count: 3, windowStartedAt: staleWindow },
+			{ key: 'session:stale-spec', count: 20, windowStartedAt: staleWindow }
+		]);
+		// Earlier tests consumed the limiter this hour — those live counters must
+		// survive the sweep.
+		const before = await db.select().from(chatRateLimits);
+		expect(before.some((r) => r.windowStartedAt > staleWindow)).toBe(true);
+
+		const deleted = await pruneChatSessions(db, now);
+		expect(deleted.rateLimitRows).toBeGreaterThanOrEqual(2);
+
+		const after = await db.select().from(chatRateLimits);
+		expect(after.map((r) => r.key)).not.toContain('ip:198.51.100.250');
+		expect(after.map((r) => r.key)).not.toContain('session:stale-spec');
+		expect(after.length).toBeGreaterThan(0);
 	});
 });

@@ -3,6 +3,7 @@
 export {
 	consumeRateLimit,
 	isLimited,
+	pruneStaleRateLimits,
 	weightedCount,
 	windowStart,
 	type RateLimitConfig,

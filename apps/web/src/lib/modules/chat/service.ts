@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { asc, eq, lt, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
-import { consumeRateLimit, type RateLimitConfig } from '../../server/rate-limit/core.ts';
+import {
+	consumeRateLimit,
+	pruneStaleRateLimits,
+	type RateLimitConfig
+} from '../../server/rate-limit/core.ts';
 import type { ChatMessage, ChatProvider } from './provider.ts';
 import { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
 import { chatMessages, chatRateLimits, chatSessions, type ChatSessionRow } from './schema.ts';
@@ -159,16 +163,22 @@ async function bumpMessageCount(db: Db, sessionId: string): Promise<void> {
 		.where(eq(chatSessions.id, sessionId));
 }
 
-/** Delete sessions older than the retention window (messages cascade). */
+/**
+ * Delete sessions older than the retention window (messages cascade), plus
+ * expired rate-limit counters — `session:`/`ip:` keys are upserted per key and
+ * never removed by the limiter, so without this sweep `chat_rate_limits`
+ * grows unbounded (audit resilience #6).
+ */
 export async function pruneChatSessions(
 	db: Db,
 	now: Date = new Date(),
 	retentionDays: number = CHAT_RETENTION_DAYS
-): Promise<number> {
+): Promise<{ sessions: number; rateLimitRows: number }> {
 	const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 	const deleted = await db
 		.delete(chatSessions)
 		.where(lt(chatSessions.createdAt, cutoff))
 		.returning({ id: chatSessions.id });
-	return deleted.length;
+	const rateLimitRows = await pruneStaleRateLimits(db, chatRateLimits, cutoff);
+	return { sessions: deleted.length, rateLimitRows };
 }
