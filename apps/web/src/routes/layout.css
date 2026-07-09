@@ -1,3 +1,5 @@
 @import 'tailwindcss';
+/* `prose` styling for rendered article markdown (admin preview + public article page). */
+@plugin '@tailwindcss/typography';
 /* formcomp components ship Tailwind utility classes; scan its dist so they get generated. */
 @source '../../node_modules/formcomp/dist';
