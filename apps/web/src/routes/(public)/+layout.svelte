@@ -1,9 +1,14 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages';
 	import { NewsletterSignup } from '$lib/modules/crm';
 
 	let { data, children } = $props();
+
+	// Merged page data, so a page load that mutates the cart cookie (checkout
+	// success) can override the count the layout load read before the mutation.
+	const cartCount = $derived(page.data.cartCount ?? 0);
 </script>
 
 <header class="border-b border-(--color-brand-soft) bg-(--color-brand) text-white">
@@ -25,12 +30,12 @@
 						class="flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20"
 					>
 						{m.shop_cart_link()}
-						{#if data.cartCount > 0}
+						{#if cartCount > 0}
 							<span
 								data-testid="cart-count"
 								class="rounded-full bg-(--color-accent) px-2 text-sm font-semibold"
 							>
-								{data.cartCount}
+								{cartCount}
 							</span>
 						{/if}
 					</a>

@@ -23,6 +23,9 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
 	if (found) {
 		clearCart(cookies);
 		return {
+			// Overrides the layout's badge count — the layout load may have read
+			// the cookie before clearCart in this same request (see App.PageData).
+			cartCount: 0,
 			state: 'order' as const,
 			email: found.order.email,
 			totalCents: found.order.amountTotalCents,
@@ -40,6 +43,7 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
 	if (!session) error(404);
 	clearCart(cookies);
 	return {
+		cartCount: 0,
 		state: 'processing' as const,
 		email: session.email,
 		totalCents: session.amountTotalCents,

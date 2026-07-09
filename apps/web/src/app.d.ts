@@ -14,7 +14,15 @@ declare global {
 				role: StaffRole;
 			} | null;
 		}
-		// interface PageData {}
+		interface PageData {
+			/**
+			 * Header cart badge count. Set by the public layout load; a page that
+			 * mutates the cart cookie in its own load (checkout success) overrides
+			 * it, because the layout load may have read the cookie before the
+			 * mutation in the same request.
+			 */
+			cartCount?: number;
+		}
 		// interface PageState {}
 		// interface Platform {}
 	}
