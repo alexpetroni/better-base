@@ -48,6 +48,26 @@ describe('email templates', () => {
 		expect(rendered.html).toContain('&lt;script&gt;');
 		expect(rendered.html).toContain('&amp;b=&quot;2&quot;');
 	});
+
+	it('renders the order confirmation with integer-cent formatting and escaping', () => {
+		const rendered = renderEmailTemplate('order-confirmation', {
+			siteName: 'Better Sleep',
+			orderId: 'order-1',
+			items: [
+				{ name: 'Mască <b>de somn</b>', qty: 2, priceCents: 4990 },
+				{ name: 'Ceai de seară', qty: 1, priceCents: 3450 }
+			],
+			totalCents: 13430,
+			currency: 'ron'
+		});
+		expect(rendered.subject).toContain('Better Sleep');
+		// Line totals (qty × unit) and the grand total, formatted from bani.
+		expect(rendered.html).toContain('99,80 lei');
+		expect(rendered.html).toContain('134,30 lei');
+		expect(rendered.text).toContain('34,50 lei');
+		expect(rendered.html).not.toContain('<b>de somn</b>');
+		expect(rendered.html).toContain('Mască &lt;b&gt;de somn&lt;/b&gt;');
+	});
 });
 
 describe('shouldSkipResend', () => {

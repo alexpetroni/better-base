@@ -5,9 +5,13 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { resolveSiteConfig } from '../config/index.ts';
 import { createDb, type Db } from './client.ts';
 import { articlePillars, articles } from '../modules/blog/schema.ts';
+import { storageConfigFromEnv } from '../modules/media/env.ts';
+import { media } from '../modules/media/schema.ts';
+import { createStorage } from '../modules/media/storage.ts';
 import { quizzes } from '../modules/quiz/schema.ts';
+import { productPillars, products } from '../modules/shop/schema.ts';
 import { pillars } from './schema/core.ts';
-import { seedDemoArticles, seedDemoQuiz, seedPillars } from './seed.ts';
+import { seedDemoArticles, seedDemoProducts, seedDemoQuiz, seedPillars } from './seed.ts';
 
 // Integration test against the compose Postgres: uses the dedicated test
 // database (TEST_DATABASE_URL), reset and re-migrated fresh on every run.
@@ -70,6 +74,33 @@ describe('seedDemoArticles', () => {
 		await seedDemoArticles(db);
 		expect(await db.select().from(articles)).toHaveLength(3);
 		expect(await db.select().from(articlePillars)).toHaveLength(3);
+	});
+});
+
+describe('seedDemoProducts', () => {
+	it('seeds 3 active somn-tagged products with placeholder images, idempotently', async () => {
+		// Pillars are present from the seedPillars tests above. Placeholder
+		// uploads go to the compose MinIO (same requirement as media specs).
+		const storage = createStorage(storageConfigFromEnv(process.env));
+		await storage.ensureBucket();
+
+		await expect(seedDemoProducts(db, storage)).resolves.toBe(3);
+		await seedDemoProducts(db, storage);
+
+		const rows = await db.select().from(products);
+		expect(rows).toHaveLength(3);
+		expect(rows.every((r) => r.status === 'active' && r.priceCents > 0)).toBe(true);
+		expect(rows.every((r) => r.coverMediaId)).toBe(true);
+		expect(await db.select().from(productPillars)).toHaveLength(3);
+
+		// Every referenced image row exists and its object is really in storage.
+		const mediaRows = await db.select().from(media);
+		const seedImages = mediaRows.filter((r) => r.id.startsWith('seed-media-'));
+		expect(seedImages).toHaveLength(4);
+		for (const image of seedImages) {
+			const stat = await storage.statObject(image.key!);
+			expect(stat?.mime).toBe('image/svg+xml');
+		}
 	});
 });
 
