@@ -152,7 +152,8 @@ async function handleCheckoutCompleted(
 				.set({ stock: sql`${products.stock} - ${item.q}` })
 				.where(and(eq(products.id, item.i), isNotNull(products.stock)))
 				.returning({ id: products.id, stock: products.stock });
-			if (updated && updated.stock < 0) {
+			// stock is non-null here (the WHERE filters untracked rows).
+			if (updated?.stock != null && updated.stock < 0) {
 				oversold = true;
 				await tx.update(products).set({ stock: 0 }).where(eq(products.id, updated.id));
 			}
