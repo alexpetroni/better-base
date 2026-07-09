@@ -1,4 +1,4 @@
-# STATE — after Phase 6 (Chat: pillar-persona assistant)
+# STATE — after Phase 7 (Hardening & launch readiness)
 
 ## What exists
 
@@ -440,6 +440,102 @@ Not run in CI/agent runs — do this by hand when you have keys:
 4. Refund the payment in the Stripe test dashboard → `charge.refunded` flips
    the order to `rambursată`.
 
+## Hardening & launch readiness (Phase 7)
+
+- **Content export/import CLI** (`modules/content/`, node-safe; script
+  `apps/web/scripts/content.ts`): `pnpm content export --type article|quiz|product
+  --slug X [--out f.json]` produces a SELF-CONTAINED bundle (version 1):
+  content fields, pillar SLUGS (ids differ per db), and every referenced media
+  row incl. original bytes base64 (cover, gallery, `media:` body refs).
+  `pnpm content import f.json` targets the CURRENT env's DATABASE_URL +
+  S3_BUCKET and is idempotent by slug: images match by storage key, video
+  embeds by provider+external id; a media id collision inserts under a fresh
+  uuid and REMAPS the markdown refs + cover/gallery (`remapMediaRefs`).
+  Pillars missing in the target db are skipped with a warning (content stays
+  visible only where its pillar is active). Stripe catalog ids are NEVER
+  imported (they belong to the source account). Import bundles are validated
+  by `parseBundle` before anything runs. Second test db `better_test_b` is
+  created on demand by the spec (and on fresh volumes by
+  `docker/postgres-init`).
+- **GDPR surface**:
+  - `modules/gdpr/`: cookie-consent banner (`CookieConsent.svelte`, rendered
+    by the public layout; cookie `cookie_consent=granted|denied`, ~6 months,
+    parsed server-side in the (public) layout load). NO analytics ships; the
+    hook point is `analyticsAllowed()` — any future analytics script must gate
+    on it (comment in the component marks the spot). Playwright pre-dismisses
+    the banner via `storageState` (a fixed overlay would block footer clicks);
+    the funnel + home a11y specs clear cookies to exercise it.
+  - `modules/pages/`: DB-backed simple pages (`pages` table, migration 0009),
+    public at `/pagini/[slug]` (plain markdown render, no media refs), admin
+    at `/admin/pages` (editor-accessible: list, create-by-title, edit
+    title/body/seo). Seed creates privacy+terms ONLY if missing (`ensurePage`
+    — re-seeding never overwrites admin edits). Footer links come from site
+    config `footerLinks` (new `SiteConfig` field).
+  - **Erasure CLI**: `pnpm subscriber:delete -- --email x@y.ro`
+    (`modules/gdpr/erase.ts`): deletes the subscriber, unlinks their quiz
+    results (kept as anonymous stats), anonymizes orders (email +
+    shipping_address) and email_log (to_email + data) to
+    `anonimizat@gdpr.invalid`. Integration-tested; idempotent.
+- **Ops hygiene**: `GET /api/health` → 200/503 `{status, checks:{db,storage}}`
+  (db `select 1` + storage HeadBucket — HeadObject can't detect a missing
+  bucket; each check bounded by a 5s timeout; `$lib/server/health.ts`,
+  integration-tested against broken endpoints). Unhandled errors: `handleError`
+  in hooks.server.ts logs ONE structured JSON line to stderr
+  (`$lib/server/log.ts` — ts/level/errorId/status/method/path/message/stack)
+  and the error page shows the correlating errorId. 404s render the existing
+  custom error page.
+- **A11y**: `e2e/a11y.e2e.ts` (axe via @axe-core/playwright) gates home (incl.
+  open consent banner), blog list+article, quiz, product, cart, /asistent and
+  the open chat widget at ZERO serious/critical violations, both sites.
+  Contrast fixes this required: public `text-(--color-ink)/60` → `/70`, life
+  brand darkened `oklch(0.52 0.13 155)` → `oklch(0.45 0.13 155)` (white-on-
+  brand ≥ 4.5:1). Keep new muted text at /70 minimum.
+- **Performance** (`e2e/perf.e2e.ts`): rendered HTML never contains the
+  storage endpoint (originals stay private; `plain/s3://bucket/…` inside
+  imgproxy URLs is fine — that's imgproxy's server-side source ref); every
+  `<img>` is imgproxy-served AND carries width+height (no CLS — the audit
+  fails if the catalog renders zero images, so it can't pass vacuously); zero
+  third-party requests on the homepage. **Fonts: system font stack on purpose**
+  (no webfonts → nothing to self-host/swap, zero font CLS/latency); if a brand
+  font ever lands, self-host it with `font-display: swap` and extend the
+  perf spec. **Bundle review (pnpm build, adapter-node)**: client total
+  ~446 kB raw; largest chunks 70/53/44/34 kB (≈20/20/14/13 kB gzip — Svelte
+  runtime, formcomp, kit runtime); CSS 45 kB (7.7 kB gzip); no chunk is an
+  outlier, nothing worth splitting yet.
+- **Full-funnel e2e**: `e2e/funnel.ts` (shared impl) instantiated per site by
+  `funnel-sleep.e2e.ts` / `funnel-life.e2e.ts` (skip when the project doesn't
+  match): health check → home (pillars, consent banner accept persists) →
+  footer legal page → pillar page → seeded article → quiz (20/32) → email step
+  (both dry-run emails + consent rows asserted in db) → shop (CEAI, the
+  untracked-stock product — deliberately not the ones whose stock the shop
+  spec asserts) → cart → mock checkout 303 → signed webhook → order row +
+  success page + order-confirmation dry-run → chat widget streams the canned
+  reply. Global setup now also seeds demo articles + default pages.
+- **Docs**: root `DEPLOYMENT.md` (env matrix per site, build/run, migrate+seed,
+  R2, imgproxy + Cloudflare cache rule, Stripe webhook, Resend, cron, second
+  site, post-deploy verification) and `LAUNCH-CHECKLIST.md` (human-only steps:
+  accounts, lawyer review of the seeded legal skeletons, RO e-commerce
+  requirements (ANPC/SOL, company id), DNS/TLS, live-Stripe test, Resend DNS,
+  content review, ops drills).
+
+## Known gaps / suggested next phases
+
+- **Invoicing & shipping**: orders have no invoices (RO legal requirement for
+  the business) and no shipping-provider integration (AWB, tracking emails) —
+  the most likely next phase, see LAUNCH-CHECKLIST note.
+- **Analytics**: nothing ships; wire a privacy-friendly script behind
+  `analyticsAllowed()` in `CookieConsent.svelte` + add the cookie-policy
+  copy when it lands.
+- **Nurture sequences**: only transactional + double-opt-in emails exist; no
+  scheduled newsletter/drip sending (needs a queue/cron design decision).
+- **Chat history restore**: the widget's conversation is client-local (the
+  cookie only carries provider context) — a GET /api/chat could restore it.
+- **Media blurhash** column exists but is never populated (needs pixel
+  decoding at upload/confirm time).
+- **better-life content**: the platform boots as life, but pillar landing
+  copy/quizzes/products beyond `somn` are seed-level only; content export/
+  import is the mechanism for sharing what already exists.
+
 ## Key commands (all from repo root)
 
 - `docker compose up -d` — start Postgres + MinIO + imgproxy (`--wait` works, all
@@ -455,6 +551,12 @@ Not run in CI/agent runs — do this by hand when you have keys:
   a staff user in the `DATABASE_URL` database.
 - `pnpm chat:prune` — delete chat sessions older than 30 days from the
   `DATABASE_URL` database (wire into cron at deploy time).
+- `pnpm content export --type article|quiz|product --slug X [--out f.json]` /
+  `pnpm content import f.json` — cross-site content sharing (bundle carries
+  media bytes; import is idempotent by slug and targets the current env's
+  db+bucket).
+- `pnpm subscriber:delete -- --email x@y.ro` — GDPR erasure (subscriber row
+  deleted, quiz results unlinked, orders/email log anonymized).
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site
   prefix e.g. `SITE_ID=life DATABASE_URL=postgres://better:better@host.docker.internal:5433/better_life`.
 - `pnpm --filter web db:generate` — generate a new migration after schema changes.
@@ -632,6 +734,29 @@ Not run in CI/agent runs — do this by hand when you have keys:
   chats; exhausting the hourly IP budget surfaces the friendly ro 429 message
   in the widget. Global setup clears chat tables (rate counters outlive a
   run).
+
+- Unit (Phase 7): bundle parse/validation + media-ref remapping
+  (`modules/content/bundle.spec.ts`), consent cookie helpers incl. the
+  analytics hook point (`modules/gdpr/consent.spec.ts`), structured error-log
+  formatting (`lib/server/log.spec.ts`).
+- Integration (Phase 7): content export→import round trip across TWO
+  databases (TEST_DATABASE_URL + better_test_b, created on demand) and TWO
+  buckets — article/quiz/product, media bytes land in the target bucket,
+  pillar mapping by slug (ids deliberately differ), id-collision remap,
+  double import → no dupes, Stripe ids never copied, missing-object export
+  refusal (`modules/content/content.spec.ts`); pages service — seed-once
+  semantics (re-seed never overwrites admin edits), ro slug dedupe
+  (`modules/pages/pages.spec.ts`); GDPR erasure — subscriber deleted, quiz
+  result kept but unlinked, orders + email log anonymized, repeat run a no-op
+  (`modules/gdpr/erase.spec.ts`); health checks against live AND broken
+  db/storage endpoints incl. missing bucket and hung dependency
+  (`lib/server/health.spec.ts`).
+- E2E (Phase 7): full-funnel per site (`funnel-sleep.e2e.ts` /
+  `funnel-life.e2e.ts` — see the Phase 7 section for the walk), axe a11y gate
+  (`a11y.e2e.ts` — zero serious/critical on home/blog/article/quiz/product/
+  cart/chat), perf gate (`perf.e2e.ts` — imgproxy-only images, width/height
+  everywhere, no third-party requests). Playwright pre-dismisses the cookie
+  banner via storageState; specs that audit the banner clear cookies first.
 
 ## For the next phase
 
