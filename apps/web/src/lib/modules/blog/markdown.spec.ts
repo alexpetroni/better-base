@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ImageSources } from '../media/imgproxy.ts';
-import { extractMediaRefs, renderMarkdown, type MediaResolver } from './markdown.ts';
+import { extractMediaRefs } from '../../util/media-refs.ts';
+import { renderMarkdown, type MediaResolver } from './markdown.ts';
 
 const SOURCES: ImageSources = {
 	src: 'http://img.example/sig/rs:fit:768:0/plain/s3:%2F%2Fb/k@webp',

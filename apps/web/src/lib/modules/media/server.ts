@@ -13,6 +13,8 @@ import type { MediaRow } from './schema.ts';
 import { createStorage, type Storage } from './storage.ts';
 
 export { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
+// imageSources is the one imgproxy builder other modules consume (blog render).
+export { imageSources, type ImgproxyConfig } from './imgproxy.ts';
 export { media } from './schema.ts';
 export {
 	confirmUpload,

@@ -50,5 +50,39 @@ export default defineConfig(
 				}
 			]
 		}
+	},
+	{
+		// Inside a module, a `../<sibling>/…` import reaches into ANOTHER module's
+		// internals. Allowed cross-module coupling (see docs/STATE.md):
+		//   - `../<module>/schema.ts` at runtime — FK relations/joins in one shared
+		//     db make table objects unavoidable;
+		//   - `import type` of anything — erased at runtime, rename-safe via tsc.
+		// Every other cross-module import must go through $lib/util, $lib/db,
+		// $lib/server or the module's barrel ($lib/modules/<name>[/server]).
+		// Integration specs are exempt: they deliberately wire several modules
+		// together (e.g. the quiz funnel against a real dry-run email sender).
+		files: ['src/lib/modules/**/*.ts', 'src/lib/modules/**/*.svelte'],
+		ignores: ['src/lib/modules/**/*.spec.ts'],
+		rules: {
+			'no-restricted-imports': 'off',
+			'@typescript-eslint/no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['$lib/modules/*/*', '$lib/modules/*/*/**', '!$lib/modules/*/server'],
+							message:
+								'Cross-module imports must go through a module barrel: $lib/modules/<name> (universal) or $lib/modules/<name>/server (server-only)'
+						},
+						{
+							group: ['../*/*', '../*/**', '!../../**', '!../*/schema.ts'],
+							allowTypeImports: true,
+							message:
+								"Runtime imports of a sibling module's internals are limited to its schema.ts (FK relations). Use $lib/util, $lib/db, $lib/server or the module's barrel instead; `import type` is always fine."
+						}
+					]
+				}
+			]
+		}
 	}
 );

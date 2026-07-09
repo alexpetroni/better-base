@@ -1,8 +1,9 @@
 import { inArray, or } from 'drizzle-orm';
-import { imageSources, type ImgproxyConfig } from '../media/imgproxy.ts';
+import { imageSources, type ImgproxyConfig } from '$lib/modules/media/server';
 import { media, type MediaRow } from '../media/schema.ts';
 import type { BlogDeps } from './service.ts';
-import { extractMediaRefs, renderMarkdown, type MediaEmbed } from './markdown.ts';
+import { extractMediaRefs } from '../../util/media-refs.ts';
+import { renderMarkdown, type MediaEmbed } from './markdown.ts';
 
 /** Rendered display width of in-article images (page column is ~768px). */
 export const ARTICLE_IMAGE_WIDTH = 768;

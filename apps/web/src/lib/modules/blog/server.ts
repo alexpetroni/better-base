@@ -3,7 +3,6 @@
 // $lib/server/media-library.ts MEDIA_REFERENCE_CHECKS.
 export { articlesMediaReferenceCheck } from './media-ref.ts';
 export {
-	extractMediaRefs,
 	pictureHtml,
 	renderMarkdown,
 	videoEmbedHtml,

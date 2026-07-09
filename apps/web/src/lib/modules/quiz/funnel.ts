@@ -4,7 +4,7 @@ import {
 	sendNewsletterConfirmEmail,
 	upsertSubscriber,
 	type NewsletterSignupDeps
-} from '../crm/service.ts';
+} from '$lib/modules/crm/server';
 import type { ConsentChanges } from '../crm/consent.ts';
 import type { EmailSender, SendEmailOutcome } from '../email/service.ts';
 import { quizResults } from './schema.ts';

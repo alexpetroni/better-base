@@ -1,5 +1,6 @@
 import { Marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
+import { MEDIA_REF_PREFIX } from '../../util/media-refs.ts';
 import type { ImageSources } from '../media/imgproxy.ts';
 
 /**
@@ -17,17 +18,6 @@ export type MediaEmbed =
 	| { kind: 'video'; provider: 'youtube' | 'bunny'; externalId: string };
 
 export type MediaResolver = (ref: string) => MediaEmbed | null;
-
-export const MEDIA_REF_PREFIX = 'media:';
-
-/** All `media:` refs mentioned as image targets: `![alt](media:REF)`. */
-export function extractMediaRefs(md: string): string[] {
-	const refs = new Set<string>();
-	for (const match of md.matchAll(/!\[[^\]]*\]\(media:([^)\s]+)(?:\s[^)]*)?\)/g)) {
-		refs.add(match[1]);
-	}
-	return [...refs];
-}
 
 function escapeHtml(value: string): string {
 	return value

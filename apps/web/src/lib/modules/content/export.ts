@@ -2,7 +2,7 @@ import { eq, inArray, or } from 'drizzle-orm';
 import { pillars } from '../../db/schema/core.ts';
 import type { Db } from '../../db/client.ts';
 import type { Result } from '../../util/result.ts';
-import { extractMediaRefs } from '../blog/markdown.ts';
+import { extractMediaRefs } from '../../util/media-refs.ts';
 import { articlePillars, articles } from '../blog/schema.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import type { Storage } from '../media/storage.ts';
