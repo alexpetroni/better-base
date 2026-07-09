@@ -43,6 +43,13 @@
       "when": 1783559531081,
       "tag": "0005_rapid_owl",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783559919404,
+      "tag": "0006_narrow_alex_wilder",
+      "breakpoints": true
     }
   ]
 }
