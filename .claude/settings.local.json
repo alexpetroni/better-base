@@ -29,7 +29,9 @@
       "Bash(netstat -ltnp)",
       "Bash(sed -i \"s|const B = 'http://localhost:3000'|const B = 'http://localhost:4173'|\" drive.mjs)",
       "Bash(node drive.mjs)",
-      "Bash(grep -rn 'from '\\\\''$lib/modules/media'\\\\''' src)"
+      "Bash(grep -rn 'from '\\\\''$lib/modules/media'\\\\''' src)",
+      "Bash(chmod +x scripts/dev-run.sh scripts/dev-stop.sh)",
+      "Bash(SKIP_BUILD=1 bash scripts/dev-run.sh)"
     ]
   }
 }
