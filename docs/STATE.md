@@ -1,4 +1,31 @@
-# STATE — after FIX-8 (frontend a11y / SEO / performance batch)
+# STATE — after the initial-content / env-host batch (2026-08-06)
+
+## Initial content directory + service-host normalization (2026-08-06)
+
+Two additions after FIX-8: no schema changes, no migrations. One new optional
+env var (`CONTENT_DIR`) and one new script (`pnpm content:init`).
+
+- **`content/` is where a site's starting content lives** (`content/README.md`).
+  Files are ordinary export bundles, imported by `pnpm db:seed` after the pillars
+  (an import needs them) and by `pnpm content:init` on demand: `content/common/`
+  for every site, then `content/<SITE_ID>/`, each in filename order (`010-`,
+  `020-` prefixes), so a site-local file can update a common slug. Loader is
+  `modules/content/init.ts` — it uses `node:fs`, so it is deliberately NOT in the
+  module barrel and stays out of the app bundle. Missing directories are skipped;
+  a broken bundle is reported per file and skipped rather than aborting the run,
+  and `db:seed` exits non-zero if any failed. Idempotent via `importContent`
+  (upsert by slug, media matched by storage key). `content/examples/` holds a
+  copyable reference bundle and is never imported. Details under CLI scripts.
+- **Service hostnames now adapt to where the process runs** instead of being
+  pinned in `.env` — rule and rationale in Env & environment quirks. This
+  unblocked the integration suite, `db:migrate` and the seed scripts on the HOST
+  with the committed `.env`, which previously died with `ENOTFOUND
+  host.docker.internal` and needed a manual override per command.
+- **Verification**: full unit+integration suite (411 tests) green on the host
+  against the committed `.env`; a `dev-run.sh` launch driven through home → blog
+  → article → shop → add-to-cart → cart → quiz → chat → admin login in chromium
+  with no 4xx/5xx and no JS errors; a bundle dropped into `content/common/`
+  confirmed rendering as a live blog article.
 
 ## Remediation FIX-8 (audit Frontend #1–#15 — after FIX-7)
 
