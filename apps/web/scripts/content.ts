@@ -7,10 +7,10 @@
 // database + bucket of the CURRENT env (DATABASE_URL, S3_*) — to move content
 // between sites, run export against site A's env and import against site B's:
 //   DATABASE_URL=…life S3_BUCKET=…life pnpm content import article.json
-import { config } from 'dotenv';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { loadRootEnv } from './env.ts';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import { isContentType, parseBundle } from '../src/lib/modules/content/bundle.ts';
@@ -24,7 +24,7 @@ import {
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 const USAGE = `Usage:
   pnpm content export --type article|quiz|product --slug <slug> [--out file.json]

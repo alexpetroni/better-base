@@ -38,10 +38,14 @@ Server log: `.run/app.log`. PID: `.run/app.pid`.
 These are the traps that cost time before the script existed — the script handles all
 of them, but if you run steps by hand, honor them:
 
-- **Host networking ≠ container networking.** The committed `.env` targets the
-  phase-runner container (`host.docker.internal`), which does not resolve on the host.
-  The script forces `localhost` for `DATABASE_URL`/`S3_ENDPOINT`/`IMGPROXY_URL`
-  **without editing `.env`**. Never point the host app at `host.docker.internal`.
+- **Host networking ≠ container networking.** The compose stack publishes on the
+  docker host: `localhost` from the host, `host.docker.internal` from a sibling
+  container. `pnpm` tooling handles this itself now (`loadRootEnv()` in
+  `apps/web/scripts/env.ts` rewrites `DATABASE_URL`/`TEST_DATABASE_URL`/
+  `S3_ENDPOINT`/`IMGPROXY_URL` per environment), so vitest/seed/migrate run from
+  either place with the committed `.env` untouched. The script still exports
+  `localhost` explicitly because the **adapter-node build reads none of that** —
+  see the next point. Never edit `.env` to fix a hostname.
 - **The adapter-node build does NOT load `.env` at runtime.** `dotenv` only covers the
   `pnpm` scripts (migrate/seed). The server process needs every var *exported*, which
   the script does. Launching `node build/index.js` with a bare shell → `SITE_ID is not

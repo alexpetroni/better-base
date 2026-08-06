@@ -1,12 +1,11 @@
 // GDPR data-deletion CLI: erases a subscriber and anonymizes their traces.
 // Usage: pnpm subscriber:delete -- --email person@example.com
-import { config } from 'dotenv';
-import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { loadRootEnv } from './env.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import { eraseSubscriberData } from '../src/lib/modules/gdpr/erase.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 const args = process.argv.slice(2);
 if (args[0] === '--') args.shift();

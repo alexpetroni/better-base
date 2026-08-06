@@ -4,15 +4,14 @@
 // counter tables grow unbounded without this (audit resilience #6).
 // Runs with plain node against DATABASE_URL — wire it into cron at deploy time
 // (e.g. daily). Keep imports relative with explicit .ts extensions.
-import path from 'node:path';
-import { config } from 'dotenv';
+import { loadRootEnv } from './env.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import { loginAttempts } from '../src/lib/modules/auth/schema.ts';
 import { CHAT_RETENTION_DAYS, pruneChatSessions } from '../src/lib/modules/chat/service.ts';
 import { pruneStaleRateLimits } from '../src/lib/server/rate-limit/core.ts';
 import { rateLimits } from '../src/lib/server/rate-limit/schema.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 const url = process.env.DATABASE_URL;
 if (!url) {

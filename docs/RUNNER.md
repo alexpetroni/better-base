@@ -43,7 +43,8 @@ Monitor: `tail -f state/logs/phase-*.log | jq -r 'select(.type=="assistant") | .
   exactly these scripts, so the gate is valid from the first phase boundary.
 - Phases 2+ integration/e2e tests need the compose stack; the agent manages
   `docker compose up` itself (DooD — services are reachable for it at
-  `host.docker.internal`, as instructed in PROMPT.md).
+  `host.docker.internal`, which `loadRootEnv()` substitutes automatically; see
+  PROMPT.md).
 - If a phase aborts with `BLOCKER.md` in the repo root, read it, decide, delete
   it, and re-run — the runner resumes at the unfinished phase.
 - To re-run a finished phase intentionally, remove its line from

@@ -1098,7 +1098,8 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - `pnpm subscriber:delete -- --email x@y.ro` — GDPR erasure (subscriber row
   deleted, quiz results unlinked, orders/email log anonymized).
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site
-  prefix e.g. `SITE_ID=life DATABASE_URL=postgres://better:better@host.docker.internal:5433/better_life`.
+  prefix e.g. `SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5433/better_life`
+  (the host is normalized either way — see the service-hostname note in Env below).
 - `pnpm --filter web db:generate` — generate a new migration after schema changes.
 
 ## Env & environment quirks
@@ -1107,11 +1108,24 @@ Not run in CI/agent runs — do this by hand when you have keys:
   `TEST_DATABASE_URL`, `PUBLIC_SITE_URL`, `DB_PORT`, `BETTER_AUTH_SECRET` (new in
   Phase 1 — better-auth session secret; generate a real one outside dev) and
   `TOKEN_SECRET` (new in FIX-6 — signs consent/chat/upload tokens; must differ
-  from the auth secret). It is loaded by `vite.config.ts`
-  (dotenv, never overrides real env), `drizzle.config.ts`, `scripts/seed.ts`, and the
-  vitest setup file. In this agent container all service hosts are
-  `host.docker.internal` (compose containers are siblings); `.env.example`
-  documents `localhost` for humans.
+  from the auth secret). Every tooling entry point loads it through
+  `scripts/env.ts` → `loadRootEnv()` (`vite.config.ts`, `drizzle.config.ts`,
+  `e2e/env.ts` and all six `scripts/*.ts`; dotenv still never overrides real env).
+- **Service hostnames are normalized at load time** (`src/lib/config/hosts.ts`,
+  unit-tested in `hosts.spec.ts`). The compose stack publishes its ports on the
+  DOCKER HOST, so the right spelling depends on where the process runs:
+  `localhost` on the host, `host.docker.internal` from a sibling container (agent
+  / phase runner). `loadRootEnv()` detects containerhood (`/.dockerenv`, else
+  `/proc/1/cgroup`) and rewrites `DATABASE_URL`, `TEST_DATABASE_URL`,
+  `S3_ENDPOINT` and `IMGPROXY_URL` accordingly — only those four, and only when
+  the host is `localhost`/`127.0.0.1`/`host.docker.internal`, so compose service
+  names (`db`, `minio`) and real deployment hosts are never touched. Only the
+  host substring is spliced, preserving port/credentials/db/trailing slash
+  (`new URL().toString()` would append a `/` and break `${IMGPROXY_URL}/sig/…`).
+  Consequence: **`.env` no longer needs editing when moving between host and
+  container**, and either spelling works in the committed file.
+  `PUBLIC_SITE_URL`/`ORIGIN` are deliberately out of scope — they are the app's
+  own origin, not a service it dials.
 - Phase 5 env vars: `STRIPE_SECRET_KEY` (**empty in dev/tests → deterministic
   mock gateway**; set `sk_test_…` only for manual verification) and
   `STRIPE_WEBHOOK_SECRET` (any non-empty value for the mock/dev flow; the
@@ -1134,11 +1148,11 @@ Not run in CI/agent runs — do this by hand when you have keys:
   `IMGPROXY_SALT`, plus compose port knobs `MINIO_PORT`, `MINIO_CONSOLE_PORT`,
   `IMGPROXY_PORT`. **Reachability rule**: `S3_ENDPOINT` and `IMGPROXY_URL` must be
   reachable by BOTH the server process and the browser (presigned PUTs and <img>
-  fetches go directly from the browser). In this container that is
-  `host.docker.internal:9000/8888` for both, because the app/vitest/playwright's
-  chromium all run in the agent container while minio/imgproxy are siblings with
-  host-published ports; on a human host machine `localhost:9000/8888` serves both
-  roles. A prod split (internal S3 endpoint + public imgproxy domain) would need
+  fetches go directly from the browser). Both roles sit on the same machine, so
+  one value works: `localhost:9000/8888` on the host, `host.docker.internal:9000/8888`
+  in an agent container (app/vitest/playwright's chromium run there while
+  minio/imgproxy are siblings with host-published ports) — and `loadRootEnv()`
+  picks the right one, so `.env` needs no per-environment edit. A prod split (internal S3 endpoint + public imgproxy domain) would need
   separate vars — not needed yet.
 - Host port **5433** for Postgres (5432 is occupied by an unrelated container on this
   host). Container port stays 5432.

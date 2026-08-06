@@ -52,9 +52,13 @@ docker daemon (docker-out-of-docker). Consequences:
   ports live on the host: reach them at **`host.docker.internal:PORT`**, never
   `127.0.0.1`. This applies to Postgres, MinIO, imgproxy, and any preview server
   you curl from a separate shell.
-- Therefore all connection strings must come from env vars. In the `.env` YOU
-  create and use, point hosts at `host.docker.internal`. In `.env.example`,
-  document `localhost` (what a human on the host uses). Never hardcode either.
+- Therefore all connection strings must come from env vars — never hardcode a
+  host. You do NOT need to edit `.env` for this: `loadRootEnv()`
+  (`apps/web/scripts/env.ts`) rewrites `DATABASE_URL`, `TEST_DATABASE_URL`,
+  `S3_ENDPOINT` and `IMGPROXY_URL` to `host.docker.internal` when the process
+  runs in a container and to `localhost` when it runs on the host, so one
+  committed file serves both. Load env through it rather than calling dotenv
+  directly.
 - The app's own dev server / vitest run INSIDE your container, so the app reaches
   Postgres at `host.docker.internal:5432` too (via `DATABASE_URL` from your `.env`).
 

@@ -1,11 +1,10 @@
 // Idempotent storage bootstrap: creates the media bucket if missing.
 // Run via `pnpm storage:init` (after `docker compose up -d`).
-import { config } from 'dotenv';
-import path from 'node:path';
+import { loadRootEnv } from './env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 const cfg = storageConfigFromEnv(process.env);
 for (const [name, value] of Object.entries(cfg)) {

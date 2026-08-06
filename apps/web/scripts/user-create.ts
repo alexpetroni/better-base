@@ -1,14 +1,13 @@
 // Creates (or, idempotent on email, updates) a staff user.
 // Usage: pnpm user:create -- --email you@example.com --password 'min12chars!' --role admin
-import { config } from 'dotenv';
-import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { loadRootEnv } from './env.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import { createAuth } from '../src/lib/modules/auth/auth.ts';
 import { isStaffRole } from '../src/lib/modules/auth/guards.ts';
 import { upsertStaffUser } from '../src/lib/modules/auth/staff.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 // pnpm forwards the user's `--` separator literally; drop it so parseArgs
 // still sees the flags as options.

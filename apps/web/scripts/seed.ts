@@ -1,8 +1,8 @@
 // Seeds the pillars table for the active SITE_ID, plus demo content
 // (articles, quiz, products incl. placeholder images), then imports the
 // initial content bundles from `content/`. Run via `pnpm db:seed`.
-import { config } from 'dotenv';
 import path from 'node:path';
+import { loadRootEnv } from './env.ts';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import {
@@ -20,7 +20,7 @@ import {
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 const site = resolveSiteConfig(process.env.SITE_ID);
 const databaseUrl = process.env.DATABASE_URL;

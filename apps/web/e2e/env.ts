@@ -1,9 +1,8 @@
 // Shared e2e environment: derives per-site database URLs from the root .env
 // and defines the staff credentials the global setup seeds.
-import { config } from 'dotenv';
-import path from 'node:path';
+import { loadRootEnv } from '../scripts/env.ts';
 
-config({ path: path.resolve(import.meta.dirname, '../../../.env') });
+loadRootEnv();
 
 export const SITE_DB_NAMES = { sleep: 'better_sleep', life: 'better_life' } as const;
 

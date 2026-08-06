@@ -3,12 +3,14 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { config } from 'dotenv';
-import path from 'node:path';
+import { loadRootEnv } from './scripts/env.ts';
 
 // The .env lives at the repo root, shared with docker compose and drizzle-kit.
-// Load it into process.env for dev/preview/test; existing env vars win.
-config({ path: path.resolve(import.meta.dirname, '../../.env') });
+// Load it into process.env for dev/preview/test; existing env vars win. It also
+// rewrites the compose-service URLs to the hostname reachable from this process
+// (localhost on the host, host.docker.internal from a sibling container), so
+// vitest/dev work from either without anyone editing .env.
+loadRootEnv();
 
 export default defineConfig({
 	envDir: '../../',

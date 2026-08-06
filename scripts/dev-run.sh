@@ -4,9 +4,10 @@
 # the adapter-node server, then prints the URL. Idempotent: safe to re-run.
 #
 # Why this script exists (lessons the hard way):
-#   - The committed .env targets the runner container (host.docker.internal),
-#     which does NOT resolve on the host. We force localhost here without
-#     touching .env.
+#   - The .env may spell the compose services either way (localhost /
+#     host.docker.internal). `pnpm` tooling normalizes that itself, but the
+#     adapter-node server below gets its env from this script, so we force
+#     localhost here — without touching .env.
 #   - The adapter-node BUILD does not read .env at runtime, so every var must be
 #     exported into the server's process (dotenv only covers pnpm scripts).
 #   - SvelteKit's CSRF check rejects form POSTs unless ORIGIN matches the served
