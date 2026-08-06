@@ -17,6 +17,7 @@
 		"storage:init": "pnpm --filter web storage:init",
 		"chat:prune": "pnpm --filter web chat:prune",
 		"content": "pnpm --filter web content",
+		"content:init": "pnpm --filter web content:init",
 		"subscriber:delete": "pnpm --filter web subscriber:delete",
 		"user:create": "pnpm --filter web user:create"
 	}

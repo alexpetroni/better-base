@@ -1,0 +1,17 @@
+{
+	"version": 2,
+	"type": "article",
+	"pillars": ["somn"],
+	"media": [],
+	"article": {
+		"slug": "exemplu-continut-initial",
+		"title": "Exemplu de conținut inițial",
+		"excerpt": "Articol importat din content/common la seed.",
+		"bodyMd": "Acest articol a venit dintr-un bundle din `content/common/`.\n",
+		"coverMediaId": null,
+		"status": "published",
+		"publishedAt": "2026-06-01T08:00:00.000Z",
+		"seoTitle": null,
+		"seoDescription": null
+	}
+}

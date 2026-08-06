@@ -555,6 +555,8 @@ chatPersonaKey, email }`.
 - **Seed**: `pnpm db:seed` upserts the active site's pillars (idempotent);
   logic in `src/lib/db/seed.ts`, entry `scripts/seed.ts` (plain `node`, Node 24 type
   stripping — keep script imports relative with explicit `.ts` extensions).
+  Its final step imports the initial-content bundles from `content/` — see the
+  `pnpm content:init` entry under CLI scripts.
 - **Modules**: `src/lib/modules/{blog,quiz,shop,chat,email,media,auth}/` with barrel
   `index.ts` each. ESLint `no-restricted-imports` forbids importing
   `$lib/modules/<name>/<anything deeper>` — cross-module imports go through the barrel,
@@ -1081,6 +1083,18 @@ Not run in CI/agent runs — do this by hand when you have keys:
   (bundle carries media bytes; import is idempotent by slug and targets the
   current env's db+bucket; a bundle whose pillars are all absent from the
   target is refused unless `--allow-untagged`).
+- `pnpm content:init` (= `pnpm content import-dir [dir]`) — import every `*.json`
+  bundle in a directory. With no argument it imports the active site's
+  initial-content directories: `content/common/` then `content/<SITE_ID>/`
+  (base overridable with `CONTENT_DIR`). Files import in filename order, so
+  `010-`/`020-` prefixes control sequencing; missing directories are skipped.
+  `pnpm db:seed` runs this as its last step (after pillars — an import needs
+  them to exist) and exits non-zero if any bundle failed. Loader:
+  `apps/web/src/lib/modules/content/init.ts` (uses `node:fs`, deliberately NOT
+  re-exported from the module index so it stays out of the app bundle).
+  Authoring guide: `content/README.md`; `content/examples/article.json` is a
+  copyable minimal bundle. A broken file is reported and skipped — it never
+  blocks the other bundles.
 - `pnpm subscriber:delete -- --email x@y.ro` — GDPR erasure (subscriber row
   deleted, quiz results unlinked, orders/email log anonymized).
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site

@@ -1,5 +1,6 @@
 // Seeds the pillars table for the active SITE_ID, plus demo content
-// (articles, quiz, products incl. placeholder images). Run via `pnpm db:seed`.
+// (articles, quiz, products incl. placeholder images), then imports the
+// initial content bundles from `content/`. Run via `pnpm db:seed`.
 import { config } from 'dotenv';
 import path from 'node:path';
 import { resolveSiteConfig } from '../src/lib/config/index.ts';
@@ -11,6 +12,11 @@ import {
 	seedDemoQuiz,
 	seedPillars
 } from '../src/lib/db/seed.ts';
+import {
+	contentDirsFor,
+	formatInitResult,
+	importContentDirs
+} from '../src/lib/modules/content/init.ts';
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
 
@@ -34,4 +40,23 @@ const productCount = await seedDemoProducts(db, storage);
 console.log(`Seeded ${productCount} demo product(s)`);
 const pageCount = await seedDefaultPages(db);
 console.log(`Seeded ${pageCount} default page(s)`);
+
+// Initial content last: importing needs the pillars above to already exist
+// (a bundle whose pillars are all missing is refused as invisible).
+const contentBase =
+	process.env.CONTENT_DIR ?? path.resolve(import.meta.dirname, '../../../content');
+const dirs = contentDirsFor(contentBase, site.id);
+const init = await importContentDirs({ db, storage }, dirs);
+if (init.dirs.length === 0) {
+	console.log(`No initial content directories under ${contentBase} — skipped`);
+} else {
+	console.log(
+		`Initial content from ${init.dirs.map((d) => path.relative(contentBase, d) || '.').join(', ')}: ` +
+			`${init.imported} imported, ${init.failed} failed`
+	);
+	for (const result of init.results) console.log(formatInitResult(result));
+}
+
 await db.$client.end();
+// A broken bundle must not pass silently as a successful seed.
+if (init.failed > 0) process.exit(1);
