@@ -7,6 +7,8 @@ changes, no per-site branches.
 
 This document assumes a Linux host (or PaaS) that can run a Node 24+ process,
 plus Postgres 16, an S3-compatible object store and one imgproxy instance.
+**§12 covers the serverless alternative: Vercel + Neon**, which uses the same
+codebase and the same env matrix with three variables changed.
 
 ## 1. Architecture at a glance
 
@@ -54,7 +56,11 @@ Shared (may be identical on both sites):
 | `IMGPROXY_KEY`, `IMGPROXY_SALT` | `openssl rand -hex 32` (twice) | MUST match the imgproxy process's own `IMGPROXY_KEY`/`IMGPROXY_SALT`. |
 | `CHAT_PROVIDER` | `anthropic` (prod) | With `anthropic` the server **refuses to boot** without `ANTHROPIC_API_KEY` — no silent mock fallback. Keep `mock` if the assistant should not use the live API yet. |
 | `ANTHROPIC_API_KEY` | from Anthropic console | Only read when `CHAT_PROVIDER=anthropic`. |
-| `ADDRESS_HEADER`, `XFF_DEPTH` | see §3 | REQUIRED behind any proxy so rate limits key real client IPs, and dangerous if set wrong — read §3 before setting. |
+| `ADDRESS_HEADER`, `XFF_DEPTH` | see §3 | REQUIRED behind any proxy so rate limits key real client IPs, and dangerous if set wrong — read §3 before setting. **adapter-node only** — on Vercel the platform resolves the client IP itself (§12). |
+| `DEPLOY_TARGET` | unset (`node`) | Only for building the Vercel output locally; Vercel sets `VERCEL=1` itself (§12). |
+| `DB_DRIVER` | unset (`pg`) | `neon` selects the serverless WebSocket driver (§12). An unknown value refuses to boot. |
+| `DIRECT_DATABASE_URL` | unset | Migrations only: an unpooled connection for DDL (§12). Falls back to `DATABASE_URL`. |
+| `CRON_SECRET` | unset | Required only where the retention job runs over HTTP instead of cron (§12). |
 
 The server validates the whole matrix at boot and **refuses to start** with a
 message listing every missing variable (plus `RESEND_API_KEY` when
@@ -226,7 +232,11 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 
 | Schedule | Command | Purpose |
 | --- | --- | --- |
-| daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade). |
+| daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade) and sweeps expired rate-limit counter rows. |
+
+Where no machine can run scripts (Vercel), the same job is available over HTTP
+at `GET /api/cron/chat-prune` — see §12. Both call `runRetentionSweep()` in
+`src/lib/server/retention.ts`, so they cannot drift apart.
 
 On-demand (not cron): `pnpm subscriber:delete -- --email x@y.ro` for GDPR
 erasure requests (deletes the subscriber, unlinks quiz results, anonymizes
@@ -259,3 +269,104 @@ Content shared between sites travels via `pnpm content export/import` (§9).
    dry-run is off).
 5. Test-mode purchase → order appears in /admin/orders as `plătită`.
 6. `robots.txt`, `sitemap.xml` reachable; `/nu-exista` renders the 404 page.
+
+## 12. Serverless: Vercel + Neon
+
+The same codebase deploys to Vercel with Neon as the database. Nothing forks —
+the target is chosen by environment variables, and with them unset the app
+builds and runs exactly as §1–§11 describe.
+
+```
+   bettersleep.ro ─▶ Vercel functions (nodejs22.x, SITE_ID=sleep) ─▶ Neon (pooled endpoint)
+                              │ presigned PUTs / reads
+                              ▼
+                     R2 bucket: bettersleep-media
+                              ▲
+                     imgproxy (Fly / Railway / a small VPS) ◀── signed URLs from the app
+```
+
+**imgproxy still runs somewhere.** Vercel cannot host it, and the app signs
+imgproxy URLs for every image. Point `IMGPROXY_URL` at a small always-on
+instance with the same `IMGPROXY_KEY`/`IMGPROXY_SALT` as the app and R2
+credentials of its own (§6 unchanged). This is the one piece of non-serverless
+infrastructure the setup needs.
+
+### What changes
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `DB_DRIVER` | `neon` | Neon's serverless driver over WebSockets. HTTP is not an option: `db.transaction()` is used by the blog, shop and GDPR services. Also shrinks the pool to 1 connection per function instance (`DB_POOL_MAX` overrides). |
+| `DATABASE_URL` | Neon **pooled** URL (`…-pooler.…neon.tech/db?sslmode=require`) | Functions are short-lived; the pooler absorbs their connection churn. |
+| `DIRECT_DATABASE_URL` | Neon **unpooled** URL | Migrations only. DDL through PgBouncer's transaction mode is unreliable; `drizzle.config.ts` prefers this and falls back to `DATABASE_URL`. |
+| `CRON_SECRET` | `openssl rand -hex 32` | Guards the retention route below. Vercel Cron sends it as `Authorization: Bearer …` automatically. |
+| `ADDRESS_HEADER`, `XFF_DEPTH` | **leave unset** | Vercel resolves the client IP itself. Setting them here would let a caller spoof `getClientAddress()` and defeat every rate limit. |
+
+Everything else — `SITE_ID`, `PUBLIC_SITE_URL`, the S3/R2 block, the imgproxy
+block, Stripe, Resend, chat — is identical to §2. Boot validation is unchanged,
+so a missing variable still refuses the deploy with one message listing all of
+them.
+
+### Project setup
+
+Vercel dashboard → New Project → import the repo:
+
+- **Root Directory**: `apps/web`
+- **Install Command**: `cd ../.. && pnpm install --frozen-lockfile` — the
+  install must run at the repo root so pnpm builds `packages/formcomp` via its
+  `prepare` script. Its `dist/` is gitignored, so an install scoped to
+  `apps/web` produces a build that cannot resolve `formcomp`.
+- **Build Command**: `pnpm build` (the adapter switches itself: Vercel sets
+  `VERCEL=1`; `vite.config.ts` picks `adapter-vercel`, otherwise `adapter-node`)
+- **Output**: `.vercel/output` (detected automatically)
+- **Node version**: 22.x, matching the `runtime` the adapter requests. The Neon
+  driver needs a global `WebSocket`.
+
+`apps/web/vercel.json` ships the cron schedule. Function defaults are fine;
+`/api/chat` declares `maxDuration = 60` in its `+server.ts` because the
+assistant streams its reply and would otherwise be cut off at the plan default.
+
+### Deploy order
+
+Migrations do **not** run during the build — a build is not a deploy, and
+Vercel may run several concurrently. Run them yourself, then deploy:
+
+```bash
+# from a checkout, with the site's Neon URLs exported:
+DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
+DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm db:seed        # first deploy only
+DATABASE_URL="…-pooler…" pnpm content:init                             # initial content, idempotent
+DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin --password '…'
+```
+
+`pnpm db:seed` uploads the placeholder product images, so it needs the R2
+credentials too. All of these are idempotent — safe to re-run on later deploys.
+
+### Retention job
+
+`vercel.json` schedules `GET /api/cron/chat-prune` daily. The route requires
+`Authorization: Bearer $CRON_SECRET`; without `CRON_SECRET` set it answers
+`503` rather than running unauthenticated. Verify once by hand:
+
+```bash
+curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/chat-prune
+# {"sessions":0,"chatRateLimitRows":0,…,"retentionDays":30}
+```
+
+### Verification
+
+§11 applies unchanged. Two additions worth doing on the first serverless
+deploy, because they exercise what this target actually changes:
+
+1. `/api/health` → `{"db":"ok","storage":"ok"}` proves the Neon driver and R2
+   from inside a function.
+2. Send a chat message and watch it stream token by token — that proves the
+   Node runtime, response streaming and `maxDuration` together.
+
+### Known limits
+
+- **Cold starts** hit the first request after idle: a fresh function opens a
+  new Neon connection. The pooled endpoint keeps this in the tens of
+  milliseconds; it is not zero.
+- **One always-on box remains** for imgproxy. Removing it means teaching the
+  media layer a second transform provider (e.g. Vercel Image Optimization) —
+  deliberately out of scope here, since it would touch every page's rendering.

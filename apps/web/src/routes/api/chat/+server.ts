@@ -19,6 +19,13 @@ const SESSION_COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // matches the 30-day retentio
 const CHAT_MAX_BODY_BYTES = 32 * 1024;
 
 /**
+ * Serverless (adapter-vercel) only; ignored by adapter-node. A streamed reply
+ * outlives the 10s default of the Hobby plan, and the runtime must stay Node —
+ * this route reaches node:crypto and the Postgres driver.
+ */
+export const config = { maxDuration: 60 };
+
+/**
  * Advice chat endpoint: accepts `{ message }`, streams the assistant reply as
  * SSE (`data: {"delta": …}` frames, then `data: {"done": true}`). Session
  * ownership rides in a signed httpOnly cookie; all errors are JSON with a

@@ -1,4 +1,48 @@
-# STATE — after the initial-content / env-host batch (2026-08-06)
+# STATE — after the Vercel/Neon target (2026-08-06, branch `feat/vercel-neon`)
+
+## Vercel + Neon as a second deployment target (2026-08-06)
+
+On branch `feat/vercel-neon`, not merged. No schema changes, no migrations. The
+target is chosen by env vars; with them unset every byte of behaviour is what
+§1–§11 of DEPLOYMENT.md already described, which is why the existing suite is
+the regression proof.
+
+- **Adapter** (`vite.config.ts`): `adapter-vercel` when `VERCEL=1` (Vercel sets
+  it) or `DEPLOY_TARGET=vercel`; `adapter-node` otherwise, unchanged. Vercel
+  runtime is pinned to `nodejs22.x` — the Neon driver needs a global
+  `WebSocket`, and everything server-side here is Node-only anyway (node:crypto,
+  pg), so the edge runtime was never an option. `/api/chat` declares
+  `maxDuration = 60` because the assistant streams.
+- **DB driver seam** (`db/client.ts`): `DB_DRIVER` picks `pg` (default, today's
+  pool, untouched) or `neon` (`@neondatabase/serverless` + `drizzle-orm/neon-serverless`).
+  WebSockets, not Neon's HTTP driver: `db.transaction()` is used by
+  blog/shop/gdpr services and HTTP cannot hold an interactive transaction. Two
+  deliberate differences on the neon path — `statement_timeout` is applied with
+  a `SET` on connect (PgBouncer rejects non-allowlisted startup parameters) and
+  the pool defaults to 1 connection per function instance. An unknown
+  `DB_DRIVER` throws rather than silently falling back to a real pool.
+  `type Db` stays anchored to the node-postgres type; the neon branch casts,
+  since both are `PgDatabase` over the same schema with `$client.end()`.
+- **Retention job** (`server/retention.ts`, new): `runRetentionSweep()` extracted
+  from `scripts/chat-prune.ts`, now called by both the script and
+  `GET /api/cron/chat-prune` (scheduled in `apps/web/vercel.json`) — Vercel has
+  no machine to run scripts on. The route is guarded by `authorizeCron()`
+  (`server/cron.ts`): constant-time bearer compare, and **503 when `CRON_SECRET`
+  is unset** so an unconfigured deploy cannot fall open on an empty secret.
+- **Migrations**: `drizzle.config.ts` prefers `DIRECT_DATABASE_URL` (Neon's
+  unpooled endpoint) over `DATABASE_URL`. Migrations run from a checkout or CI,
+  never during the Vercel build.
+- **Build-machine guard**: `inContainer()` returns false when `VERCEL`/`CI` is
+  set, so the service-host normalization below can never fire in a build.
+- **imgproxy stays external** (Fly/Railway/VPS). Teaching the media layer a
+  second transform provider would touch `imageSources()` — the function every
+  page renders through — and that risk was explicitly not worth taking for this
+  step. `src/lib/modules/media/*` and every page are untouched.
+- **Verification**: 427 tests green (411 existing + 16 new: driver selection,
+  cron auth incl. the fall-open case, retention sweep against the real schema);
+  `pnpm check` and lint clean; both `pnpm build` and `DEPLOY_TARGET=vercel pnpm build`
+  succeed, the latter emitting `nodejs22.x` functions with streaming enabled and
+  `maxDuration: 60` on `/api/chat`. Not deployed live — needs the accounts.
 
 ## Initial content directory + service-host normalization (2026-08-06)
 

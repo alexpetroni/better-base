@@ -21,8 +21,14 @@ export const ROOT_ENV = path.resolve(import.meta.dirname ?? 'scripts', '../../..
 /**
  * Are we inside a container? `/.dockerenv` covers Docker; the cgroup path
  * covers containerd/Kubernetes runtimes that omit it. Errors mean "no".
+ *
+ * Build machines (Vercel, CI) are containers too, but there is no docker host
+ * with published ports next to them — their services are real remote hosts, so
+ * they report `false` and no rewrite can fire. Today's rule only touches
+ * localhost-ish hostnames, which makes this belt-and-braces.
  */
 export function inContainer(): boolean {
+	if (process.env.VERCEL || process.env.CI) return false;
 	if (existsSync('/.dockerenv')) return true;
 	try {
 		return /\b(docker|containerd|kubepods|libpod)\b/.test(readFileSync('/proc/1/cgroup', 'utf8'));

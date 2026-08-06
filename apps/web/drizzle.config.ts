@@ -6,11 +6,16 @@ import { loadRootEnv } from './scripts/env.ts';
 // (localhost on the host, host.docker.internal from a sibling container).
 loadRootEnv();
 
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
+// DDL prefers a DIRECT (unpooled) connection: Neon's pooled endpoint runs
+// PgBouncer in transaction mode, where migrations that need session state or
+// advisory locks can misbehave. Set DIRECT_DATABASE_URL to Neon's non-pooler
+// host; everywhere else it is unset and DATABASE_URL is already direct.
+const url = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
+if (!url) throw new Error('DATABASE_URL is not set');
 
 export default defineConfig({
 	dialect: 'postgresql',
 	schema: './src/lib/db/schema/index.ts',
 	out: './drizzle',
-	dbCredentials: { url: process.env.DATABASE_URL }
+	dbCredentials: { url }
 });
