@@ -25,6 +25,13 @@ the cron function); the app driven through the full funnel in chromium with no
 JS errors; `/api/cron/chat-prune` answering 401 / 401 / 200 for no-token /
 wrong-token / right-token, and 503 with `CRON_SECRET` unset.
 
+**UPDATE 2026-08-07 (NEXT-1):** the paragraph below is DONE locally — the full
+suite now runs with `DB_DRIVER=neon` over a real WebSocket connection
+(`pnpm test:neon`, local wsproxy behind `docker compose --profile neon`), and
+all three unknowns are answered by passing assertions; see `docs/STATE.md`
+§ "Neon driver proven" and DEPLOYMENT.md §12. What still needs a human is the
+one-off run against a real free-tier Neon project (§12 "Known limits").
+
 **NOT verified — start here:** the `neon` driver has never opened a connection.
 Every test ran against Postgres over `pg`. Unknowns worth watching: whether
 Neon's pooler accepts the `SET statement_timeout` on connect, whether the

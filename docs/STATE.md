@@ -1,4 +1,85 @@
-# STATE — after the Vercel/Neon target (2026-08-06, branch `feat/vercel-neon`)
+# STATE — after the Neon-driver proof (2026-08-07, branch `feat/vercel-neon`)
+
+## Neon driver proven over a real WebSocket connection (2026-08-07, NEXT-1)
+
+The `DB_DRIVER=neon` branch had shipped without ever opening a connection
+(every test ran over `pg`). It is now exercised for real: the full suite runs
+over the WebSocket transport against a local Neon-protocol stack, and the three
+unknowns recorded below ("Verification" of the 2026-08-06 section) are answered
+by passing assertions. No schema changes, no migrations; `DB_DRIVER` unset is
+byte-identical to before (the only client.ts change on that path is dead code
+behind `NEON_WS_PROXY`).
+
+- **Local Neon-protocol stack**: compose service `neon-proxy` behind
+  `--profile neon` (a plain `docker compose up -d` is unchanged — no new
+  container, no new required env). It is Neon's own `wsproxy` — the exact
+  WebSocket↔TCP proxy the serverless driver speaks against real Neon — built
+  from source at a pinned commit in `docker/wsproxy/Dockerfile`, because the
+  prebuilt images (`ghcr.io/neondatabase/wsproxy`, `…/neon_local`) are not
+  anonymously pullable (verified: `denied` on every tag tried). Target locked
+  to `db:5432` via `ALLOW_ADDR_REGEX`; host port `NEON_WS_PROXY_PORT`
+  (default 5488).
+- **Driver seam** (`db/client.ts`): when `NEON_WS_PROXY` (`host:port`) is set,
+  the neon path dials that proxy — `wsProxy` + `useSecureWebSocket=false`
+  (local proxy is plain ws://) + `pipelineConnect=false` (pipelining needs
+  cleartext password auth; compose Postgres uses SCRAM). Optional
+  `NEON_WS_PROXY_TARGET` (default `db:5432`) is the Postgres address as seen
+  from the proxy. Unset (i.e. against real Neon, and in every prod deploy)
+  none of this executes. `NEON_WS_PROXY` is host-normalized like the other
+  service vars (`config/hosts.ts` now also handles its scheme-less
+  `host:port` form).
+- **`pnpm test:neon`** (root + web): the FULL unit+integration suite with
+  `DB_DRIVER=neon` through the proxy. If the proxy is unreachable it fails
+  loudly in `tests/vitest-setup.ts` with the fix in the message
+  (`docker compose --profile neon up -d --build`) — it never skips, so a neon
+  run can't silently degrade into a pg run. Verified both ways: green with the
+  proxy up, a clear per-file error with it stopped.
+- **The three unknowns, answered in code** (`src/lib/db/driver-parity.spec.ts`
+  + compile-time assertions in `client.ts`):
+  1. **`SET statement_timeout` on connect is honored** on a neon-driver
+     connection: `SHOW statement_timeout` reports the configured value and a
+     query exceeding it is cancelled server-side ("statement timeout"),
+     identical under both drivers. The un-awaited `SET` in the pool's
+     `connect` hook is safe because the pg protocol is strictly ordered per
+     connection. (Verified against the real wsproxy + vanilla Postgres; Neon's
+     own PgBouncer parameter handling remains a named residual risk — see
+     DEPLOYMENT.md §12 "Known limits" for the one-off command against a free
+     Neon project.)
+  2. **The WebSocket transport survives the whole integration suite**: 434/434
+     tests green under `pnpm test:neon`, zero skips — including the
+     blog/shop/gdpr `db.transaction()` services, the drizzle migrator (every
+     integration spec re-migrates over the neon connection) and the parity
+     spec's explicit commit + rollback cases (a throwing transaction leaves no
+     rows, byte-identical results across drivers).
+  3. **The `Db` cast hides no runtime difference**: compile-time assertions
+     next to the cast prove the neon drizzle type still carries every member
+     `keyof Db` promises plus `$client.end()`/`transaction` (a drizzle or
+     driver bump that drops one stops compiling); the parity spec's runtime
+     surface check walks the pg client's prototype chain and asserts every
+     member exists on the neon client. Nothing surfaced — the seam needed no
+     behavioral change.
+- **Pooled-connection reality check**: with the neon default of 1 connection
+  per instance, 8 parallel inserts and 2 parallel interactive transactions
+  through one client all complete — concurrent work QUEUES on the single
+  connection (second checkout waits for the first release), it does not
+  deadlock. The wait is bounded by `DB_POOL_CONNECTION_TIMEOUT_MS` (5s
+  default), so a pathological pile-up sheds load instead of hanging.
+- **pg-only pool internals pinned**: the three `pool.spec.ts` tests that
+  assert node-postgres internals (pg.Pool options object, raw-TCP handshake
+  timeout) now pass driver `'pg'` explicitly so `pnpm test:neon` doesn't swap
+  the driver out from under them; their neon counterparts live in the parity
+  spec.
+- **Verification**: `pnpm test:neon` 434 passed / 0 skipped (57 files);
+  default gate `pnpm lint && pnpm check && pnpm test:unit` green with
+  `DB_DRIVER` unset (430 passed + 4 visible skips: the parity spec's neon
+  half, which needs the opt-in profile); `docker compose config --services`
+  without the profile lists exactly the old three services. New env vars (all
+  optional, dev/test only): `NEON_WS_PROXY`, `NEON_WS_PROXY_TARGET`,
+  `NEON_WS_PROXY_PORT`. New files: `docker/wsproxy/Dockerfile`,
+  `src/lib/db/driver-parity.spec.ts`. Still needing a human + real accounts:
+  the free-Neon-project run recorded in DEPLOYMENT.md §12 Known limits, and
+  everything in "Next steps" of `docs/NEXT-VERCEL-NEON.md` from imgproxy
+  hosting onward.
 
 ## Vercel + Neon as a second deployment target (2026-08-06)
 
@@ -1141,6 +1222,10 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - `pnpm storage:init` — create the media bucket (idempotent).
 - `pnpm dev` / `pnpm build` — dev server / production build (adapter-node).
 - `pnpm lint && pnpm check && pnpm test:unit` — the phase gate; all green.
+- `docker compose --profile neon up -d --build` then `pnpm test:neon` — the full
+  suite with `DB_DRIVER=neon` over a real WebSocket connection (local
+  Neon-protocol proxy; see DEPLOYMENT.md §12). Fails loudly if the proxy is
+  down, never skips.
 - `pnpm test:e2e` — needs the full compose stack up; builds, then runs playwright
   against two preview servers
   (port 4173 = `SITE_ID=sleep`, 4174 = `SITE_ID=life`); one build serves both because

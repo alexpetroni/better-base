@@ -362,6 +362,39 @@ deploy, because they exercise what this target actually changes:
 2. Send a chat message and watch it stream token by token — that proves the
    Node runtime, response streaming and `maxDuration` together.
 
+### Local Neon-protocol stack (proving `DB_DRIVER=neon` without an account)
+
+The neon driver speaks Postgres over a WebSocket proxy, and that proxy runs
+locally: the compose file ships a `neon-proxy` service — Neon's own `wsproxy`,
+built from source at a pinned commit (`docker/wsproxy/Dockerfile`; the prebuilt
+image is not anonymously pullable) — behind a compose **profile**, so a plain
+`docker compose up -d` never builds or starts it.
+
+```bash
+docker compose --profile neon up -d --build   # db + minio + imgproxy + neon-proxy
+pnpm test:neon                                # the FULL suite with DB_DRIVER=neon over ws://
+```
+
+`pnpm test:neon` runs every unit and integration spec through the WebSocket
+transport — including the blog/shop/gdpr transaction paths and the drizzle
+migrator — and fails loudly (with the command above in the message) rather than
+skipping if the proxy is not up. The seam is `NEON_WS_PROXY` (`host:port`,
+default `localhost:5488`, host-normalized like the other service vars): when
+set, `db/client.ts` points the driver's `wsProxy` at it with
+`useSecureWebSocket=false` (the local proxy is plain `ws://`) and
+`pipelineConnect=false` (connect pipelining needs cleartext password auth;
+compose Postgres uses SCRAM). The proxy only accepts `db:5432` as a target
+(`ALLOW_ADDR_REGEX`). Against real Neon, leave `NEON_WS_PROXY` unset — the
+driver derives the `wss://` endpoint from the connection string itself.
+
+What this proves: the `SET statement_timeout` issued on connect is honored and
+cancels runaway queries; interactive transactions commit and roll back over the
+WebSocket; the two drivers expose the same client surface; and parallel work
+through the driver's 1-connection-per-instance default queues on the single
+connection instead of deadlocking (waits are bounded by
+`DB_POOL_CONNECTION_TIMEOUT_MS`, so overload sheds instead of hanging). The
+driver-level assertions live in `src/lib/db/driver-parity.spec.ts`.
+
 ### Known limits
 
 - **Cold starts** hit the first request after idle: a fresh function opens a
@@ -370,3 +403,18 @@ deploy, because they exercise what this target actually changes:
 - **One always-on box remains** for imgproxy. Removing it means teaching the
   media layer a second transform provider (e.g. Vercel Image Optimization) —
   deliberately out of scope here, since it would touch every page's rendering.
+- **Residual risk — Neon's own pooler and TLS path are NOT covered by the local
+  stack.** The local proxy proves the WebSocket transport and this codebase's
+  driver seam; it cannot prove Neon's PgBouncer configuration (its startup-
+  parameter allowlist, `SET` handling on the pooled endpoint) or the `wss://`
+  TLS handshake. Before the first production deploy, run once against a real
+  (free-tier) Neon project:
+
+  ```bash
+  DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
+  DB_DRIVER=neon DATABASE_URL="…-pooler…" TEST_DATABASE_URL="…-pooler…/better_test" pnpm test:unit
+  ```
+
+  Until that has been done, treat `SET statement_timeout` behavior on Neon's
+  pooled endpoint as unverified there (it is verified against vanilla Postgres
+  through the real wsproxy).
