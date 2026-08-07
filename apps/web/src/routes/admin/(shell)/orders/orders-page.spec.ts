@@ -182,9 +182,10 @@ describe('fulfillment service (the single writer)', () => {
 	});
 
 	it('reports a missing order', async () => {
-		expect(await transitionFulfillment({ db }, 'no-such-order', 'packed', { actor: 'x' })).toEqual(
-			{ ok: false, error: 'not-found' }
-		);
+		expect(await transitionFulfillment({ db }, 'no-such-order', 'packed', { actor: 'x' })).toEqual({
+			ok: false,
+			error: 'not-found'
+		});
 	});
 
 	it('walks the whole happy path and stops at the terminal state', async () => {
@@ -249,6 +250,11 @@ describe('/admin/orders work queue', () => {
 	it('filters by a single fulfillment status', async () => {
 		expect((await loadIds('http://localhost/admin/orders?f=unfulfilled')).ids).toEqual(
 			[needsPacking.id, pendingPayment.id].sort()
+		);
+		// The oversold fixture was shipped by the previous test, so it sits
+		// alongside the always-shipped one here.
+		expect((await loadIds('http://localhost/admin/orders?f=shipped')).ids).toEqual(
+			[shipped.id, overSold.id].sort()
 		);
 		expect((await loadIds('http://localhost/admin/orders?f=cancelled')).ids).toEqual([
 			refundedCancelled.id
