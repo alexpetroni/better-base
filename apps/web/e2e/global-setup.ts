@@ -51,8 +51,11 @@ export default async function globalSetup() {
 			// (row-level triggers reject DELETE, and orders with an invoice are
 			// FK-protected), while TRUNCATE — a maintenance op, not a row
 			// mutation path — resets the lot, invoice numbering included.
+			// processed_events included: the webhook simulation reuses a fixed
+			// event id per site, and a leftover ledger row from a previous run
+			// would turn the first delivery into a duplicate.
 			await db.execute(
-				sql`truncate table invoice_lines, invoices, invoice_series, order_events, order_items, orders`
+				sql`truncate table invoice_lines, invoices, invoice_series, order_events, order_items, orders, processed_events`
 			);
 			await db.execute(sql`delete from products`);
 			await db.execute(sql`delete from media`);

@@ -133,12 +133,28 @@ test('visitor browses, fills the cart, reaches checkout; a signed webhook create
 		expect(webhook.status()).toBe(200);
 		expect(await webhook.json()).toEqual({ received: true, outcome: 'order-created' });
 
-		// A duplicate delivery is acknowledged but creates nothing new.
+		// A duplicate delivery (same event id) is caught by the processed-events
+		// ledger and creates nothing new.
 		const duplicate = await page.context().request.post('/api/stripe/webhook', {
 			headers: { 'content-type': 'application/json', 'stripe-signature': signature },
 			data: payload
 		});
-		expect(await duplicate.json()).toEqual({ received: true, outcome: 'duplicate-session' });
+		expect(await duplicate.json()).toEqual({ received: true, outcome: 'duplicate-event' });
+
+		// A dashboard-style resend (same session under a NEW event id) is caught
+		// by the unique session claim instead. Either way: exactly one order.
+		const resendPayload = payload.replace(`evt_e2e_${siteId}`, `evt_e2e_${siteId}_resend`);
+		const resend = await page.context().request.post('/api/stripe/webhook', {
+			headers: {
+				'content-type': 'application/json',
+				'stripe-signature': stripeSigner.webhooks.generateTestHeaderString({
+					payload: resendPayload,
+					secret: E2E_STRIPE_WEBHOOK_SECRET
+				})
+			},
+			data: resendPayload
+		});
+		expect(await resend.json()).toEqual({ received: true, outcome: 'duplicate-session' });
 		expect(
 			await db.select().from(orders).where(eq(orders.stripeSessionId, sessionId))
 		).toHaveLength(1);
