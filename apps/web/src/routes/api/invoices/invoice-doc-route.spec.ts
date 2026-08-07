@@ -38,7 +38,12 @@ let secret: string;
 type Route = typeof import('./[id]/[format]/+server.ts');
 let get: Route['GET'];
 
-const ADMIN = { id: 'doc-admin', email: 'doc-admin@example.com', name: 'A', role: 'admin' as const };
+const ADMIN = {
+	id: 'doc-admin',
+	email: 'doc-admin@example.com',
+	name: 'A',
+	role: 'admin' as const
+};
 const EDITOR = {
 	id: 'doc-editor',
 	email: 'doc-editor@example.com',
@@ -61,7 +66,7 @@ function requestEvent(
 	} as unknown as Parameters<Route['GET']>[0];
 }
 
-async function statusOf(promise: Promise<Response>): Promise<number> {
+async function statusOf(promise: Response | Promise<Response>): Promise<number> {
 	try {
 		return (await promise).status;
 	} catch (err) {
@@ -234,9 +239,11 @@ describe('GET /api/invoices/[id]/[format]', () => {
 	});
 
 	it('404s an unknown invoice and an unknown format', async () => {
-		await expect(statusOf(get(requestEvent('no-such-invoice', 'pdf', { user: ADMIN })))).resolves.toBe(
+		await expect(
+			statusOf(get(requestEvent('no-such-invoice', 'pdf', { user: ADMIN })))
+		).resolves.toBe(404);
+		await expect(statusOf(get(requestEvent(INVOICE_ID, 'exe', { user: ADMIN })))).resolves.toBe(
 			404
 		);
-		await expect(statusOf(get(requestEvent(INVOICE_ID, 'exe', { user: ADMIN })))).resolves.toBe(404);
 	});
 });

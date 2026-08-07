@@ -31,8 +31,18 @@ let db: Db;
 type Route = typeof import('./+server.ts');
 let get: Route['GET'];
 
-const ADMIN = { id: 'exp-admin', email: 'exp-admin@example.com', name: 'A', role: 'admin' as const };
-const EDITOR = { id: 'exp-editor', email: 'exp-ed@example.com', name: 'E', role: 'editor' as const };
+const ADMIN = {
+	id: 'exp-admin',
+	email: 'exp-admin@example.com',
+	name: 'A',
+	role: 'admin' as const
+};
+const EDITOR = {
+	id: 'exp-editor',
+	email: 'exp-ed@example.com',
+	name: 'E',
+	role: 'editor' as const
+};
 
 function requestEvent(month: string | null, user: typeof ADMIN | typeof EDITOR | null) {
 	const url = new URL(
@@ -44,7 +54,7 @@ function requestEvent(month: string | null, user: typeof ADMIN | typeof EDITOR |
 	} as unknown as Parameters<Route['GET']>[0];
 }
 
-async function statusOf(promise: Promise<Response>): Promise<number> {
+async function statusOf(promise: Response | Promise<Response>): Promise<number> {
 	try {
 		return (await promise).status;
 	} catch (err) {

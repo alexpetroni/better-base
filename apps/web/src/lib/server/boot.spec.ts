@@ -56,6 +56,14 @@ describe('boot env validation (audit resilience #10)', () => {
 		expect(bootEnvProblems(env)).toEqual(['TOKEN_SECRET must differ from BETTER_AUTH_SECRET']);
 	});
 
+	it('refuses ANAF_EFACTURA_ENABLED while SPV submission is unimplemented', () => {
+		const env = { ...validEnv(), ANAF_EFACTURA_ENABLED: 'true' };
+		expect(bootEnvProblems(env)).toEqual([
+			'ANAF_EFACTURA_ENABLED is set but SPV submission is not implemented (see DEPLOYMENT.md §7 "Fiscal documents") — unset it'
+		]);
+		expect(bootEnvProblems({ ...validEnv(), ANAF_EFACTURA_ENABLED: 'false' })).toEqual([]);
+	});
+
 	it('reports every problem in one pass', () => {
 		const env = validEnv();
 		delete env.DATABASE_URL;

@@ -30,6 +30,14 @@ export function bootEnvProblems(env: Record<string, string | undefined>): string
 	if (env.TOKEN_SECRET && env.TOKEN_SECRET === env.BETTER_AUTH_SECRET) {
 		problems.push('TOKEN_SECRET must differ from BETTER_AUTH_SECRET');
 	}
+	// The ANAF SPV submitter is a seam without an implementation (needs human
+	// enrollment — DEPLOYMENT.md §7): asking for it must refuse loudly at
+	// boot, never silently pretend invoices are being reported.
+	if (env.ANAF_EFACTURA_ENABLED === 'true') {
+		problems.push(
+			'ANAF_EFACTURA_ENABLED is set but SPV submission is not implemented (see DEPLOYMENT.md §7 "Fiscal documents") — unset it'
+		);
+	}
 	// CHAT_PROVIDER=anthropic without a key is already rejected by the chat
 	// provider's own boot check (modules/chat/server.ts) — not duplicated here.
 
