@@ -63,6 +63,18 @@ export const productPillars = pgTable(
 	]
 );
 
+/**
+ * Optional B2B billing identity, captured on the cart page before checkout
+ * and carried through Stripe session metadata to the order. Snapshotted onto
+ * the invoice at issue time (modules/invoice) — this copy is the working
+ * record and is cleared by GDPR erasure; the invoice snapshot is retained.
+ */
+export interface BuyerCompany {
+	name: string;
+	cui?: string;
+	regCom?: string;
+}
+
 /** Postal address as collected by Stripe Checkout (subset we care about). */
 export interface ShippingAddress {
 	name?: string;
@@ -109,6 +121,8 @@ export const orders = pgTable(
 		 */
 		oversold: boolean('oversold').notNull().default(false),
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
+		/** Optional company details for a B2B invoice, as entered at checkout. */
+		billingCompany: jsonb('billing_company').$type<BuyerCompany>(),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [

@@ -1,9 +1,10 @@
 import { eq, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
+import { CUI_PATTERN } from '../../util/cui.ts';
 import { cartTotalCents, type CartItem } from './cart.ts';
 import type { StripeGateway } from './gateway.ts';
-import { productPillars, products, type ProductRow } from './schema.ts';
+import { productPillars, products, type BuyerCompany, type ProductRow } from './schema.ts';
 import { isOutOfStock } from './service.ts';
 
 /**
@@ -56,6 +57,60 @@ export function parseCartMetadata(value: string | undefined): CartMetadataItem[]
 			Number.isInteger((entry as CartMetadataItem).p) &&
 			(entry as CartMetadataItem).p >= 0
 	);
+}
+
+export const BUYER_COMPANY_METADATA_KEY = 'company';
+
+/** Stripe metadata values are capped at 500 chars; keep each field well under. */
+const COMPANY_FIELD_MAX = 120;
+
+export type BuyerCompanyParse =
+	{ ok: true; value: BuyerCompany | null } | { ok: false; error: 'company-name' | 'company-cui' };
+
+/**
+ * Validate the cart page's optional B2B fields. All empty → no company (null).
+ * A CUI or Reg. Com. without a company name is rejected (an invoice cannot
+ * name a company it does not know), as is a CUI that is not shaped like one.
+ */
+export function parseBuyerCompanyForm(input: {
+	name: string;
+	cui: string;
+	regCom: string;
+}): BuyerCompanyParse {
+	const name = input.name.trim().slice(0, COMPANY_FIELD_MAX);
+	const cui = input.cui.trim().slice(0, COMPANY_FIELD_MAX);
+	const regCom = input.regCom.trim().slice(0, COMPANY_FIELD_MAX);
+	if (!name && !cui && !regCom) return { ok: true, value: null };
+	if (!name) return { ok: false, error: 'company-name' };
+	if (cui && !CUI_PATTERN.test(cui)) return { ok: false, error: 'company-cui' };
+	return {
+		ok: true,
+		value: { name, ...(cui ? { cui } : {}), ...(regCom ? { regCom } : {}) }
+	};
+}
+
+/** Compact company snapshot for session metadata: `{n, c, r}`. */
+export function buildBuyerCompanyMetadata(company: BuyerCompany): string {
+	return JSON.stringify({ n: company.name, c: company.cui ?? '', r: company.regCom ?? '' });
+}
+
+/** Parse it back from the webhook's session; anything malformed → null. */
+export function parseBuyerCompanyMetadata(value: string | undefined): BuyerCompany | null {
+	if (!value) return null;
+	let data: unknown;
+	try {
+		data = JSON.parse(value);
+	} catch {
+		return null;
+	}
+	if (typeof data !== 'object' || data === null) return null;
+	const { n, c, r } = data as { n?: unknown; c?: unknown; r?: unknown };
+	if (typeof n !== 'string' || !n) return null;
+	return {
+		name: n,
+		...(typeof c === 'string' && c ? { cui: c } : {}),
+		...(typeof r === 'string' && r ? { regCom: r } : {})
+	};
 }
 
 export interface CartLine {
@@ -125,7 +180,7 @@ export type CheckoutOutcome =
 
 export async function createCheckoutFromCart(
 	deps: CheckoutDeps,
-	input: { items: CartItem[]; sitePillarSlugs: string[] }
+	input: { items: CartItem[]; sitePillarSlugs: string[]; buyerCompany?: BuyerCompany | null }
 ): Promise<CheckoutOutcome> {
 	const details = await loadCartDetails(deps, input.items, input.sitePillarSlugs);
 	if (details.lines.length === 0) return { ok: false, error: 'empty-cart' };
@@ -158,7 +213,10 @@ export async function createCheckoutFromCart(
 						qty: l.qty,
 						priceCents: l.product.priceCents
 					}))
-				)
+				),
+				...(input.buyerCompany
+					? { [BUYER_COMPANY_METADATA_KEY]: buildBuyerCompanyMetadata(input.buyerCompany) }
+					: {})
 			}
 		});
 		return { ok: true, sessionId: session.id, url: session.url };

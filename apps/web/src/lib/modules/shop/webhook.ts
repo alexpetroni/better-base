@@ -1,9 +1,18 @@
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import Stripe from 'stripe';
 import type { Db } from '../../db/client.ts';
 import { runOnce, type DbTx } from '../../server/event-ledger/core.ts';
 import type { EmailSender } from '../email/service.ts';
-import { parseCartMetadata, CART_METADATA_KEY } from './checkout.ts';
+import { issueInvoiceForOrderInTx, issueStornoForOrderInTx } from '$lib/modules/invoice/server';
+import { loadSettings } from '$lib/modules/settings/server';
+import { invoices } from '../invoice/schema.ts';
+import {
+	parseBuyerCompanyMetadata,
+	parseCartMetadata,
+	BUYER_COMPANY_METADATA_KEY,
+	CART_METADATA_KEY
+} from './checkout.ts';
 import { appendOrderEvent } from './fulfillment-service.ts';
 import { FULFILLMENT_STATUSES, type FulfillmentStatus } from './fulfillment.ts';
 import { orderItems, orders, products, type OrderRow, type ShippingAddress } from './schema.ts';
@@ -127,7 +136,8 @@ async function createOrderFromSession(
 			amountTotalCents: session.amount_total ?? amountFromCart,
 			currency: session.currency ?? 'ron',
 			status: session.payment_status === 'paid' ? 'paid' : 'pending',
-			shippingAddress: extractShipping(session)
+			shippingAddress: extractShipping(session),
+			billingCompany: parseBuyerCompanyMetadata(session.metadata?.[BUYER_COMPANY_METADATA_KEY])
 		})
 		.onConflictDoNothing({ target: orders.stripeSessionId })
 		.returning();
@@ -194,11 +204,13 @@ async function handleCheckoutCompleted(
 	session: Stripe.Checkout.Session
 ): Promise<WebhookOutcome> {
 	const cart = parseCartMetadata(session.metadata?.[CART_METADATA_KEY]);
+	// Loaded outside the ledger transaction (read-only, no need for the lock).
+	const settings = await loadSettings(deps);
 
 	// All-or-nothing: the ledger claim, the session-id claim, the item
-	// snapshots, the stock decrement and the history row commit together or
-	// not at all. A mid-flight failure rolls back the ledger row too, so
-	// Stripe's redelivery retries the whole unit instead of hitting a
+	// snapshots, the stock decrement, the history row AND the invoice commit
+	// together or not at all. A mid-flight failure rolls back the ledger row
+	// too, so Stripe's redelivery retries the whole unit instead of hitting a
 	// headless "already processed".
 	const result = await runOnce(
 		deps.db,
@@ -206,9 +218,30 @@ async function handleCheckoutCompleted(
 		async (tx) => {
 			if (cart.length === 0) return { outcome: 'empty-cart', value: null };
 			const created = await createOrderFromSession(tx, session, cart);
-			return created
-				? { outcome: 'order-created', value: created }
-				: { outcome: 'duplicate-session', value: null };
+			if (!created) return { outcome: 'duplicate-session', value: null };
+			// Issue the invoice with the order (paid orders only — an async
+			// payment still pending gets its invoice when it is marked paid).
+			// A validation failure (e.g. issuer settings still placeholders)
+			// must never fail the ORDER: it is recorded on the event trail,
+			// surfaced in the admin work queue, and retried there in one click.
+			if (created.order.status === 'paid') {
+				const issued = await issueInvoiceForOrderInTx(
+					tx,
+					created.order,
+					created.items,
+					settings,
+					WEBHOOK_ACTOR
+				);
+				if (!issued.ok) {
+					await appendOrderEvent(tx, {
+						orderId: created.order.id,
+						kind: 'invoice-failed',
+						actor: WEBHOOK_ACTOR,
+						note: issued.detail ? `${issued.error}: ${issued.detail}` : issued.error
+					});
+				}
+			}
+			return { outcome: 'order-created', value: created };
 		}
 	);
 
@@ -260,6 +293,18 @@ async function handleChargeRefunded(
 				actor: WEBHOOK_ACTOR,
 				note: charge.id
 			});
+			// A refund reverses the fiscal record: issue the storno with the
+			// status flip. No invoice to reverse (its issuance failed earlier)
+			// is recorded, not fatal — the admin retry issues both documents.
+			const reversed = await issueStornoForOrderInTx(tx, order, WEBHOOK_ACTOR);
+			if (!reversed.ok) {
+				await appendOrderEvent(tx, {
+					orderId: order.id,
+					kind: 'storno-failed',
+					actor: WEBHOOK_ACTOR,
+					note: reversed.error
+				});
+			}
 			return { outcome: 'refund-marked', value: order.id };
 		}
 	);
@@ -313,13 +358,17 @@ export async function getOrderBySessionId(deps: Pick<WebhookDeps, 'db'>, session
  *   oversold ones included;
  * - `oversold`: flagged orders still in a pre-shipping state — the ones where
  *   restock / partial refund / apology is still undecided;
+ * - `invoice-missing`: orders whose fiscal record is incomplete — paid or
+ *   refunded without an invoice (issuance failed), or refunded without a
+ *   storno — each fixable with the detail page's one-click issue action;
  * - a single fulfillment status; or `all`.
  */
-export type OrderListFilter = 'all' | 'action' | 'oversold' | FulfillmentStatus;
+export type OrderListFilter = 'all' | 'action' | 'oversold' | 'invoice-missing' | FulfillmentStatus;
 
 export const ORDER_LIST_FILTERS: readonly OrderListFilter[] = [
 	'action',
 	'oversold',
+	'invoice-missing',
 	'all',
 	...FULFILLMENT_STATUSES
 ];
@@ -330,6 +379,10 @@ export function isOrderListFilter(value: unknown): value is OrderListFilter {
 
 const NEEDS_ACTION_STATES: FulfillmentStatus[] = ['unfulfilled', 'packed'];
 
+// Aliases for the fiscal-document joins in listOrders.
+const orderInvoice = alias(invoices, 'order_invoice');
+const orderStorno = alias(invoices, 'order_storno');
+
 function orderFilterCondition(filter: OrderListFilter) {
 	switch (filter) {
 		case 'all':
@@ -338,15 +391,38 @@ function orderFilterCondition(filter: OrderListFilter) {
 			return and(eq(orders.status, 'paid'), inArray(orders.fulfillmentStatus, NEEDS_ACTION_STATES));
 		case 'oversold':
 			return and(eq(orders.oversold, true), inArray(orders.fulfillmentStatus, NEEDS_ACTION_STATES));
+		case 'invoice-missing':
+			return or(
+				and(inArray(orders.status, ['paid', 'refunded']), isNull(orderInvoice.id)),
+				and(eq(orders.status, 'refunded'), isNotNull(orderInvoice.id), isNull(orderStorno.id))
+			);
 		default:
 			return eq(orders.fulfillmentStatus, filter);
 	}
 }
 
-export function listOrders(deps: Pick<WebhookDeps, 'db'>, filter: OrderListFilter = 'all') {
+export type OrderListRow = OrderRow & {
+	/** Display numbers of the order's fiscal documents; null = not issued. */
+	invoiceNumber: string | null;
+	stornoNumber: string | null;
+};
+
+export function listOrders(
+	deps: Pick<WebhookDeps, 'db'>,
+	filter: OrderListFilter = 'all'
+): Promise<OrderListRow[]> {
 	return deps.db
-		.select()
+		.select({
+			...getTableColumns(orders),
+			invoiceNumber: orderInvoice.displayNumber,
+			stornoNumber: orderStorno.displayNumber
+		})
 		.from(orders)
+		.leftJoin(
+			orderInvoice,
+			and(eq(orderInvoice.orderId, orders.id), eq(orderInvoice.kind, 'invoice'))
+		)
+		.leftJoin(orderStorno, eq(orderStorno.stornoOfInvoiceId, orderInvoice.id))
 		.where(orderFilterCondition(filter))
 		.orderBy(desc(orders.createdAt), desc(orders.id));
 }

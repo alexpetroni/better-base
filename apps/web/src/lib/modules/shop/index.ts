@@ -21,6 +21,7 @@ export {
 	type FulfillmentStatus
 } from './fulfillment.ts';
 export type {
+	BuyerCompany,
 	OrderEventRow,
 	OrderItemRow,
 	OrderRow,

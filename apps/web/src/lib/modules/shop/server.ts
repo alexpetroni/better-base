@@ -8,10 +8,15 @@ import { createMockStripeGateway } from './mock-gateway.ts';
 import { createStripeGateway, STRIPE_TIMEOUT_MS_DEFAULT } from './stripe-gateway.ts';
 
 export {
+	buildBuyerCompanyMetadata,
 	buildCartMetadata,
+	BUYER_COMPANY_METADATA_KEY,
 	createCheckoutFromCart,
 	loadCartDetails,
+	parseBuyerCompanyForm,
+	parseBuyerCompanyMetadata,
 	parseCartMetadata,
+	type BuyerCompanyParse,
 	type CartDetails,
 	type CartLine,
 	type CartMetadataItem,
@@ -62,6 +67,7 @@ export {
 	verifyStripeEvent,
 	WEBHOOK_ACTOR,
 	type OrderListFilter,
+	type OrderListRow,
 	type WebhookDeps,
 	type WebhookOutcome
 } from './webhook.ts';

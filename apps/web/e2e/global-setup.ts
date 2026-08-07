@@ -47,8 +47,13 @@ export default async function globalSetup() {
 			// shop rows go first — they reference media (FKs + delete-refusal
 			// checks); order_items reference orders and products.
 			await db.execute(sql`delete from articles`);
-			await db.execute(sql`delete from order_items`);
-			await db.execute(sql`delete from orders`);
+			// Order + fiscal tables go via TRUNCATE: invoices are append-only
+			// (row-level triggers reject DELETE, and orders with an invoice are
+			// FK-protected), while TRUNCATE — a maintenance op, not a row
+			// mutation path — resets the lot, invoice numbering included.
+			await db.execute(
+				sql`truncate table invoice_lines, invoices, invoice_series, order_events, order_items, orders`
+			);
 			await db.execute(sql`delete from products`);
 			await db.execute(sql`delete from media`);
 			// Funnel leftovers: results reference subscribers, so they go first.

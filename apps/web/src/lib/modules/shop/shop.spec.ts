@@ -429,10 +429,17 @@ describe('webhook: checkout.session.completed', () => {
 		expect(order.shippingAddress?.city).toBe('Cluj-Napoca');
 		expect(order.shippingAddress?.postalCode).toBe('400001');
 
-		// The audit trail opens with the creation event, committed with the order.
+		// The audit trail opens with the creation event, committed with the
+		// order — plus the recorded invoice failure: this spec's database has
+		// no issuer settings, and a paid order whose invoice cannot be issued
+		// must say so on its trail instead of failing the order (NEXT-6).
 		const trail = await db.select().from(orderEvents).where(eq(orderEvents.orderId, order.id));
-		expect(trail).toHaveLength(1);
-		expect(trail[0]).toMatchObject({ kind: 'created', actor: 'stripe-webhook', note: 'cs_happy' });
+		expect(trail.map((e) => e.kind).sort()).toEqual(['created', 'invoice-failed']);
+		expect(trail.find((e) => e.kind === 'created')).toMatchObject({
+			actor: 'stripe-webhook',
+			note: 'cs_happy'
+		});
+		expect(trail.find((e) => e.kind === 'invoice-failed')?.note).toContain('settings-incomplete');
 
 		// And the ledger recorded what this event did.
 		const [ledger] = await db

@@ -96,12 +96,50 @@
 		{/each}
 	</ul>
 
-	<div class="mt-6 flex flex-wrap items-center justify-end gap-4">
-		<span class="text-lg">
-			{m.cart_total()}:
-			<strong data-testid="cart-total">{formatCents(data.totalCents, data.currency)}</strong>
-		</span>
-		<form method="POST" action="?/checkout" use:singleSubmit>
+	<form method="POST" action="?/checkout" use:singleSubmit class="mt-6">
+		<details
+			open={!!form?.companyValues}
+			class="mb-4 rounded border border-(--color-brand-soft) bg-white p-3 text-sm"
+		>
+			<summary class="cursor-pointer font-medium">{m.cart_company_heading()}</summary>
+			<div class="mt-3 grid gap-3 sm:grid-cols-3">
+				<label class="block">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_name()}</span>
+					<input
+						type="text"
+						name="companyName"
+						value={form?.companyValues?.name ?? ''}
+						data-testid="cart-company-name"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+				<label class="block">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_cui()}</span>
+					<input
+						type="text"
+						name="companyCui"
+						value={form?.companyValues?.cui ?? ''}
+						data-testid="cart-company-cui"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+				<label class="block">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_regcom()}</span>
+					<input
+						type="text"
+						name="companyRegCom"
+						value={form?.companyValues?.regCom ?? ''}
+						data-testid="cart-company-regcom"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+			</div>
+		</details>
+		<div class="flex flex-wrap items-center justify-end gap-4">
+			<span class="text-lg">
+				{m.cart_total()}:
+				<strong data-testid="cart-total">{formatCents(data.totalCents, data.currency)}</strong>
+			</span>
 			<button
 				type="submit"
 				data-testid="cart-checkout"
@@ -111,8 +149,8 @@
 			>
 				{m.cart_checkout()}
 			</button>
-		</form>
-	</div>
+		</div>
+	</form>
 	<p class="mt-2 text-right text-sm text-(--color-ink)/70">{m.cart_checkout_note()}</p>
 
 	{#if form?.checkoutError}
@@ -121,6 +159,10 @@
 				{m.cart_err_empty()}
 			{:else if form.checkoutError === 'unavailable'}
 				{m.cart_err_unavailable({ names: form.detail })}
+			{:else if form.checkoutError === 'company-name'}
+				{m.cart_err_company_name()}
+			{:else if form.checkoutError === 'company-cui'}
+				{m.cart_err_company_cui()}
 			{:else}
 				{m.cart_err_gateway()}
 			{/if}

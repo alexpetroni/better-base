@@ -7,9 +7,11 @@ import { removeFromCart, setCartQty } from '$lib/modules/shop';
 import {
 	createCheckoutFromCart,
 	getStripeGateway,
-	loadCartDetails
+	loadCartDetails,
+	parseBuyerCompanyForm
 } from '$lib/modules/shop/server';
 import { readCart, writeCart } from '$lib/server/cart';
+import { formStr } from '$lib/server/forms';
 import { getSite } from '$lib/server/site';
 import { inArray } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
@@ -77,15 +79,33 @@ export const actions: Actions = {
 		return { updated: true };
 	},
 
-	checkout: async ({ cookies }) => {
+	checkout: async ({ request, cookies }) => {
 		const site = getSite();
+		// Optional B2B fields for the invoice; empty inputs mean a consumer sale.
+		const form = await request.formData();
+		const company = parseBuyerCompanyForm({
+			name: formStr(form, 'companyName'),
+			cui: formStr(form, 'companyCui'),
+			regCom: formStr(form, 'companyRegCom')
+		});
+		if (!company.ok) {
+			return fail(400, {
+				checkoutError: company.error,
+				detail: '',
+				companyValues: {
+					name: formStr(form, 'companyName'),
+					cui: formStr(form, 'companyCui'),
+					regCom: formStr(form, 'companyRegCom')
+				}
+			});
+		}
 		const outcome = await createCheckoutFromCart(
 			{
 				db: getDb(),
 				gateway: getStripeGateway(),
 				baseUrl: (env.PUBLIC_SITE_URL ?? '').replace(/\/$/, '')
 			},
-			{ items: readCart(cookies), sitePillarSlugs: site.pillars }
+			{ items: readCart(cookies), sitePillarSlugs: site.pillars, buyerCompany: company.value }
 		);
 		if (!outcome.ok) {
 			return fail(400, { checkoutError: outcome.error, detail: outcome.detail ?? '' });
