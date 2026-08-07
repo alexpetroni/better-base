@@ -1,13 +1,22 @@
 import { error, fail } from '@sveltejs/kit';
+import { env as publicEnv } from '$env/dynamic/public';
 import { getDb } from '$lib/db';
-import { ensureInvoicesForOrder, listInvoicesForOrder } from '$lib/modules/invoice/server';
+import { getEmailSender } from '$lib/modules/email/server';
+import {
+	ensureInvoicesForOrder,
+	invoicePdfAttachmentForOrder,
+	listInvoicesForOrder
+} from '$lib/modules/invoice/server';
+import { getStorage } from '$lib/modules/media/server';
 import { isFulfillmentStatus } from '$lib/modules/shop';
 import {
 	getOrderWithItems,
 	listOrderEvents,
+	orderLookupUrl,
 	transitionFulfillment
 } from '$lib/modules/shop/server';
 import { formStr } from '$lib/server/forms';
+import { getSite } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -16,7 +25,12 @@ export const load: PageServerLoad = async ({ params }) => {
 	return {
 		...found,
 		events: await listOrderEvents({ db: getDb() }, params.id),
-		invoices: await listInvoicesForOrder({ db: getDb() }, params.id)
+		invoices: await listInvoicesForOrder({ db: getDb() }, params.id),
+		// One nonce per rendered page: the re-send form posts it back and the
+		// email idempotency key derives from (invoice id, nonce), so a double
+		// submit of the SAME form sends exactly one email, while a fresh page
+		// (fresh nonce) is a deliberate new delivery.
+		resendNonce: crypto.randomUUID()
 	};
 };
 
@@ -59,5 +73,45 @@ export const actions: Actions = {
 			return fail(400, { invoiceError: result.error, invoiceDetail: result.detail ?? '' });
 		}
 		return { invoiceIssued: true };
+	},
+
+	/**
+	 * Re-send the invoice email (PDF attached) to the buyer. Idempotent per
+	 * rendered form via the page nonce (see the load comment); the same
+	 * defense-in-depth admin check as the other actions.
+	 */
+	resendInvoice: async ({ request, params, locals }) => {
+		if (locals.user?.role !== 'admin') error(403);
+
+		const form = await request.formData();
+		const nonce = formStr(form, 'nonce');
+		if (!/^[0-9a-f-]{36}$/.test(nonce)) return fail(400, { resendError: 'invalid-nonce' as const });
+
+		const db = getDb();
+		const found = await getOrderWithItems({ db }, params.id);
+		if (!found) error(404);
+		if (!found.order.email) return fail(400, { resendError: 'no-email' as const });
+
+		const info = await invoicePdfAttachmentForOrder({ db, storage: getStorage() }, params.id);
+		if (!info) return fail(400, { resendError: 'no-invoice' as const });
+
+		const outcome = await getEmailSender().send({
+			to: found.order.email,
+			template: 'invoice-email',
+			data: {
+				siteName: getSite().name,
+				invoiceNumber: info.displayNumber,
+				orderUrl:
+					publicEnv.PUBLIC_SITE_URL && found.order.stripeSessionId
+						? orderLookupUrl(publicEnv.PUBLIC_SITE_URL, found.order.stripeSessionId)
+						: undefined
+			},
+			attachments: [info.attachment],
+			idempotencyKey: `invoice-email:${info.invoiceId}:${nonce}`
+		});
+		if (outcome.status === 'error') {
+			return fail(500, { resendError: 'send-failed' as const });
+		}
+		return { invoiceResent: true, resendSkipped: outcome.status === 'skipped' };
 	}
 };

@@ -32,6 +32,36 @@
 				<strong data-testid="success-total">{formatCents(data.totalCents, data.currency)}</strong>
 			</li>
 		</ul>
+		{#if data.invoiceDocs.length > 0}
+			<div
+				class="mt-6 rounded-lg border border-(--color-brand-soft) bg-white p-4"
+				data-testid="success-invoice"
+			>
+				<h2 class="mb-1 font-semibold">{m.success_invoice_heading()}</h2>
+				<p class="mb-3 text-sm text-(--color-ink)/70">{m.success_invoice_intro()}</p>
+				<ul class="space-y-2">
+					{#each data.invoiceDocs as doc (doc.displayNumber)}
+						<li class="flex flex-wrap items-center gap-3" data-kind={doc.kind}>
+							<span class="font-mono text-sm font-semibold">{doc.displayNumber}</span>
+							<a
+								href={doc.pdfUrl}
+								data-testid="success-invoice-pdf"
+								class="text-sm text-(--color-brand) hover:underline"
+							>
+								{m.success_invoice_pdf()}
+							</a>
+							<a
+								href={doc.xmlUrl}
+								data-testid="success-invoice-xml"
+								class="text-sm text-(--color-brand) hover:underline"
+							>
+								{m.success_invoice_xml()}
+							</a>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	{:else}
 		<p
 			class="mb-6 rounded-lg border border-(--color-brand-soft) bg-white p-4"

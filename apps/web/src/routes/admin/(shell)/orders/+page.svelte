@@ -42,6 +42,10 @@
 		if (order.status === 'refunded') return !order.invoiceNumber || !order.stornoNumber;
 		return false;
 	}
+
+	// Default the accountant export to the current month (cosmetic only —
+	// the operator picks the month; the server validates it).
+	const defaultExportMonth = new Date().toISOString().slice(0, 7);
 </script>
 
 <svelte:head>
@@ -66,6 +70,31 @@
 		</a>
 	{/each}
 </nav>
+
+<form
+	method="GET"
+	action="{resolve('/admin/orders')}/export"
+	class="mb-4 flex flex-wrap items-center gap-2 text-sm"
+	data-testid="orders-export"
+>
+	<label class="text-(--color-ink)/70" for="orders-export-month">
+		{m.admin_orders_export_label()}
+	</label>
+	<input
+		id="orders-export-month"
+		type="month"
+		name="month"
+		value={defaultExportMonth}
+		required
+		class="rounded border border-(--color-brand-soft) px-2 py-1"
+	/>
+	<button
+		type="submit"
+		class="rounded border border-(--color-brand) px-3 py-1 text-xs font-semibold text-(--color-brand) hover:bg-(--color-brand-soft)/40"
+	>
+		{m.admin_orders_export_button()}
+	</button>
+</form>
 
 {#if data.orders.length === 0}
 	<p data-testid="orders-empty" class="text-(--color-ink)/70">

@@ -1,13 +1,28 @@
 import { error, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { getDb } from '$lib/db';
+import {
+	invoiceDocPath,
+	listInvoicesForOrder,
+	signInvoiceDocToken,
+	type InvoiceDocFormat
+} from '$lib/modules/invoice/server';
 import { getOrderBySessionId, getStripeGateway } from '$lib/modules/shop/server';
 import { clearCart } from '$lib/server/cart';
+import { tokenSecretFrom } from '$lib/server/secrets';
 import type { PageServerLoad } from './$types';
 
 export interface SuccessItem {
 	name: string;
 	qty: number;
 	lineTotalCents: number;
+}
+
+export interface SuccessInvoiceDoc {
+	kind: 'invoice' | 'storno';
+	displayNumber: string;
+	pdfUrl: string;
+	xmlUrl: string;
 }
 
 /**
@@ -22,7 +37,24 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
 	const found = await getOrderBySessionId({ db: getDb() }, sessionId);
 	if (found) {
 		clearCart(cookies);
+		// Knowing the (unguessable) session id IS the buyer's proof of claim to
+		// this order, so short-lived signed download links for its fiscal
+		// documents are minted here — and only here. The email links back to
+		// this page, which makes the access durable without an account.
+		const secret = tokenSecretFrom(env);
+		const now = new Date();
+		const docUrl = (invoiceId: string, format: InvoiceDocFormat) =>
+			invoiceDocPath(invoiceId, format, signInvoiceDocToken(secret, invoiceId, format, now));
+		const invoiceDocs = (await listInvoicesForOrder({ db: getDb() }, found.order.id)).map(
+			(doc): SuccessInvoiceDoc => ({
+				kind: doc.kind,
+				displayNumber: doc.displayNumber,
+				pdfUrl: docUrl(doc.id, 'pdf'),
+				xmlUrl: docUrl(doc.id, 'xml')
+			})
+		);
 		return {
+			invoiceDocs,
 			// Overrides the layout's badge count — the layout load may have read
 			// the cookie before clearCart in this same request (see App.PageData).
 			cartCount: 0,
@@ -43,6 +75,7 @@ export const load: PageServerLoad = async ({ url, cookies }) => {
 	if (!session) error(404);
 	clearCart(cookies);
 	return {
+		invoiceDocs: [] as SuccessInvoiceDoc[],
 		cartCount: 0,
 		state: 'processing' as const,
 		email: session.email,

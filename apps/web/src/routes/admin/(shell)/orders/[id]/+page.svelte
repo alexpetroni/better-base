@@ -205,9 +205,49 @@
 								· {formatDate(doc.issuedAt, 'medium-time')}
 								· {formatCents(doc.grossTotalCents, doc.currency)}
 							</p>
+							<p class="mt-1 flex gap-3 text-xs">
+								<a
+									href={resolve('/api/invoices/[id]/[format]', { id: doc.id, format: 'pdf' })}
+									data-testid="order-invoice-pdf"
+									class="text-(--color-brand) hover:underline"
+								>
+									{m.admin_order_invoice_pdf()}
+								</a>
+								<a
+									href={resolve('/api/invoices/[id]/[format]', { id: doc.id, format: 'xml' })}
+									data-testid="order-invoice-xml"
+									class="text-(--color-brand) hover:underline"
+								>
+									{m.admin_order_invoice_xml()}
+								</a>
+							</p>
 						</li>
 					{/each}
 				</ul>
+				{#if data.order.email}
+					<form method="POST" action="?/resendInvoice" class="mt-3">
+						<input type="hidden" name="nonce" value={data.resendNonce} />
+						<button
+							type="submit"
+							data-testid="order-invoice-resend"
+							class="rounded border border-(--color-brand) px-3 py-1.5 text-xs font-semibold text-(--color-brand) hover:bg-(--color-brand-soft)/40"
+						>
+							{m.admin_order_invoice_resend()}
+						</button>
+					</form>
+				{/if}
+				{#if form?.invoiceResent}
+					<p class="mt-2 text-xs text-green-700" data-testid="order-invoice-resent">
+						{form.resendSkipped
+							? m.admin_order_invoice_resend_skipped()
+							: m.admin_order_invoice_resent()}
+					</p>
+				{/if}
+				{#if form?.resendError}
+					<p class="mt-2 text-xs text-red-700" data-testid="order-invoice-resend-error">
+						{m.admin_order_invoice_resend_error()}
+					</p>
+				{/if}
 			{/if}
 			{#if (data.order.status === 'paid' || data.order.status === 'refunded') && (data.invoices.length === 0 || (data.order.status === 'refunded' && !data.invoices.some((d) => d.kind === 'storno')))}
 				<form method="POST" action="?/issueInvoice" class="mt-3">
