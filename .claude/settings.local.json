@@ -31,7 +31,16 @@
       "Bash(node drive.mjs)",
       "Bash(grep -rn 'from '\\\\''$lib/modules/media'\\\\''' src)",
       "Bash(chmod +x scripts/dev-run.sh scripts/dev-stop.sh)",
-      "Bash(SKIP_BUILD=1 bash scripts/dev-run.sh)"
+      "Bash(SKIP_BUILD=1 bash scripts/dev-run.sh)",
+      "Bash(docker compose *)",
+      "Bash(pnpm vitest *)",
+      "Bash(pnpm --filter web lint)",
+      "Bash(python3 -)",
+      "Bash(pnpm format *)",
+      "Bash(pnpm check *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm test:unit)",
+      "Bash(bash run.sh /home/alex/work/better-base/docs/next/runner.env)"
     ]
   }
 }
