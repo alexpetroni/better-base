@@ -265,7 +265,7 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 
 | Schedule | Command | Purpose |
 | --- | --- | --- |
-| daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade) and sweeps expired rate-limit counter rows. |
+| daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
 
 Where no machine can run scripts (Vercel), the same job is available over HTTP
 at `GET /api/cron/chat-prune` — see §12. Both call `runRetentionSweep()` in

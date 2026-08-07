@@ -1,4 +1,76 @@
-# STATE — after RO legal surface + analytics (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after order lifecycle (2026-08-07, branch `feat/vercel-neon`)
+
+## Order lifecycle: event ledger, fulfillment states, admin work queue (2026-08-07, NEXT-5)
+
+The two foundations invoicing (NEXT-6/7) and shipping (NEXT-8) sit on:
+exactly-once webhook processing for EVERY event type, and a fulfillment
+dimension on orders with an audit trail. Migration `0015_furry_eternity`
+(new tables `processed_events`, `order_events`; `orders.fulfillment_status`
++ index). No new env vars.
+
+- **`processed_events` ledger** — `lib/server/event-ledger/` (`schema.ts` +
+  framework-free `core.ts`). `runOnce(db, {provider, eventId, eventType},
+  effect)` claims the (provider, event id) PK by insert INSIDE the same
+  transaction the effect writes through: redelivery of ANY handled type skips
+  the effect and reports the recorded `outcome` (so admin/debugging can see
+  why an event did nothing); concurrent deliveries serialize on the claim; a
+  throwing effect rolls back claim + partial writes together, so a poisoned
+  event stays retryable. **Retention: 90 days** (`PROCESSED_EVENTS_RETENTION_DAYS`
+  in core.ts) — Stripe retries ≤3 days and allows manual dashboard resends for
+  30; 90 is comfortably past both while keeping the table a bounded working
+  set (the durable history is `order_events`). Wired into the existing
+  `runRetentionSweep` (`server/retention.ts`), so both the VPS cron script and
+  the Vercel cron route sweep it — no new deploy step.
+- **Webhook idempotency is now two-layered** (`modules/shop/webhook.ts`):
+  the ledger keys on the provider EVENT id (new outcome `duplicate-event`,
+  carrying the first delivery's outcome); the unique `stripe_session_id`
+  claim still collapses the same SESSION arriving under a NEW event id
+  (`duplicate-session` — Stripe dashboard resends do this). `charge.refunded`
+  is idempotent for the first time (before: a redelivery re-ran the handler);
+  unknown event types are acknowledged WITHOUT a ledger row (no effect to
+  guard; would grow with every category Stripe adds). Order confirmation email
+  stays post-commit + idempotency-keyed on the order id.
+- **`orders.fulfillment_status`** — separate dimension from payment `status`:
+  `unfulfilled → packed → shipped → delivered`, plus `returned` (from
+  shipped/delivered) and `cancelled` (only BEFORE shipping); `packed →
+  unfulfilled` is a deliberate unpack correction; `returned`/`cancelled` are
+  terminal. Pure state machine in `modules/shop/fulfillment.ts` (client-safe —
+  the admin UI renders legal moves from it, typed `IllegalTransitionError`);
+  THE single writer is `transitionFulfillment` (`fulfillment-service.ts`),
+  which locks the row (`FOR UPDATE`), validates, and appends the matching
+  `order_events` row in the same transaction — status and history cannot
+  drift. A unit spec greps all of src and fails if anything else writes the
+  column. Migration backfill: pre-existing `refunded` orders →
+  `cancelled` (never going to be fulfilled; must not look like pending work),
+  everything else `unfulfilled` via the column default — verified against a DB
+  seeded with pre-migration orders.
+- **`order_events` audit trail** — append-only per-order history (kind,
+  actor = staff email or `stripe-webhook`, from/to status, note). Writers:
+  webhook (`created`, `refund-marked`), fulfillment service
+  (`fulfillment-transition`). Invoices/AWBs hook into the same trail next.
+- **Admin work queue** — `/admin/orders?f=…`: default (and unknown-filter
+  fallback) is `action` = paid orders still `unfulfilled`/`packed` — the daily
+  to-do, oversold included and badged; `oversold` = flagged orders still
+  pre-shipping (the ones where restock/partial-refund/apology is undecided —
+  the flag existed since FIX-5 but nothing consumed it); `all`; or any single
+  fulfillment status. `/admin/orders/[id]`: fulfillment badge, history
+  timeline, and the LEGAL transitions as form-action buttons with a note
+  field — action re-checks `role === 'admin'` in the handler (defense in
+  depth), 400s an illegal/unknown target without writing.
+- Tests — integration (`shop.spec.ts`): duplicate `charge.refunded` marks
+  refunded ONCE and the redelivery reports the ledger hit (fails pre-ledger);
+  ledger row + effect roll back atomically on a poisoned event, retry then
+  succeeds; same session under a new event id still yields one order/decrement
+  with both event ids on the ledger. `event-ledger.spec.ts`: first/duplicate/
+  cross-provider delivery, rollback, 3-way concurrent race → exactly one
+  effect. `retention.spec.ts`: 91-day-old ledger row swept, 31-day-old
+  SURVIVES the 30-day counter sweep. `fulfillment.spec.ts`: full legal-
+  transition table, everything else rejected, single-writer grep.
+  `orders-page.spec.ts` (real route modules against TEST_DATABASE_URL):
+  service transition + event atomicity, illegal transition writes nothing,
+  work-queue filters incl. oversold entering/leaving the queue, editor 403
+  before any write. Verified: gate green, `test:neon` green (553/553),
+  migrate clean on fresh AND populated DB.
 
 ## RO legal surface + consent-gated analytics (2026-08-07, NEXT-4)
 
@@ -1393,7 +1465,9 @@ Not run in CI/agent runs — do this by hand when you have keys:
 
 - **Invoicing & shipping**: orders have no invoices (RO legal requirement for
   the business) and no shipping-provider integration (AWB, tracking emails) —
-  the most likely next phase, see LAUNCH-CHECKLIST note.
+  the most likely next phase, see LAUNCH-CHECKLIST note. The groundwork
+  landed in NEXT-5: the `processed_events` ledger gives their webhooks/crons
+  exactly-once semantics, and `order_events` is the trail they append to.
 - **Nurture sequences**: only transactional + double-opt-in emails exist; no
   scheduled newsletter/drip sending (needs a queue/cron design decision).
 - **Chat history restore**: the widget's conversation is client-local (the
