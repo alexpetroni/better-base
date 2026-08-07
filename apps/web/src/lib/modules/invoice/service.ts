@@ -105,6 +105,15 @@ export async function allocateInvoiceNumber(
 	return row.nextNumber - 1;
 }
 
+/**
+ * The shipping line's printed description: generic "Transport" plus the
+ * delivery option the customer chose (a settings value snapshotted onto the
+ * order at checkout — never a literal from code).
+ */
+export function shippingLineDescription(order: Pick<OrderRow, 'shippingName'>): string {
+	return order.shippingName ? `Transport — ${order.shippingName}` : 'Transport';
+}
+
 /** The order's shipping snapshot flattened to one printable address string. */
 function buyerAddressFromOrder(order: OrderRow): string {
 	const a = order.shippingAddress;
@@ -152,7 +161,17 @@ export async function issueInvoiceForOrderInTx(
 
 	const vatRegistered = settings['company.vatRegistered'];
 	const vatRateBp = vatRegistered ? settings['invoice.vatRateBp'] : 0;
-	const lineAmounts = items.map((item) =>
+	// Shipping is its own VAT-bearing line (same rate as the goods — transport
+	// follows the main supply), so the invoice gross equals EXACTLY what Stripe
+	// charged: goods + shipping. Free shipping (0) adds no line.
+	const invoiceItems: InvoiceItemInput[] =
+		order.shippingCents > 0
+			? [
+					...items,
+					{ name: shippingLineDescription(order), qty: 1, priceCents: order.shippingCents }
+				]
+			: [...items];
+	const lineAmounts = invoiceItems.map((item) =>
 		computeLineAmounts({ qty: item.qty, unitPriceCents: item.priceCents, vatRateBp })
 	);
 	const totals = sumAmounts(lineAmounts);
@@ -204,9 +223,9 @@ export async function issueInvoiceForOrderInTx(
 		})
 		.returning();
 
-	if (items.length > 0) {
+	if (invoiceItems.length > 0) {
 		await tx.insert(invoiceLines).values(
-			items.map((item, i) => ({
+			invoiceItems.map((item, i) => ({
 				id: crypto.randomUUID(),
 				invoiceId: invoice.id,
 				position: i + 1,
