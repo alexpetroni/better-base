@@ -1,3 +1,4 @@
+import { CUI_PATTERN } from '../../util/cui.ts';
 import { parseLeiToCents } from '../../util/money.ts';
 
 /**
@@ -66,9 +67,6 @@ export type SettingSpec = BaseSpec &
 export const SETTINGS_PLACEHOLDER_PREFIX = 'PLACEHOLDER';
 
 const ph = (hint: string) => `${SETTINGS_PLACEHOLDER_PREFIX} — ${hint}`;
-
-/** Romanian CUI, with or without the RO VAT prefix: 2–10 digits. */
-const CUI_PATTERN = /^(RO)?\d{2,10}$/i;
 
 export const SETTINGS_REGISTRY = {
 	// --- company.* — legal identification of the operating entity -----------
@@ -183,6 +181,14 @@ export const SETTINGS_REGISTRY = {
 	'invoice.paymentTermsNote': {
 		kind: 'multiline',
 		default: '',
+		launchRequired: false,
+		clientSafe: false
+	},
+	// Mention printed on invoices while the entity is NOT VAT-registered
+	// (`company.vatRegistered` off) — snapshotted into each invoice at issue.
+	'invoice.vatUnregisteredMention': {
+		kind: 'text',
+		default: 'Neplătitor de TVA',
 		launchRequired: false,
 		clientSafe: false
 	},

@@ -30,6 +30,7 @@
 		'invoice.issuerPlace': m.admin_settings_invoice_issuer_place,
 		'invoice.vatRateBp': m.admin_settings_invoice_vat_rate,
 		'invoice.paymentTermsNote': m.admin_settings_invoice_payment_terms,
+		'invoice.vatUnregisteredMention': m.admin_settings_invoice_vat_unregistered_mention,
 		'shop.freeShippingThresholdBani': m.admin_settings_shop_free_shipping,
 		'shop.shippingNote': m.admin_settings_shop_shipping_note
 	};

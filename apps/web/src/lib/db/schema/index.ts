@@ -8,6 +8,7 @@ export * from '../../modules/blog/schema.ts';
 export * from '../../modules/chat/schema.ts';
 export * from '../../modules/crm/schema.ts';
 export * from '../../modules/email/schema.ts';
+export * from '../../modules/invoice/schema.ts';
 export * from '../../modules/media/schema.ts';
 export * from '../../modules/pages/schema.ts';
 export * from '../../modules/quiz/schema.ts';
