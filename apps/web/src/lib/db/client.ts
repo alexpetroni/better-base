@@ -1,4 +1,8 @@
-import { Pool as NeonPool, type PoolClient as NeonPoolClient } from '@neondatabase/serverless';
+import {
+	neonConfig,
+	Pool as NeonPool,
+	type PoolClient as NeonPoolClient
+} from '@neondatabase/serverless';
 import { drizzle as drizzleNeon } from 'drizzle-orm/neon-serverless';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
@@ -100,6 +104,28 @@ function createPgDb(connectionString: string, config: DbPoolConfig) {
 }
 
 /**
+ * Local Neon-protocol stack (dev/tests, never production): when NEON_WS_PROXY
+ * is set to a `host:port`, the driver dials that WebSocket proxy — the
+ * compose `neon-proxy` service (`docker compose --profile neon up -d`), the
+ * same wsproxy Neon runs in front of its own databases — instead of deriving
+ * a wss:// endpoint from the connection-string host. This is what lets
+ * `pnpm test:neon` exercise the real WebSocket transport against the local
+ * Postgres. Against real Neon the variable stays unset and none of this runs.
+ */
+function configureLocalWsProxy(proxy: string): void {
+	// The proxy sits on the compose network, so the Postgres address it dials
+	// is the compose-internal one — NOT the host-published port from
+	// DATABASE_URL (its allowlist admits only this value, see docker-compose.yml).
+	const target = process.env.NEON_WS_PROXY_TARGET ?? 'db:5432';
+	neonConfig.wsProxy = () => `${proxy}/v1?address=${target}`;
+	// The local proxy listens on plain ws:// (no nginx TLS layer in front).
+	neonConfig.useSecureWebSocket = false;
+	// Connect pipelining needs cleartext password auth; compose Postgres uses
+	// SCRAM, so the handshake has to run unpipelined.
+	neonConfig.pipelineConnect = false;
+}
+
+/**
  * The Neon serverless path (WebSockets, so transactions still work).
  *
  * Two deliberate differences from the `pg` path:
@@ -109,6 +135,8 @@ function createPgDb(connectionString: string, config: DbPoolConfig) {
  * - the pool is tiny by default (see NEON_POOL_MAX_DEFAULT).
  */
 function createNeonDb(connectionString: string, config: DbPoolConfig): Db {
+	const localProxy = process.env.NEON_WS_PROXY;
+	if (localProxy) configureLocalWsProxy(localProxy);
 	const pool = new NeonPool({
 		connectionString,
 		max: config.max,
@@ -116,14 +144,38 @@ function createNeonDb(connectionString: string, config: DbPoolConfig): Db {
 		idleTimeoutMillis: config.idleTimeoutMillis
 	});
 	pool.on('connect', (client: NeonPoolClient) => {
+		// Not awaited, but safe: the pg protocol is strictly ordered per
+		// connection, so this SET completes before any query the pool hands
+		// this client afterwards. driver-parity.spec.ts proves it holds.
 		void client.query(`SET statement_timeout = ${config.statementTimeoutMillis}`);
 	});
 	// Both drivers produce a PgDatabase over the same schema with the same
 	// query API and a `$client` exposing `end()`, so every call site typed as
 	// `Db` works against either. The generic parameters differ (NeonQueryResultHKT
-	// vs NodePgQueryResultHKT), which is what this cast bridges.
-	return drizzleNeon(pool, { schema }) as unknown as Db;
+	// vs NodePgQueryResultHKT), which is what this cast bridges — guarded by the
+	// compile-time assertions below and the runtime surface check in
+	// driver-parity.spec.ts, so it cannot rot silently.
+	return neonDrizzle(pool) as unknown as Db;
 }
+
+/** Split out so the neon side's OWN type (pre-cast) exists to assert against. */
+function neonDrizzle(pool: NeonPool) {
+	return drizzleNeon(pool, { schema });
+}
+type NeonDb = ReturnType<typeof neonDrizzle>;
+
+/**
+ * Compile-time proof obligations for the `as unknown as Db` cast above. Full
+ * mutual assignability is exactly what the differing HKT generics rule out;
+ * what CAN be demanded is that the neon driver's own type still carries every
+ * member `Db` promises (so no call site can reach a property that is not
+ * there) and the `$client.end()` shutdown seam. If a drizzle or driver bump
+ * drops or renames anything, these lines stop compiling.
+ */
+type MembersOfDbMissingFromNeonDb = Exclude<keyof Db, keyof NeonDb>;
+true satisfies MembersOfDbMissingFromNeonDb extends never ? true : MembersOfDbMissingFromNeonDb;
+true satisfies NeonDb['$client'] extends { end(): Promise<void> } ? true : never;
+true satisfies NeonDb['transaction'] extends (...args: never[]) => Promise<unknown> ? true : never;
 
 /**
  * Create a Drizzle client for an explicit connection string (scripts, tests).

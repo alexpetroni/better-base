@@ -79,6 +79,35 @@ services:
       timeout: 3s
       retries: 10
 
+  # Local Neon-protocol stack (OPT-IN: `docker compose --profile neon up -d`).
+  # The exact WebSocket<->TCP proxy the @neondatabase/serverless driver speaks
+  # to real Neon, built from a pinned commit (see docker/wsproxy/Dockerfile for
+  # why source, not the non-pullable prebuilt image), pointing at the `db`
+  # service. Lets `pnpm test:neon` run the whole suite with DB_DRIVER=neon over
+  # a real WebSocket connection without a Neon account. Not part of the default
+  # profile on purpose: production Neon provides this proxy itself.
+  neon-proxy:
+    profiles: ['neon']
+    build: ./docker/wsproxy
+    restart: unless-stopped
+    environment:
+      LISTEN_PORT: ':80'
+      # The driver appends `?address=host:port`; only the compose Postgres is
+      # an allowed target (the client passes `db:5432` — see NEON_WS_PROXY in
+      # .env.example and `localWsProxyConfig` in src/lib/db/client.ts).
+      ALLOW_ADDR_REGEX: '^db:5432$'
+    ports:
+      - '${NEON_WS_PROXY_PORT:-5488}:80'
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # wsproxy serves Prometheus metrics on :2112 — cheap liveness signal.
+      test: ['CMD', 'wget', '-qO/dev/null', 'http://localhost:2112/metrics']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   db-data:
   minio-data:

@@ -83,6 +83,22 @@ describe('normalizeServiceHosts', () => {
 		expect(env.PUBLIC_SITE_URL).toBe('http://localhost:5173');
 	});
 
+	it('rewrites the scheme-less NEON_WS_PROXY host:port both ways', () => {
+		// The neon driver's wsProxy option takes `host:port` without a scheme —
+		// the ws:// prefix is the driver's own choice (db/client.ts).
+		const env = { NEON_WS_PROXY: 'localhost:5488' };
+		expect(normalizeServiceHosts(env, true)).toEqual(['NEON_WS_PROXY']);
+		expect(env.NEON_WS_PROXY).toBe(`${CONTAINER_HOST_ALIAS}:5488`);
+		normalizeServiceHosts(env, false);
+		expect(env.NEON_WS_PROXY).toBe('localhost:5488');
+	});
+
+	it('leaves a non-local NEON_WS_PROXY alone', () => {
+		const env = { NEON_WS_PROXY: 'neon-proxy:80' };
+		expect(normalizeServiceHosts(env, true)).toEqual([]);
+		expect(env.NEON_WS_PROXY).toBe('neon-proxy:80');
+	});
+
 	it('skips missing and unparseable values', () => {
 		const env = { DATABASE_URL: undefined, S3_ENDPOINT: 'not-a-url' };
 		expect(normalizeServiceHosts(env, false)).toEqual([]);

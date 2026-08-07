@@ -20,12 +20,17 @@
 /** The docker-host alias containers use to reach ports published on the host. */
 export const CONTAINER_HOST_ALIAS = 'host.docker.internal';
 
-/** Variables holding a URL to a compose service. Others are never touched. */
+/**
+ * Variables addressing a compose service. Others are never touched. All are
+ * URLs except NEON_WS_PROXY, which is a bare `host:port` (the driver's
+ * `wsProxy` option prepends the ws:// scheme itself — see db/client.ts).
+ */
 export const SERVICE_URL_VARS = [
 	'DATABASE_URL',
 	'TEST_DATABASE_URL',
 	'S3_ENDPOINT',
-	'IMGPROXY_URL'
+	'IMGPROXY_URL',
+	'NEON_WS_PROXY'
 ] as const;
 
 /**
@@ -58,9 +63,9 @@ export function normalizeServiceHosts(
 		const value = env[name];
 		if (!value) continue;
 
+		// Scheme-less values (NEON_WS_PROXY's `host:port`) start at the host.
 		const schemeEnd = value.indexOf('://');
-		if (schemeEnd < 0) continue; // not a URL we understand — leave it as written
-		const authStart = schemeEnd + 3;
+		const authStart = schemeEnd < 0 ? 0 : schemeEnd + 3;
 		const slash = value.indexOf('/', authStart);
 		const authEnd = slash < 0 ? value.length : slash;
 		// Credentials may contain '@' and ':' — the host starts after the LAST '@'.
