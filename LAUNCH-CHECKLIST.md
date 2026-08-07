@@ -12,8 +12,12 @@ list applies later to better-life (with its own domain/accounts).
       (business verification takes days — start early).
 - [ ] Resend account; billing configured.
 - [ ] Anthropic API account with billing + usage limits set (chat assistant).
-- [ ] Hosting for the app + Postgres 16 chosen and provisioned; automated
+- [ ] Deploy target decided and provisioned: a VPS/PaaS + Postgres 16
+      (adapter-node, DEPLOYMENT.md §3–§4) or Vercel + Neon (§12); automated
       database backups enabled and restore tested once.
+- [ ] Fly.io account for imgproxy on the Vercel target
+      (`deploy/imgproxy/README.md`; an adapter-node VPS can host imgproxy
+      itself instead — §6).
 
 ## Legal (lawyer required)
 
@@ -38,7 +42,8 @@ list applies later to better-life (with its own domain/accounts).
 
 - [ ] `bettersleep.ro` → app host (A/CNAME); `www` redirect decided.
 - [ ] `img.bettersleep.ro` → imgproxy, proxied through Cloudflare with
-      "Cache Everything" rule (see DEPLOYMENT.md §6).
+      "Cache Everything" rule (see DEPLOYMENT.md §6; on the Vercel target
+      imgproxy itself deploys per `deploy/imgproxy/README.md`).
 - [ ] TLS live on both hostnames; `PUBLIC_SITE_URL=https://bettersleep.ro`.
 
 ## Environment & secrets (prod values, never the dev defaults)
@@ -51,7 +56,9 @@ list applies later to better-life (with its own domain/accounts).
       read+write; imgproxy: read-only).
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock).
-- [ ] All dev-default secrets grep-checked as absent from the prod env.
+- [ ] `pnpm launch:check` exits 0 with the prod env exported — it knows every
+      committed dev default, checks https + domain + per-target secrets, and
+      probes imgproxy signature agreement (DEPLOYMENT.md §2 "Preflight").
 
 ## Stripe (live)
 
@@ -85,13 +92,28 @@ list applies later to better-life (with its own domain/accounts).
 
 ## Ops
 
-- [ ] `pnpm db:migrate` + `pnpm db:seed` ran against the prod database.
-- [ ] Cron: `pnpm chat:prune` daily (DEPLOYMENT.md §9).
+Pick the deploy target first — adapter-node on a machine you run
+(DEPLOYMENT.md §3) or Vercel + Neon (§12) — then tick the branch that applies
+in the split boxes.
+
+- [ ] GitHub Actions repository secret `DIRECT_DATABASE_URL` set (repo →
+      Settings → Secrets and variables → Actions) and the `migrate` workflow
+      run green once by hand (Actions → migrate → Run workflow) — its log
+      prints the applied migration list (§12 "CI migrations").
+- [ ] First-deploy setup ran from a checkout with the prod env:
+      `pnpm db:seed`, `pnpm content:init`, `pnpm user:create` (§12 "Deploy
+      order"; §4 for adapter-node).
+- [ ] Retention job, per target:
+      - adapter-node: machine cron runs `pnpm chat:prune` daily (§9).
+      - Vercel: `CRON_SECRET` set in the project env — `vercel.json` already
+        schedules `GET /api/cron/chat-prune` daily; verified once by hand
+        with `curl -H "Authorization: Bearer $CRON_SECRET" …` (§12).
 - [ ] Uptime monitor pointed at `https://bettersleep.ro/api/health`
       (alert on non-200).
-- [ ] Log collection captures the app's stderr JSON lines; someone is
-      notified on `level:error` spikes.
-- [ ] Database backup + restore drill done ONCE before launch.
+- [ ] Log collection captures the app's stderr JSON lines (Vercel: a log
+      drain on the project); someone is notified on `level:error` spikes.
+- [ ] Database backup + restore drill done ONCE before launch (Neon: a
+      point-in-time restore tried once from the console).
 
 ## Final smoke (on production, after everything above)
 

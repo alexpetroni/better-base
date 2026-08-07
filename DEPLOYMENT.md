@@ -67,6 +67,24 @@ message listing every missing variable (plus `RESEND_API_KEY` when
 `EMAIL_DRYRUN=false`, and `STRIPE_WEBHOOK_SECRET` when a real Stripe key is
 set) — a bad deploy fails at startup, never as 500s on first use.
 
+**Preflight: `pnpm launch:check`.** Before a deploy, run it with the target
+environment's variables exported (exported values win over the root `.env`).
+It re-checks the same matrix from the outside — the list is the SAME
+declaration the boot check uses (`src/lib/server/env-matrix.ts`), so the two
+cannot drift — and adds the launch-only rules a running app cannot judge:
+no committed dev default anywhere (secrets, MinIO/compose credentials,
+Stripe webhook dev value), `PUBLIC_SITE_URL` https and matching the
+`SITE_ID`'s domain, live-mode implications (`EMAIL_DRYRUN=false` ⇒
+`RESEND_API_KEY`, no `sk_test_…` key), the Vercel extras
+(`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live imgproxy probe: it uploads
+a 1×1 PNG with the app's S3 credentials and requires the signed imgproxy URL
+to answer 200 and an unsigned one 403 — proving key/salt agree between app
+and imgproxy and that imgproxy can read the bucket. Non-zero exit with a
+numbered report on any problem. Flags: `--dev` (local dev acknowledgement:
+dev defaults and http are fine, everything else still checked), `--no-probe`
+(env-only, no network), `--target=node|vercel` (default: `vercel` when
+`VERCEL`/`DEPLOY_TARGET=vercel` is set, else `node`).
+
 Not used in prod: `TEST_DATABASE_URL`, `DB_PORT`, `MINIO_*`, `IMGPROXY_PORT`
 (compose/dev knobs only).
 
@@ -176,7 +194,10 @@ AWS_REGION=auto
 
 Expose it at a public hostname (e.g. `img.bettersleep.ro`) and set that as
 `IMGPROXY_URL` for the app. Signature enforcement is on by default when
-key/salt are set — unsigned or tampered URLs get 403.
+key/salt are set — unsigned or tampered URLs get 403. A ready-made host
+config for exactly this container lives in `deploy/imgproxy/` (Fly.io, the
+committed choice for the Vercel target — §12); a VPS that already runs the
+app works just as well with the same env block.
 
 **Key/salt hygiene & rotation.** There are NO committed defaults anywhere
 (docker-compose refuses to start without a pair in `.env`; the app's boot
@@ -285,11 +306,22 @@ builds and runs exactly as §1–§11 describe.
                      imgproxy (Fly / Railway / a small VPS) ◀── signed URLs from the app
 ```
 
-**imgproxy still runs somewhere.** Vercel cannot host it, and the app signs
-imgproxy URLs for every image. Point `IMGPROXY_URL` at a small always-on
-instance with the same `IMGPROXY_KEY`/`IMGPROXY_SALT` as the app and R2
-credentials of its own (§6 unchanged). This is the one piece of non-serverless
-infrastructure the setup needs.
+**imgproxy runs on Fly.io — decided.** Vercel cannot host it, and the app
+signs imgproxy URLs for every image, so this is the one piece of always-on
+infrastructure the setup needs. The committed config is
+`deploy/imgproxy/fly.toml` (+ README with the exact `fly secrets set` lines):
+the upstream `ghcr.io/imgproxy/imgproxy:v3` image, region `otp` (Bucharest —
+the RO market next door), always-on `shared-cpu-1x`/512 MB, the `/health`
+check wired, same key/salt as the app and a **read-only** R2 token of its
+own, public hostname behind Cloudflare "Cache Everything" (§6). Cost: a few
+dollars a month (Fly's smallest always-on machine; 256 MB was rejected
+because large sources OOM the transformer). Alternatives considered:
+Railway (~$5/mo minimum for the same container, no closer region), a small
+VPS (similar price but reintroduces a machine to patch — sensible only if
+one already exists for an adapter-node deploy, per §6), and Vercel Image
+Optimization (rejected: it means refactoring `imageSources()` in
+`src/lib/modules/media/imgproxy.ts`, which every page renders through — the
+only option here with real regression risk).
 
 ### What changes
 
@@ -325,10 +357,30 @@ Vercel dashboard → New Project → import the repo:
 `/api/chat` declares `maxDuration = 60` in its `+server.ts` because the
 assistant streams its reply and would otherwise be cut off at the plan default.
 
-### Deploy order
+### CI migrations (GitHub Actions)
 
 Migrations do **not** run during the build — a build is not a deploy, and
-Vercel may run several concurrently. Run them yourself, then deploy:
+Vercel may run several concurrently. Their home is
+`.github/workflows/migrate.yml`: it applies `apps/web/drizzle/*.sql` on every
+push to `main` (so the schema is current before Vercel promotes that same
+push) and on manual dispatch (Actions → migrate → Run workflow). The job is a
+no-op when the database is already current, serializes concurrent runs, and
+ends by printing the applied-migration list (`pnpm db:status` — runnable from
+any checkout too; it exits non-zero while migrations are pending).
+
+Wire it once: GitHub repo → Settings → Secrets and variables → Actions → New
+repository secret, name `DIRECT_DATABASE_URL`, value = the site's **unpooled**
+Neon URL (`postgres://…neon.tech/better_sleep?sslmode=require` — not the
+`-pooler` host; DDL through PgBouncer's transaction mode is unreliable).
+Without the secret the workflow fails closed on its first step, before
+installing anything. It deliberately never seeds and never creates users —
+those are one-off human steps below.
+
+### Deploy order
+
+First deploy only — run the one-off setup yourself from a checkout, with the
+site's Neon URLs exported (later deploys need none of this; the workflow
+keeps the schema current):
 
 ```bash
 # from a checkout, with the site's Neon URLs exported:
@@ -400,9 +452,11 @@ driver-level assertions live in `src/lib/db/driver-parity.spec.ts`.
 - **Cold starts** hit the first request after idle: a fresh function opens a
   new Neon connection. The pooled endpoint keeps this in the tens of
   milliseconds; it is not zero.
-- **One always-on box remains** for imgproxy. Removing it means teaching the
-  media layer a second transform provider (e.g. Vercel Image Optimization) —
-  deliberately out of scope here, since it would touch every page's rendering.
+- **One always-on box remains** for imgproxy — decided and committed: Fly.io,
+  `deploy/imgproxy/` (see "imgproxy runs on Fly.io" above). Removing it means
+  teaching the media layer a second transform provider (e.g. Vercel Image
+  Optimization) — deliberately out of scope, since it would touch every
+  page's rendering.
 - **Residual risk — Neon's own pooler and TLS path are NOT covered by the local
   stack.** The local proxy proves the WebSocket transport and this codebase's
   driver seam; it cannot prove Neon's PgBouncer configuration (its startup-
