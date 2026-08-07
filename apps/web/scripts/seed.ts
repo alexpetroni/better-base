@@ -10,7 +10,8 @@ import {
 	seedDemoProducts,
 	seedDefaultPages,
 	seedDemoQuiz,
-	seedPillars
+	seedPillars,
+	seedPlaceholderSettings
 } from '../src/lib/db/seed.ts';
 import {
 	contentDirsFor,
@@ -40,6 +41,8 @@ const productCount = await seedDemoProducts(db, storage);
 console.log(`Seeded ${productCount} demo product(s)`);
 const pageCount = await seedDefaultPages(db);
 console.log(`Seeded ${pageCount} default page(s)`);
+const settingCount = await seedPlaceholderSettings(db);
+console.log(`Seeded ${settingCount} placeholder site setting(s) — replace them in /admin/settings`);
 
 // Initial content last: importing needs the pillars above to already exist
 // (a bundle whose pillars are all missing is refused as invisible).

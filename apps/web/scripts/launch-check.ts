@@ -4,18 +4,25 @@
 // over the root .env, which is loaded for the local-dev case). It prints a
 // numbered report of everything that would embarrass production — missing
 // variables, committed dev defaults, http origin, target/secret mismatches —
-// and probes the live imgproxy for signature agreement. Exit codes: 0 clean,
-// 1 problems found, 2 usage error.
+// probes the live imgproxy for signature agreement, and reads the target
+// database's site_settings to enforce that every launch-required setting is
+// saved and no longer a seeded placeholder. Exit codes: 0 clean, 1 problems
+// found, 2 usage error.
 //
 // Flags:
-//   --dev       local-dev acknowledgement: dev defaults / http origin are fine
-//   --no-probe  skip the network probe (env-only check, e.g. from CI)
+//   --dev       local-dev acknowledgement: dev defaults / http origin /
+//               placeholder site settings are fine
+//   --no-probe  skip the network checks (imgproxy probe AND the site-settings
+//               database read) for an env-only check, e.g. from CI
 //   --target=…  override the deploy target (default: vercel when VERCEL or
 //               DEPLOY_TARGET=vercel is set, node otherwise)
 //
-// The rules live in src/lib/server/launch-check.ts; the variable list is the
-// same env-matrix.ts declaration the boot validator uses.
+// The env rules live in src/lib/server/launch-check.ts (variable list from the
+// same env-matrix.ts declaration the boot validator uses); the site-settings
+// rule lives in src/lib/modules/settings (settingsLaunchProblems).
 import { loadRootEnv } from './env.ts';
+import { createDb } from '../src/lib/db/client.ts';
+import { settingsLaunchProblems } from '../src/lib/modules/settings/server.ts';
 import {
 	canProbeImgproxy,
 	launchCheckProblems,
@@ -51,15 +58,40 @@ const resolvedTarget: DeployTarget =
 
 const problems = launchCheckProblems(env, { target: resolvedTarget, dev });
 
-let probeNote = '';
+const notes: string[] = [];
 if (noProbe) {
-	probeNote = ' (imgproxy probe skipped: --no-probe)';
+	notes.push('imgproxy probe skipped: --no-probe');
 } else if (!canProbeImgproxy(env)) {
 	// The vars the probe needs are missing — already reported above.
-	probeNote = ' (imgproxy probe skipped: IMGPROXY_*/S3_* incomplete)';
+	notes.push('imgproxy probe skipped: IMGPROXY_*/S3_* incomplete');
 } else {
 	problems.push(...(await probeImgproxy(env)));
 }
+
+// Site-settings preflight: launch-required settings must be explicitly saved
+// and no longer the seeded placeholders. --dev acknowledges placeholders the
+// same way it acknowledges dev-default env values; --no-probe keeps the run
+// env-only (CI has no database to dial).
+if (dev) {
+	notes.push('site-settings check skipped: --dev');
+} else if (noProbe) {
+	notes.push('site-settings check skipped: --no-probe');
+} else if (!env.DATABASE_URL) {
+	// Reported as a missing variable above.
+	notes.push('site-settings check skipped: DATABASE_URL not set');
+} else {
+	const db = createDb(env.DATABASE_URL);
+	try {
+		problems.push(...(await settingsLaunchProblems({ db })));
+	} catch (err) {
+		problems.push(
+			`site settings could not be read (${err instanceof Error ? err.message : err}) — is DATABASE_URL reachable and migrated?`
+		);
+	} finally {
+		await db.$client.end();
+	}
+}
+const probeNote = notes.length ? ` (${notes.join('; ')})` : '';
 
 const label = `launch:check — target ${resolvedTarget}, SITE_ID ${env.SITE_ID ?? '(unset)'}${dev ? ', --dev' : ''}`;
 if (problems.length) {

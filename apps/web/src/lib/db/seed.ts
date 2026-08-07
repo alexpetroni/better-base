@@ -8,6 +8,13 @@ import type { Storage } from '../modules/media/storage.ts';
 import { quizzes } from '../modules/quiz/schema.ts';
 import { SLEEP_QUIZ_SEED } from '../modules/quiz/seed-quiz.ts';
 import { validateForPublish } from '../modules/quiz/validate.ts';
+import {
+	SETTINGS_REGISTRY,
+	settingKeys,
+	type SettingKey,
+	type SettingSpec
+} from '../modules/settings/registry.ts';
+import { siteSettings } from '../modules/settings/schema.ts';
 import { productPillars, products } from '../modules/shop/schema.ts';
 import { DEMO_PRODUCTS } from '../modules/shop/seed-products.ts';
 import type { Db } from './client.ts';
@@ -178,6 +185,27 @@ export async function seedDemoArticles(db: Db): Promise<number> {
 			.onConflictDoNothing();
 	}
 	return DEMO_ARTICLES.length;
+}
+
+/**
+ * Placeholder rows for the site settings that declare one (launch-required
+ * text keys), clearly marked `PLACEHOLDER — …` so `pnpm launch:check` refuses
+ * to launch while they stand. Created only when missing — re-seeding never
+ * overwrites values edited in /admin/settings.
+ */
+export async function seedPlaceholderSettings(db: Db): Promise<number> {
+	const values = settingKeys()
+		.map((key) => ({ key, placeholder: (SETTINGS_REGISTRY[key] as SettingSpec).placeholder }))
+		.filter((entry): entry is { key: SettingKey; placeholder: string } =>
+			Boolean(entry.placeholder)
+		)
+		.map((entry) => ({ key: entry.key, value: entry.placeholder }));
+	const inserted = await db
+		.insert(siteSettings)
+		.values(values)
+		.onConflictDoNothing({ target: siteSettings.key })
+		.returning({ key: siteSettings.key });
+	return inserted.length;
 }
 
 /**

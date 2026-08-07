@@ -39,6 +39,9 @@ export default async function globalSetup() {
 			await upsertStaffUser(auth, { ...E2E_EDITOR, role: 'editor' });
 			await db.execute(sql`delete from login_attempts`);
 			await db.execute(sql`delete from rate_limits`);
+			// The settings e2e edits and asserts exact values; leftovers from a
+			// previous run would collide with the fresh-form expectations.
+			await db.execute(sql`delete from site_settings`);
 			// Content is created by the tests themselves; leftovers from a failed
 			// earlier run would break slug and filename assumptions. Articles and
 			// shop rows go first — they reference media (FKs + delete-refusal
