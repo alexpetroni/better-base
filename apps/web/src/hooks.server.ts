@@ -43,19 +43,25 @@ const handleSettings: Handle = ({ event, resolve }) => {
 /**
  * Server-side protection for everything under /admin (except /admin/login):
  * anonymous → redirect to login; editor on an admin-only section → 403.
- * Session lookup is skipped entirely for public routes.
+ * Session lookup is skipped entirely for public routes — except the fiscal
+ * document downloads (/api/invoices/…), which serve BOTH audiences: staff by
+ * session, customers by signed token. The route itself decides; the hook only
+ * resolves who is asking.
  */
 const handleAdminGuard: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 
 	const pathname = deLocalizeUrl(event.url).pathname;
-	if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+	const isAdminPath = pathname === '/admin' || pathname.startsWith('/admin/');
+	if (isAdminPath || pathname.startsWith('/api/invoices/')) {
 		const session = await getAuth().api.getSession({ headers: event.request.headers });
 		if (session && isStaffRole(session.user.role)) {
 			const { id, email, name, role } = session.user;
 			event.locals.user = { id, email, name, role };
 		}
+	}
 
+	if (isAdminPath) {
 		const decision = guardAdminPath(pathname, event.locals.user?.role ?? null);
 		if (decision.kind === 'login-redirect') redirect(303, '/admin/login');
 		if (decision.kind === 'forbidden') error(403, 'Forbidden');

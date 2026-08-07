@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { E2E_ADMIN } from './env.ts';
+import { eq } from 'drizzle-orm';
+import Stripe from 'stripe';
+import { createDb } from '../src/lib/db/client.ts';
+import { emailLog } from '../src/lib/modules/email/schema.ts';
+import { buildCartMetadata } from '../src/lib/modules/shop/checkout.ts';
+import { orders } from '../src/lib/modules/shop/schema.ts';
+import { DEMO_PRODUCTS } from '../src/lib/modules/shop/seed-products.ts';
+import { E2E_ADMIN, E2E_STRIPE_WEBHOOK_SECRET, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
 import { login } from './helpers.ts';
 
 // Editor-role access is covered in admin.e2e.ts: /admin/settings answers 403
@@ -92,4 +99,145 @@ test('saved identification + ANPC links render in the footer and on legal pages'
 		await expect(page.getByTestId('cookie-table')).toContainText(name);
 	}
 	await expect(page.getByTestId('consent-manager')).toBeVisible();
+});
+
+// The invoice-document flow lives in THIS file on purpose (like the legal-
+// surface test above): it depends on the company identification saved by the
+// first test, and site_settings is shared state no parallel spec file may
+// touch. Mock-Stripe purchase → invoice issued by the webhook → the buyer
+// downloads it from the success page; the admin sees, downloads and re-sends
+// it; nobody else can fetch it.
+test('a purchase yields a downloadable invoice; access is owner-or-admin only', async ({
+	page,
+	request
+}, testInfo) => {
+	const siteId = testInfo.project.name as keyof typeof SITE_DB_NAMES;
+	const db = createDb(siteDatabaseUrl(siteId));
+	// Constructed only for its offline webhook signing helper.
+	const stripeSigner = new Stripe('sk_test_offline_signing_only');
+	const [, CEAI] = DEMO_PRODUCTS;
+
+	try {
+		// --- Complete the issuer configuration (series prefix is required).
+		await login(page, E2E_ADMIN);
+		await page.goto('/admin/settings');
+		await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+		await page.getByTestId('settings-field-invoice.seriesPrefix').fill('E2E');
+		await page.getByTestId('settings-field-invoice.issuerPlace').fill('București');
+		await page.getByTestId('settings-save-invoice').click();
+		await expect(page.getByTestId('settings-saved')).toBeVisible();
+
+		// --- A signed mock-Stripe webhook creates a paid order + its invoice.
+		const sessionId = `cs_test_mock_invoice_${siteId}`;
+		const payload = JSON.stringify({
+			id: `evt_e2e_invoice_${siteId}`,
+			object: 'event',
+			type: 'checkout.session.completed',
+			data: {
+				object: {
+					id: sessionId,
+					object: 'checkout.session',
+					amount_total: CEAI.priceCents,
+					currency: 'ron',
+					payment_intent: `pi_e2e_invoice_${siteId}`,
+					payment_status: 'paid',
+					customer_details: { email: 'factura-client@example.com', name: 'Ștefan Țăranu' },
+					collected_information: {
+						shipping_details: {
+							name: 'Ștefan Țăranu',
+							address: {
+								line1: 'Str. Înțelepciunii 3',
+								city: 'Cluj-Napoca',
+								postal_code: '400001',
+								country: 'RO'
+							}
+						}
+					},
+					metadata: {
+						cart: buildCartMetadata([{ productId: CEAI.id, qty: 1, priceCents: CEAI.priceCents }])
+					}
+				}
+			}
+		});
+		const webhook = await page.context().request.post('/api/stripe/webhook', {
+			headers: {
+				'content-type': 'application/json',
+				'stripe-signature': stripeSigner.webhooks.generateTestHeaderString({
+					payload,
+					secret: E2E_STRIPE_WEBHOOK_SECRET
+				})
+			},
+			data: payload
+		});
+		expect(await webhook.json()).toEqual({ received: true, outcome: 'order-created' });
+
+		// The dry-run confirmation email captured the PDF attachment + number.
+		const [order] = await db.select().from(orders).where(eq(orders.stripeSessionId, sessionId));
+		const [confirmation] = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.idempotencyKey, `order-confirmation:${order.id}`));
+		expect(confirmation.status).toBe('dryrun');
+		expect(confirmation.attachments).toHaveLength(1);
+		expect(confirmation.attachments![0].filename).toMatch(/^Factura-E2E-\d{4}\.pdf$/);
+		expect(confirmation.data.invoiceNumber).toMatch(/^E2E-\d{4}$/);
+
+		// --- Buyer side: the success page links signed PDF/XML downloads.
+		await page.goto(`/cos/succes?session_id=${sessionId}`);
+		await expect(page.getByTestId('success-invoice')).toBeVisible();
+		const pdfHref = await page.getByTestId('success-invoice-pdf').first().getAttribute('href');
+		const xmlHref = await page.getByTestId('success-invoice-xml').first().getAttribute('href');
+
+		// The `request` fixture shares no cookies with the (admin-logged-in)
+		// page: it is the stranger holding only a link. The signed URL works —
+		// it IS the capability — a tampered or missing token must not.
+		const anonymous = await request.get(pdfHref!);
+		expect(anonymous.status()).toBe(200);
+		expect(anonymous.headers()['content-type']).toBe('application/pdf');
+		expect(anonymous.headers()['content-disposition']).toMatch(/^attachment; filename="Factura-/);
+		expect((await anonymous.body()).subarray(0, 5).toString()).toBe('%PDF-');
+
+		const xmlResponse = await request.get(xmlHref!);
+		expect(xmlResponse.status()).toBe(200);
+		expect(await xmlResponse.text()).toContain('CIUS-RO');
+
+		const bare = pdfHref!.split('?')[0];
+		const tampered = `${bare}?t=${pdfHref!.split('t=')[1].replace(/.{4}$/, 'AAAA')}`;
+		for (const [label, url] of [
+			['no token', bare],
+			['tampered token', tampered]
+		]) {
+			const response = await request.get(url);
+			expect(response.status(), label).toBe(403);
+		}
+
+		// --- Admin side (the page still holds the admin session): order
+		// detail shows the document with downloads.
+		await page.goto('/admin/orders?f=all');
+		await page
+			.locator(`[data-testid="order-row"][data-session="${sessionId}"]`)
+			.locator('a')
+			.click();
+		const invoiceBox = page.locator('[data-testid="order-invoice"][data-kind="invoice"]');
+		await expect(invoiceBox).toBeVisible();
+		await expect(invoiceBox.locator('.font-mono')).toHaveText(/^E2E-\d{4}$/);
+		const adminPdf = await page.request.get(
+			(await invoiceBox.getByTestId('order-invoice-pdf').getAttribute('href'))!
+		);
+		expect(adminPdf.status()).toBe(200);
+		expect((await adminPdf.body()).subarray(0, 5).toString()).toBe('%PDF-');
+
+		// Re-send the invoice email; the send is recorded (dry-run) once.
+		await page.getByTestId('order-invoice-resend').click();
+		await expect(page.getByTestId('order-invoice-resent')).toBeVisible();
+
+		// --- The accountant export for this month contains the document.
+		const month = new Date().toISOString().slice(0, 7);
+		const exportResponse = await page.request.get(`/admin/orders/export?month=${month}`);
+		expect(exportResponse.status()).toBe(200);
+		expect(exportResponse.headers()['content-type']).toBe('application/zip');
+		expect((await exportResponse.body()).subarray(0, 2).toString()).toBe('PK');
+	} finally {
+		await db.$client.end();
+	}
 });
