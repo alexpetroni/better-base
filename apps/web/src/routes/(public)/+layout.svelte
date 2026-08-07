@@ -4,15 +4,23 @@
 	import { m } from '$lib/paraglide/messages';
 	import { baseLocale, deLocalizeUrl, locales, localizeHref } from '$lib/paraglide/runtime';
 	import { canonicalUrl } from '$lib/seo';
+	import { AnalyticsLoader } from '$lib/modules/analytics';
 	import { ChatWidget } from '$lib/modules/chat';
 	import { NewsletterSignup } from '$lib/modules/crm';
-	import { CookieConsent } from '$lib/modules/gdpr';
+	import { CookieConsent, type CookieConsentValue } from '$lib/modules/gdpr';
+	import { LegalIdentity } from '$lib/modules/settings';
 
 	let { data, children } = $props();
 
 	// Merged page data, so a page load that mutates the cart cookie (checkout
 	// success) can override the count the layout load read before the mutation.
 	const cartCount = $derived(page.data.cartCount ?? 0);
+
+	// Live consent decision: the server-read cookie until the banner (or the
+	// consent manager, which reloads) changes it. Feeds the consent-gated
+	// analytics loader, so accepting in the banner takes effect immediately.
+	let localDecision = $state<CookieConsentValue | null>(null);
+	const consentDecision = $derived(localDecision ?? data.cookieConsent);
 
 	// hreflang alternates for every public page: the locale-less (ro, base)
 	// pathname localized per locale, absolute via PUBLIC_SITE_URL. x-default
@@ -88,6 +96,11 @@
 				{/each}
 			</ul>
 		</nav>
+		<!-- RO e-commerce: the trader identification + ANPC/SOL links must be
+		     visible on every page — rendered from /admin/settings, never hardcoded. -->
+		<div class="mt-6">
+			<LegalIdentity settings={data.publicSettings} />
+		</div>
 		<p class="mt-4 text-sm text-(--color-ink)/70">© {data.site.name}</p>
 	</div>
 </footer>
@@ -96,4 +109,5 @@
 	<ChatWidget />
 {/if}
 
-<CookieConsent initial={data.cookieConsent} />
+<CookieConsent initial={data.cookieConsent} onchange={(value) => (localDecision = value)} />
+<AnalyticsLoader config={data.analytics} decision={consentDecision} />

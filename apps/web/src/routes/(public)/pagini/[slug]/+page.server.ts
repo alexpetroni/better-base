@@ -10,6 +10,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	if (!page) error(404);
 	return {
 		page: {
+			slug: page.slug,
 			title: page.title,
 			seoDescription: page.seoDescription,
 			// Simple pages carry no media: refs — plain markdown render.
