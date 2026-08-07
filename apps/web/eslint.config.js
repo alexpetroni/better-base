@@ -10,6 +10,9 @@ const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
 export default defineConfig(
 	includeIgnoreFile(gitignorePath),
+	// Generated base64 font module — a single megabyte-long string literal;
+	// linting it is pure cost (see scripts/embed-font.ts).
+	{ ignores: ['src/lib/modules/invoice/fonts/dejavu-sans.ts'] },
 	js.configs.recommended,
 	ts.configs.recommended,
 	svelte.configs.recommended,
