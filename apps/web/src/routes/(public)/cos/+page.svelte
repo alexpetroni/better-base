@@ -117,7 +117,7 @@
 						<span class="grow">
 							{option.name}
 							{#if option.etaText}
-								<span class="text-(--color-ink)/60">({option.etaText})</span>
+								<span class="text-(--color-ink)/70">({option.etaText})</span>
 							{/if}
 						</span>
 						<span class="font-semibold" data-testid="cart-shipping-price" data-option={option.id}>
@@ -129,7 +129,7 @@
 				{/each}
 			</div>
 			{#if data.shippingNote}
-				<p class="mt-2 text-xs text-(--color-ink)/60" data-testid="cart-shipping-note">
+				<p class="mt-2 text-xs text-(--color-ink)/70" data-testid="cart-shipping-note">
 					{data.shippingNote}
 				</p>
 			{/if}
