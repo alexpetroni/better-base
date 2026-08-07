@@ -1,7 +1,9 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm';
 import { imageSize } from 'image-size';
 import type { Db } from '../../db/client.ts';
 import type { Result as ResultOf } from '../../util/result.ts';
+import { blurhashFromPng, BLURHASH_SOURCE_PX } from './blurhash.ts';
+import { buildImgUrl, type ImgproxyConfig } from './imgproxy.ts';
 import { media, type MediaRow, type VideoProvider } from './schema.ts';
 import type { Storage } from './storage.ts';
 import { isAllowedImageMime, mediaKeyFor, validateUpload } from './validation.ts';
@@ -14,6 +16,12 @@ import { isAllowedImageMime, mediaKeyFor, validateUpload } from './validation.ts
 export interface MediaDeps {
 	db: Db;
 	storage: Storage;
+	/**
+	 * When present, `confirmUpload` also computes a blurhash from a tiny
+	 * imgproxy render. Optional so storage-only callers keep working; a row
+	 * confirmed without it stays `blurhash: null` until `pnpm media:blurhash`.
+	 */
+	imgproxy?: ImgproxyConfig;
 }
 
 export type MediaError = 'invalid-mime' | 'invalid-size' | 'not-found' | 'referenced';
@@ -93,6 +101,16 @@ export async function confirmUpload(
 		// Undetectable dimensions (e.g. an SVG without width/viewBox) are not fatal.
 	}
 
+	let blurhash: string | null = null;
+	if (deps.imgproxy && stat.mime !== 'image/svg+xml') {
+		try {
+			blurhash = await computeBlurhash(deps.imgproxy, input.key);
+		} catch {
+			// Non-fatal: a corrupt or undecodable upload still confirms (the row
+			// just has no placeholder) and `pnpm media:blurhash` can retry later.
+		}
+	}
+
 	const [row] = await deps.db
 		.insert(media)
 		.values({
@@ -104,11 +122,72 @@ export async function confirmUpload(
 			size: stat.size,
 			width: dimensions.width,
 			height: dimensions.height,
+			blurhash,
 			alt: input.alt ?? '',
 			createdBy: input.createdBy
 		})
 		.returning();
 	return { ok: true, value: row };
+}
+
+/**
+ * Blurhash for a stored image: imgproxy renders the original at ≤32px PNG
+ * (the same resize pipeline every page view uses, so every stored format is
+ * covered), and the tiny result is encoded pure-JS. Cheap enough for a
+ * serverless confirm: one ~1 KB fetch plus a ≤32×32 encode. Throws on any
+ * failure — callers decide whether that is fatal.
+ */
+export async function computeBlurhash(
+	imgproxy: ImgproxyConfig,
+	key: string,
+	opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}
+): Promise<string> {
+	const fetchImpl = opts.fetchImpl ?? fetch;
+	const url = buildImgUrl(imgproxy, key, {
+		w: BLURHASH_SOURCE_PX,
+		h: BLURHASH_SOURCE_PX,
+		fit: 'fit',
+		format: 'png'
+	});
+	const res = await fetchImpl(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000) });
+	if (!res.ok) throw new Error(`imgproxy answered ${res.status} for ${key}`);
+	return blurhashFromPng(new Uint8Array(await res.arrayBuffer()));
+}
+
+/**
+ * Fill `blurhash` for legacy image rows (`pnpm media:blurhash`). Idempotent
+ * and resumable: only rows still at null are selected, each row is written
+ * as soon as it is computed, and a failing row is reported and skipped —
+ * re-running retries exactly the rows that are still missing. SVGs are
+ * excluded (they are served unrasterized, so no placeholder applies).
+ */
+export async function backfillBlurhashes(
+	deps: { db: Db; imgproxy: ImgproxyConfig },
+	opts: { log?: (line: string) => void; fetchImpl?: typeof fetch } = {}
+): Promise<{ filled: number; failed: number }> {
+	const log = opts.log ?? (() => {});
+	const rows = await deps.db
+		.select({ id: media.id, key: media.key })
+		.from(media)
+		.where(and(eq(media.kind, 'image'), isNull(media.blurhash), ne(media.mime, 'image/svg+xml')))
+		.orderBy(asc(media.createdAt), asc(media.id));
+
+	let filled = 0;
+	let failed = 0;
+	for (const row of rows) {
+		if (!row.key) continue; // unreachable for kind=image (schema check), belt-and-braces
+		try {
+			const blurhash = await computeBlurhash(deps.imgproxy, row.key, {
+				fetchImpl: opts.fetchImpl
+			});
+			await deps.db.update(media).set({ blurhash }).where(eq(media.id, row.id));
+			filled++;
+		} catch (err) {
+			failed++;
+			log(`✗ ${row.key}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	return { filled, failed };
 }
 
 /** Record a video embed (provider + external id only — no file handling). */

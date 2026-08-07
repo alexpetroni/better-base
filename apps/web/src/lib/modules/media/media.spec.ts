@@ -9,6 +9,7 @@ import { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
 import { buildImgUrl, imgproxyPath, type ImgproxyConfig } from './imgproxy.ts';
 import { media } from './schema.ts';
 import {
+	backfillBlurhashes,
 	confirmUpload,
 	createVideoEmbed,
 	deleteMedia,
@@ -55,7 +56,8 @@ beforeAll(async () => {
 
 	const storage = createStorage(storageCfg);
 	await storage.ensureBucket();
-	deps = { db, storage };
+	// imgproxy in the deps: confirm computes blurhashes, like the app route does.
+	deps = { db, storage, imgproxy };
 });
 
 afterAll(async () => {
@@ -101,6 +103,34 @@ describe('upload flow (presign → PUT → confirm)', () => {
 			height: 200,
 			createdBy: USER_ID
 		});
+		// Confirm also encoded a blurhash from a tiny imgproxy render.
+		expect(result.value.blurhash).toMatch(/^.{20,}$/);
+	});
+
+	it('a corrupt upload confirms fine — it just gets no dimensions or blurhash', async () => {
+		const garbage = Buffer.from('definitely not a PNG, but stored with an image mime');
+		const ticket = await requestUpload(deps, {
+			filename: 'broken.png',
+			mime: 'image/png',
+			size: garbage.byteLength
+		});
+		if (!ticket.ok) throw new Error('presign failed');
+		const put = await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/png' },
+			body: garbage
+		});
+		expect(put.status).toBe(200);
+
+		const result = await confirmUpload(deps, {
+			key: ticket.value.key,
+			filename: 'broken.png',
+			createdBy: USER_ID
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.width).toBeNull();
+		expect(result.value.blurhash).toBeNull();
 	});
 
 	it('rejects disallowed mime and oversized declarations at presign', async () => {
@@ -184,6 +214,56 @@ describe('imgproxy serving', () => {
 		expect(body).not.toContain('<script');
 		expect(body).not.toContain('onload');
 		expect(body).toContain('<rect'); // still a usable image, not an empty husk
+	});
+});
+
+describe('backfillBlurhashes (pnpm media:blurhash)', () => {
+	it('fills legacy rows, skips failures, and is a no-op when re-run', async () => {
+		// Legacy row: confirmed without the imgproxy dep, like every pre-phase upload.
+		const legacyDeps: MediaDeps = { db: deps.db, storage: deps.storage };
+		const { key } = await uploadFixture();
+		const legacy = await confirmUpload(legacyDeps, {
+			key,
+			filename: 'legacy.png',
+			createdBy: USER_ID
+		});
+		if (!legacy.ok) throw new Error('confirm failed');
+		expect(legacy.value.blurhash).toBeNull();
+
+		// A row whose stored object is corrupt: the backfill must report it and
+		// carry on, not abort the run.
+		const garbage = Buffer.from('not an image');
+		const badTicket = await requestUpload(legacyDeps, {
+			filename: 'bad.png',
+			mime: 'image/png',
+			size: garbage.byteLength
+		});
+		if (!badTicket.ok) throw new Error('presign failed');
+		await fetch(badTicket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/png' },
+			body: garbage
+		});
+		const bad = await confirmUpload(legacyDeps, {
+			key: badTicket.value.key,
+			filename: 'bad.png',
+			createdBy: USER_ID
+		});
+		if (!bad.ok) throw new Error('confirm failed');
+
+		const logged: string[] = [];
+		const first = await backfillBlurhashes({ db, imgproxy }, { log: (line) => logged.push(line) });
+		expect(first.filled).toBeGreaterThanOrEqual(1);
+		expect(first.failed).toBeGreaterThanOrEqual(1);
+		expect(logged.join('\n')).toContain(badTicket.value.key);
+
+		const [filledRow] = await db.select().from(media).where(eq(media.id, legacy.value.id));
+		expect(filledRow.blurhash).toMatch(/^.{20,}$/);
+
+		// Idempotent: everything fillable is filled; only the corrupt row retries.
+		const second = await backfillBlurhashes({ db, imgproxy }, {});
+		expect(second.filled).toBe(0);
+		expect(second.failed).toBe(first.failed);
 	});
 });
 

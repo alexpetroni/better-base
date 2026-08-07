@@ -31,6 +31,20 @@
 	const resolvedAlt = $derived(decorative ? '' : (alt ?? image.alt));
 	const resolvedSizes = $derived(sizes ?? (image.width ? `${image.width}px` : undefined));
 
+	// Blurhash placeholder: painted as the <img>'s background (SSR ships it, so
+	// it shows before hydration) and dropped once the real image has loaded —
+	// otherwise it would stay visible behind transparent images forever.
+	let imgEl = $state<HTMLImageElement>();
+	let loaded = $state(false);
+	$effect(() => {
+		if (imgEl?.complete) loaded = true;
+	});
+	const placeholderStyle = $derived(
+		image.placeholder && !loaded
+			? `background-image: url(${image.placeholder}); background-size: cover;`
+			: undefined
+	);
+
 	$effect(() => {
 		if (dev && !decorative && !resolvedAlt) {
 			console.warn('<Img>: empty alt without the `decorative` prop', image.src);
@@ -46,6 +60,8 @@
 		<source type="image/webp" srcset={image.srcsetWebp} sizes={resolvedSizes} />
 	{/if}
 	<img
+		bind:this={imgEl}
+		onload={() => (loaded = true)}
 		src={image.src}
 		alt={resolvedAlt}
 		width={image.width}
@@ -53,5 +69,6 @@
 		{loading}
 		decoding="async"
 		class={className}
+		style={placeholderStyle}
 	/>
 </picture>

@@ -12,11 +12,14 @@ import {
 import type { MediaRow } from './schema.ts';
 import { createStorage, type Storage } from './storage.ts';
 
+export { blurhashFromPng, blurhashPlaceholder } from './blurhash.ts';
 export { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
 // imageSources is the one imgproxy builder other modules consume (blog render).
 export { imageSources, type ImgproxyConfig } from './imgproxy.ts';
 export { media } from './schema.ts';
 export {
+	backfillBlurhashes,
+	computeBlurhash,
 	confirmUpload,
 	createVideoEmbed,
 	deleteMedia,
@@ -71,7 +74,8 @@ export function imgUrl(key: string, opts: ImgOptions = {}): string {
 
 /** `ImageSources` for the <Img> component, using the app's env config. */
 export function imgSources(
-	source: Pick<MediaRow, 'key' | 'width' | 'height' | 'alt'> | string,
+	source:
+		(Pick<MediaRow, 'key' | 'width' | 'height' | 'alt'> & { blurhash?: string | null }) | string,
 	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number }
 ): ImageSources {
 	return imageSources(getImgproxyConfig(), source, opts);

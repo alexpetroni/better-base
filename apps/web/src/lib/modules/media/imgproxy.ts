@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { blurhashPlaceholder } from './blurhash.ts';
 import type { MediaRow } from './schema.ts';
 
 /**
@@ -107,12 +108,19 @@ export interface ImageSources {
 	width: number | undefined;
 	height: number | undefined;
 	alt: string;
+	/**
+	 * Tiny inline PNG decoded from the row's blurhash, shown behind the real
+	 * image while it loads. Null when the row has no (valid) blurhash — the
+	 * component then behaves exactly as before.
+	 */
+	placeholder: string | null;
 }
 
 /** Build `ImageSources` for a media row (or bare storage key) at a display width. */
 export function imageSources(
 	cfg: ImgproxyConfig,
-	source: Pick<MediaRow, 'key' | 'width' | 'height' | 'alt'> | string,
+	source:
+		(Pick<MediaRow, 'key' | 'width' | 'height' | 'alt'> & { blurhash?: string | null }) | string,
 	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number }
 ): ImageSources {
 	const row = typeof source === 'string' ? null : source;
@@ -142,6 +150,7 @@ export function imageSources(
 		srcsetAvif: isSvg ? '' : buildSrcset(cfg, key, { ...size, format: 'avif' }),
 		width: opts.w,
 		height,
-		alt: row?.alt ?? ''
+		alt: row?.alt ?? '',
+		placeholder: !isSvg && row?.blurhash ? blurhashPlaceholder(row.blurhash, natural) : null
 	};
 }

@@ -9,7 +9,8 @@ const SOURCES: ImageSources = {
 	srcsetAvif: 'http://img.example/c 1x, http://img.example/d 2x',
 	width: 768,
 	height: 480,
-	alt: 'Alt din librărie'
+	alt: 'Alt din librărie',
+	placeholder: null
 };
 
 const resolver: MediaResolver = (ref) => {
