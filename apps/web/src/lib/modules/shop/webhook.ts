@@ -3,7 +3,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import Stripe from 'stripe';
 import type { Db } from '../../db/client.ts';
 import { runOnce, type DbTx } from '../../server/event-ledger/core.ts';
-import type { EmailSender } from '../email/service.ts';
+import type { EmailAttachment, EmailSender } from '../email/service.ts';
 import { issueInvoiceForOrderInTx, issueStornoForOrderInTx } from '$lib/modules/invoice/server';
 import { loadSettings } from '$lib/modules/settings/server';
 import { invoices } from '../invoice/schema.ts';
@@ -46,10 +46,26 @@ export function verifyStripeEvent(
 	return webhookCrypto.webhooks.constructEventAsync(payload, signatureHeader, secret);
 }
 
+/** The issued invoice's PDF, ready to ride along on the confirmation email. */
+export interface InvoiceEmailInfo {
+	displayNumber: string;
+	attachment: EmailAttachment;
+}
+
 export interface WebhookDeps {
 	db: Db;
 	email: EmailSender;
 	siteName: string;
+	/**
+	 * Loads/renders the order's invoice PDF (modules/invoice supplies the
+	 * implementation). Optional, and any failure is swallowed: the
+	 * confirmation email must go out even when the document layer is down —
+	 * the customer keeps the durable order link, where the invoice renders
+	 * lazily once available.
+	 */
+	invoiceAttachment?: (orderId: string) => Promise<InvoiceEmailInfo | null>;
+	/** Canonical origin (PUBLIC_SITE_URL) for durable customer links. */
+	publicBaseUrl?: string;
 }
 
 export type WebhookOutcome =
@@ -85,12 +101,39 @@ function extractShipping(session: Stripe.Checkout.Session): ShippingAddress | nu
 	};
 }
 
+/** `https://site.ro` + session id → the durable no-account order/invoice URL. */
+export function orderLookupUrl(publicBaseUrl: string, stripeSessionId: string): string {
+	return `${publicBaseUrl.replace(/\/$/, '')}/cos/succes?session_id=${stripeSessionId}`;
+}
+
 async function sendOrderConfirmation(
 	deps: WebhookDeps,
-	order: { id: string; email: string; amountTotalCents: number; currency: string },
+	order: {
+		id: string;
+		email: string;
+		amountTotalCents: number;
+		currency: string;
+		stripeSessionId: string | null;
+	},
 	items: Array<{ name: string; qty: number; priceCents: number }>
 ): Promise<void> {
 	if (!order.email) return;
+
+	// Best-effort: a broken document layer must never block the confirmation.
+	let invoiceInfo: InvoiceEmailInfo | null = null;
+	if (deps.invoiceAttachment) {
+		try {
+			invoiceInfo = await deps.invoiceAttachment(order.id);
+		} catch (err) {
+			console.error(`Invoice attachment for order ${order.id} failed:`, err);
+		}
+	}
+
+	const orderUrl =
+		deps.publicBaseUrl && order.stripeSessionId
+			? orderLookupUrl(deps.publicBaseUrl, order.stripeSessionId)
+			: undefined;
+
 	await deps.email.send({
 		to: order.email,
 		template: 'order-confirmation',
@@ -99,8 +142,11 @@ async function sendOrderConfirmation(
 			orderId: order.id,
 			items: items.map(({ name, qty, priceCents }) => ({ name, qty, priceCents })),
 			totalCents: order.amountTotalCents,
-			currency: order.currency
+			currency: order.currency,
+			invoiceNumber: invoiceInfo?.displayNumber,
+			orderUrl
 		},
+		attachments: invoiceInfo ? [invoiceInfo.attachment] : undefined,
 		// The order id is stable across redeliveries — at most one email per order.
 		idempotencyKey: `order-confirmation:${order.id}`
 	});

@@ -97,3 +97,88 @@ fields, email log — and leaves `invoices`/`invoice_lines` untouched (it could
 not modify them anyway: the DB triggers forbid it). The erase summary reports
 how many invoices were retained so the operator can answer a data-subject
 request precisely.
+
+## The documents (NEXT-7): PDF + e-Factura XML
+
+Both documents render from the SAME stored snapshot (`model.ts` →
+`InvoiceDocumentModel`) and nothing else, so they can never disagree with the
+record or with each other. Both renderers are **deterministic**: the same
+snapshot produces byte-identical output on every run (pdf-lib's per-run
+stamps — creation/modification date, producer — are pinned to the invoice's
+own fields; the XML is plain string building). Dates on documents are
+formatted in **Europe/Bucharest** (`invoiceDateIso`/`invoiceDateRo`): an
+invoice issued 00:30 EET must not carry yesterday's (UTC) date.
+
+### PDF (`pdf.ts`)
+
+- **Library: pdf-lib + @pdf-lib/fontkit** — pure JS, no native binaries, no
+  headless browser; runs identically in vitest, node scripts and a Node 22
+  Vercel function (the serverless constraint that ruled out wkhtmltopdf/
+  Puppeteer-class renderers).
+- **Font: DejaVu Sans** (`fonts/DejaVuSans.ttf`, Bitstream Vera license +
+  public-domain extensions — committed alongside as `fonts/LICENSE`), chosen
+  for correct comma-below Romanian diacritics (Ș ș Ț ț) with a permissive,
+  vendorable license. **Size cost**: 739 KB TTF committed twice (the file and
+  its generated base64 module `fonts/dejavu-sans.ts`, regenerated via
+  `node scripts/embed-font.ts`); at render time the font is SUBSET into the
+  document, so a typical invoice PDF is **~12 KB**, fine as an email
+  attachment. The base64-module embedding (rather than a runtime file read)
+  keeps the renderer free of filesystem access and bundler-proof.
+- The text layer carries every legally required field (Codul fiscal art.
+  319(20)): series+number, issue date, both parties' identification (CUI,
+  Reg. Com., addresses), per-line qty / unit net price (4 decimals) / net /
+  VAT rate / VAT / gross, document totals, the `neplătitor de TVA` mention
+  when applicable, and a storno is marked `FACTURĂ STORNO` with a reference
+  to the document it reverses — `pdf.spec.ts` extracts the text and asserts.
+
+### e-Factura XML (`efactura.ts`, `efactura-validate.ts`)
+
+UBL 2.1 Invoice constrained by **CIUS-RO 1.0.1** (CustomizationID
+`urn:cen.eu:en16931:2017#…CIUS-RO:1.0.1`). A storno is what RO practice
+submits: **InvoiceTypeCode 380 with negative quantities/amounts** plus a
+`BillingReference` to the original — not a 381 credit note. The VAT
+categories are `S` (standard), `Z` (zero-rated) and `O` for the
+`neplătitor de TVA` issuer (no percent, exemption reason from the
+snapshotted mention, no supplier VAT identifier — the BR-O rules).
+
+**Rounding note (BR-CO-17)**: the record's per-line half-up rounding means a
+category's VAT can differ from `rate × taxable` recomputed on the subtotal by
+up to one ban per line; the offline validator accepts exactly that tolerance,
+and the XML totals ALWAYS equal the stored record (asserted per document in
+tests — the record is the truth, EN 16931's recomputation is the
+approximation).
+
+`validateEFacturaXml` is an offline tripwire (structure, namespaces, BR-CO
+arithmetic, BR-O rules, snapshot agreement), NOT the official ANAF
+schematron; final acceptance happens at SPV submission. **Known gap**: the
+NEXT-6 snapshot stores flattened address strings, so the ISO 3166-2:RO county
+code (`CountrySubentity`) ANAF wants for RO addresses is not emitted — noted
+for the operator in DEPLOYMENT.md § e-Factura together with the enrollment
+steps. Submission itself is behind the `EFacturaSubmitter` seam
+(`efactura-submitter.ts`): the default is an explicit no-op (`skipped`) and
+asking for the real thing before implementing it (`ANAF_EFACTURA_ENABLED`)
+is a hard error — nothing ever fakes a submission.
+
+## Storage, retrieval, delivery
+
+- **Write-once storage** (`documents.ts`): rendered documents go to the S3
+  bucket under the private `invoices/` prefix (never `uploads/`, which
+  imgproxy exposes publicly), keyed `invoices/<invoiceId>.<pdf|xml>`, lazily
+  on first request. Determinism makes the write-once rule race-proof: a
+  concurrent re-render produces identical bytes.
+- **Retrieval** (`/api/invoices/[id]/[format]`): an admin session, or a
+  signed short-lived token (`access.ts`, HMAC over invoice id + format +
+  expiry under TOKEN_SECRET, TTL 15 min). Tokens are minted ONLY on the order
+  success/lookup page, which authenticates the buyer by the unguessable
+  Stripe session id — the durable, no-account way back that the confirmation
+  email links to. Anonymous/cross-customer/expired ⇒ 403; unknown ⇒ 404.
+- **Email**: the order-confirmation email attaches the invoice PDF (the
+  attachment path — bytes are small and self-contained; a link-only fallback
+  was not needed) and carries the durable order link; the admin detail page
+  has a re-send action (`invoice-email` template) idempotency-keyed on
+  (invoice id, page nonce). All sends honor `EMAIL_DRYRUN`.
+- **Accountant export** (`/admin/orders/export?month=YYYY-MM`): one zip per
+  month — `facturi.csv` (semicolon-separated, comma decimals: what a
+  Romanian-locale Excel import expects) plus every document as PDF and XML,
+  because bookkeeping consumes exactly that: a journal-entry index plus the
+  justifying documents.

@@ -63,6 +63,7 @@ export {
 	isOrderListFilter,
 	listOrders,
 	ORDER_LIST_FILTERS,
+	orderLookupUrl,
 	processStripeEvent,
 	verifyStripeEvent,
 	WEBHOOK_ACTOR,
