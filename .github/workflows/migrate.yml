@@ -1,0 +1,66 @@
+# Production database migrations — the ONLY automated path that applies
+# apps/web/drizzle/*.sql to the production database.
+#
+# Why a workflow and not the Vercel build: a build is not a deploy (Vercel may
+# run several concurrently), so migrations must never run there. This job runs
+# BEFORE Vercel promotes a push to the production branch, and on demand from
+# the Actions tab; every run records the exact applied-migration list in its
+# log (`pnpm db:status`). Re-running against a current database is a no-op —
+# drizzle tracks applied migrations.
+#
+# Wiring (a human does this once — see DEPLOYMENT.md §12 "CI migrations"):
+#   GitHub repo → Settings → Secrets and variables → Actions → New repository
+#   secret → name DIRECT_DATABASE_URL, value = the site's UNPOOLED Neon URL
+#   (postgres://…neon.tech/better_sleep?sslmode=require — NOT the -pooler
+#   host: DDL through PgBouncer's transaction mode is unreliable).
+# Without the secret the job fails closed on its first step.
+#
+# Deliberately absent: `pnpm db:seed` (writes content — first-deploy only, run
+# by a human per DEPLOYMENT.md §12) and any Vercel deploy step (Vercel's own
+# Git integration promotes; this job only makes the schema current first).
+name: migrate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One migration run at a time; a queued run waits instead of racing DDL.
+concurrency:
+  group: migrate-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
+    steps:
+      - name: Fail closed without the DIRECT_DATABASE_URL secret
+        run: |
+          if [ -z "$DIRECT_DATABASE_URL" ]; then
+            echo "::error::Repository secret DIRECT_DATABASE_URL is not set — refusing to run against an unknown database. See DEPLOYMENT.md §12 (CI migrations) for how to wire it."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations (no-op when the database is current)
+        run: pnpm db:migrate
+
+      - name: Print the applied migration list
+        run: pnpm db:status
