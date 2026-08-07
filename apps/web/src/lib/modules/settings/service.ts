@@ -128,7 +128,9 @@ export async function settingsLaunchProblems(deps: SettingsDeps): Promise<string
 		}
 		const code = validateSettingValue(key, value);
 		if (code) {
-			problems.push(`site setting "${key}" has an invalid value (${code}) — fix it at /admin/settings`);
+			problems.push(
+				`site setting "${key}" has an invalid value (${code}) — fix it at /admin/settings`
+			);
 		}
 	}
 	return problems;

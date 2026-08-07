@@ -22,12 +22,7 @@ import { parseLeiToCents } from '../../util/money.ts';
 export type SettingJsonValue = string | number | boolean;
 
 export type SettingErrorCode =
-	| 'required'
-	| 'invalid-value'
-	| 'invalid-url'
-	| 'invalid-email'
-	| 'invalid-number'
-	| 'invalid-cui';
+	'required' | 'invalid-value' | 'invalid-url' | 'invalid-email' | 'invalid-number' | 'invalid-cui';
 
 /**
  * `kind` drives both the admin form control and the validators:
@@ -40,14 +35,7 @@ export type SettingErrorCode =
  *   VAT math stays integer math, the form never stores a float.
  */
 export type SettingKind =
-	| 'text'
-	| 'multiline'
-	| 'url'
-	| 'email'
-	| 'boolean'
-	| 'int'
-	| 'bani'
-	| 'percentBp';
+	'text' | 'multiline' | 'url' | 'email' | 'boolean' | 'int' | 'bani' | 'percentBp';
 
 interface BaseSpec {
 	/** Must be set (and not the seeded placeholder) before launch — enforced by `pnpm launch:check`. */
@@ -64,7 +52,12 @@ interface BaseSpec {
 
 export type SettingSpec = BaseSpec &
 	(
-		| { kind: 'text' | 'multiline'; default: string; pattern?: RegExp; patternCode?: SettingErrorCode }
+		| {
+				kind: 'text' | 'multiline';
+				default: string;
+				pattern?: RegExp;
+				patternCode?: SettingErrorCode;
+		  }
 		| { kind: 'url' | 'email'; default: string }
 		| { kind: 'boolean'; default: boolean }
 		| { kind: 'int' | 'bani' | 'percentBp'; default: number; min: number; max?: number }
@@ -303,8 +296,7 @@ export function validateSettingValue(key: SettingKey, value: unknown): SettingEr
 }
 
 export type ParsedSettingInput =
-	| { ok: true; value: SettingJsonValue }
-	| { ok: false; code: SettingErrorCode };
+	{ ok: true; value: SettingJsonValue } | { ok: false; code: SettingErrorCode };
 
 /**
  * Convert an admin-form input into the stored primitive: lei strings become
@@ -315,7 +307,9 @@ export type ParsedSettingInput =
 export function parseSettingInput(key: SettingKey, raw: string | boolean): ParsedSettingInput {
 	const spec: SettingSpec = SETTINGS_REGISTRY[key];
 	if (spec.kind === 'boolean') {
-		return typeof raw === 'boolean' ? { ok: true, value: raw } : { ok: false, code: 'invalid-value' };
+		return typeof raw === 'boolean'
+			? { ok: true, value: raw }
+			: { ok: false, code: 'invalid-value' };
 	}
 	if (typeof raw !== 'string') return { ok: false, code: 'invalid-value' };
 	const trimmed = raw.trim();
