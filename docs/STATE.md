@@ -1,4 +1,127 @@
-# STATE — after the invoice documents (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after shipping (2026-08-07, branch `feat/vercel-neon`)
+
+## Shipping: cost at checkout, courier seam, AWB, tracking (2026-08-07, NEXT-8)
+
+Shipping went from "free by accident" to priced, charged, invoiced and
+fulfilled. Migration `0018_calm_wrecker` (`orders.shipping_cents` +
+`orders.shipping_name`; new `shipments` table — unique `order_id`, status,
+`last_synced_at` index for the cron). New env vars (all OPTIONAL — mock is
+the default): `COURIER_PROVIDER`, `SAMEDAY_USERNAME/PASSWORD/PICKUP_POINT`,
+`SAMEDAY_BASE_URL/SERVICE_ID/TIMEOUT_MS`; `CRON_SECRET` now also guards
+`/api/cron/shipment-sync`. Six new `shop.*` settings keys.
+
+- **Shipping cost is settings DATA** (`modules/shop/shipping.ts`, pure):
+  two option slots from `shop.*` settings — `standard` (always offered;
+  `shop.shippingStandardName/PriceBani/Eta`) and `express` (offered while
+  `shop.shippingExpressName` is non-empty; the existing
+  `shop.freeShippingThresholdBani` zeroes the STANDARD price only — express
+  stays a paid upgrade, rule pinned by test).
+  `shop.shippingStandardPriceBani` is **launch-required with no placeholder**
+  (the `invoice.vatRateBp` pattern): launch:check refuses until the operator
+  consciously saves a price (0 = deliberate free shipping). The cart offers
+  the options as a no-JS radio (`cart-shipping-option` testids, default
+  standard); the `?/checkout` action prices the selected id SERVER-side from
+  settings + goods total (`invalid-shipping` on an id not currently
+  offered) and passes it to Stripe as the session's single
+  `shipping_options` entry (`CheckoutSessionInput.shippingOption`;
+  fixed_amount, so the charged total is fixed at creation). The chosen
+  option snapshots into session metadata key `ship` (`{i,n,p}`).
+- **Order carries shipping separately** — webhook: `shippingCents` from
+  `session.shipping_cost.amount_total` (authority) falling back to the
+  `ship` metadata; `shippingName` from metadata; `amountTotalCents` stays
+  the grand total as charged. Mock gateway sessions add the shipping amount
+  to `amountTotalCents` like Stripe; `CheckoutSessionView` gained
+  `shippingCents`.
+- **Invoice: shipping is its own VAT-bearing line** (`invoice/service.ts`):
+  `shipping_cents > 0` appends line `Transport — <shippingName>` (qty 1,
+  goods VAT rate — transport follows the main supply), so
+  `invoice.grossTotalCents === order.amountTotalCents` EXACTLY — the
+  regression anchor test in `shipment.spec.ts`; stornos negate stored lines
+  and needed no change.
+- **`CourierProvider` seam** (`modules/shop/courier.ts`, StripeGateway
+  pattern): `createShipment/getLabel/trackShipment/cancelShipment`, statuses
+  normalized to `registered|in-transit|delivered|returned|cancelled`.
+  `selectCourierProvider(env)` (pure, chat-provider rules): mock default,
+  ambient `SAMEDAY_*` alone never activates, `COURIER_PROVIDER=sameday`
+  with incomplete credentials is a BOOT error (validated at shop server
+  barrel init). Mock (`mock-courier.ts`): sequential `MOCKAWB…`, in-memory
+  map, tracking advances ONLY via the `setTrackingStatus` test hook, label =
+  minimal valid deterministic PDF embedding the AWB. Real adapter
+  (`sameday-courier.ts`): Sameday chosen (largest RO e-commerce courier,
+  public token-auth REST API; interface stays provider-agnostic) — token
+  caching, bounded timeouts, `normalizeSamedayStatus` keyword mapping
+  (unit-tested offline). HONESTY NOTE: the adapter follows the public API
+  but has never been exercised against a live account from this codebase —
+  that is a documented launch step (DEPLOYMENT §7 "Shipping" step 4,
+  LAUNCH-CHECKLIST Ops box). Playwright forces `COURIER_PROVIDER=mock`.
+- **AWB from admin** — `createShipmentForOrder` (`shipment-service.ts`):
+  ONE transaction holding the order row lock (courier call inside it, bounded
+  by the adapter timeout — that lock is what makes a double-click provably
+  unable to register two AWBs; unique `shipments.order_id` backstops),
+  paid + `unfulfilled|packed` only, walks fulfillment to `shipped` through
+  the state machine via the NEW `applyFulfillmentTransitionInTx` (shared
+  in-tx core of `transitionFulfillment` — the single-writer grep still holds:
+  the column write lives only in fulfillment-service.ts), events
+  `awb-generated` + the transitions. Courier failure returns
+  `{error:'courier'}` and writes NOTHING. Post-commit: typed
+  `shipping-notification` email (AWB, tracking URL, order link), idempotency
+  key `shipping-notification:<awb>` — once per shipment ever, retried only
+  after a failed send. Admin detail: shipment box (AWB, status, tracking
+  link, label download), generate button (admin-only action, editor 403),
+  shipping cost row in the items card. Label route
+  `/api/shipments/[id]/label`: admin session ONLY (labels are operator
+  artifacts — deliberately no customer token variant), bytes fetched from
+  the courier on first request and stored write-once under S3 prefix
+  `shipping-labels/` (invoice-documents pattern); hooks.server.ts resolves
+  the staff session on `/api/shipments/*`.
+- **Status sync cron** — `syncShipmentStatuses`: polls in-flight
+  (`registered|in-transit`) rows, oldest `last_synced_at` first (nulls
+  first), bounded `SHIPMENT_SYNC_BATCH=25` per run; unchanged status only
+  bumps `last_synced_at` (no event — idempotent), a change updates the
+  shipment, appends `shipment-status`, and moves fulfillment
+  (`delivered`/`returned`) only when legal (an order already `returned` by
+  the refund rule just keeps its record in sync); per-AWB courier errors are
+  counted and skipped, never kill the run. Route
+  `/api/cron/shipment-sync` behind `authorizeCron` (401/503 rules), hourly
+  in `vercel.json`; machine-cron equivalent = the same curl (DEPLOYMENT §9 —
+  it must run through the app, so `CRON_SECRET` is now relevant on
+  adapter-node too). Delivered-status customer email: deliberately NOT
+  implemented (the optional part of the deliverable) — kept out to hold the
+  diff; the seam is the sync's transition block.
+- **Refund rule** (in the `charge.refunded` ledger tx,
+  `applyRefundShipmentInTx`): no shipment → fulfillment `cancelled`;
+  shipment still `registered` → shipment `cancelled` + fulfillment
+  `returned` + the AWB is cancelled with the courier AFTER commit
+  (best-effort — outcome recorded as `shipment-cancelled` /
+  `shipment-cancel-failed` events; a courier API failure never rolls back
+  refund bookkeeping); `in-transit`/`delivered` → both `returned`. Either
+  way the cron stops polling. `WebhookDeps` gained optional `courier`.
+  NOTE the behavior change vs NEXT-5: a refund now ALSO moves fulfillment
+  (it used to leave it untouched).
+- **Tests** (+43; unit 661 green) — `shipping.spec.ts` (option selection
+  incl. threshold/express/no-code-change repricing, metadata round-trip,
+  email template), `courier.spec.ts` (selection rules, mock semantics,
+  Sameday status mapping offline), `shipment.spec.ts` (order amounts incl.
+  metadata fallback, the invoice==Stripe anchor, AWB idempotency + event
+  trail + one-email-per-AWB, courier-failure atomicity, cron bound/
+  idempotence/no-op/error-skip, all three refund branches),
+  `orders-page.spec.ts` (`?/generateAwb`: editor 403 writes nothing, admin
+  happy + idempotent re-click, unpaid 400), label-route spec (authz matrix +
+  write-once against real MinIO), cron-route spec (503 unset secret / 401 /
+  no-op run; mocks `$env/dynamic/private` — it is a SNAPSHOT under vitest).
+  The invoice fs-tripwire now also scans modules/shop, api/shipments,
+  api/cron. e2e: new shipping flow in `settings.e2e.ts` (it owns
+  site_settings): configure prices via the real settings UI → cart shows
+  both options at the configured prices → express purchase → order/invoice
+  reconcile → admin generates AWB → shipped badge, tracking link, label
+  download, one dry-run shipping email. `global-setup` TRUNCATE list gained
+  `shipments` (FK to orders — without it the truncate fails).
+  Gotcha hit: `text-(--color-ink)/60` fails the serious-contrast a11y gate
+  on the life theme — public-page secondary text needs `/70`.
+- Docs: DEPLOYMENT §2 (courier env rows), §7 "Shipping (courier & AWB)"
+  (adapter choice, human verification steps), §9 (cron table row), §12
+  ("Scheduled jobs" incl. the sync curl); LAUNCH-CHECKLIST: courier account
+  box, shipping-settings box, env box, sync-cron box, one-real-AWB box.
 
 ## Invoices part 2 — PDF, e-Factura XML, delivery, admin (2026-08-07, NEXT-7)
 

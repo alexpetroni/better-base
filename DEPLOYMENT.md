@@ -56,11 +56,13 @@ Shared (may be identical on both sites):
 | `IMGPROXY_KEY`, `IMGPROXY_SALT` | `openssl rand -hex 32` (twice) | MUST match the imgproxy process's own `IMGPROXY_KEY`/`IMGPROXY_SALT`. |
 | `CHAT_PROVIDER` | `anthropic` (prod) | With `anthropic` the server **refuses to boot** without `ANTHROPIC_API_KEY` — no silent mock fallback. Keep `mock` if the assistant should not use the live API yet. |
 | `ANTHROPIC_API_KEY` | from Anthropic console | Only read when `CHAT_PROVIDER=anthropic`. |
+| `COURIER_PROVIDER` | `sameday` (prod) | With `sameday` the server **refuses to boot** without the three `SAMEDAY_*` values below — no silent mock fallback. Keep `mock` (the default) until the courier account exists; AWB generation then produces deterministic fake AWBs, clearly not real shipments. |
+| `SAMEDAY_USERNAME`, `SAMEDAY_PASSWORD`, `SAMEDAY_PICKUP_POINT` | from the Sameday eAWB contract (§9) | Only read when `COURIER_PROVIDER=sameday`. The pickup point is the id of the warehouse parcels leave from. Optional overrides: `SAMEDAY_BASE_URL`, `SAMEDAY_SERVICE_ID` (default 7 = standard 24h), `SAMEDAY_TIMEOUT_MS`. |
 | `ADDRESS_HEADER`, `XFF_DEPTH` | see §3 | REQUIRED behind any proxy so rate limits key real client IPs, and dangerous if set wrong — read §3 before setting. **adapter-node only** — on Vercel the platform resolves the client IP itself (§12). |
 | `DEPLOY_TARGET` | unset (`node`) | Only for building the Vercel output locally; Vercel sets `VERCEL=1` itself (§12). |
 | `DB_DRIVER` | unset (`pg`) | `neon` selects the serverless WebSocket driver (§12). An unknown value refuses to boot. |
 | `DIRECT_DATABASE_URL` | unset | Migrations only: an unpooled connection for DDL (§12). Falls back to `DATABASE_URL`. |
-| `CRON_SECRET` | unset | Required only where the retention job runs over HTTP instead of cron (§12). |
+| `CRON_SECRET` | unset | Required only where the scheduled jobs (retention, shipment-status sync — §9) run over HTTP instead of machine cron (§12). |
 | `PUBLIC_ANALYTICS_PROVIDER` | unset | Optional. `plausible` or `umami`; unset = NO analytics script ships. When set, `PUBLIC_ANALYTICS_HOST` (service origin) and `PUBLIC_ANALYTICS_SITE_ID` (Plausible `data-domain` / Umami website id) are required — `launch:check` and the seam itself refuse a half-set trio. The script loads client-side ONLY after the visitor grants cookie consent, never on `/admin`. |
 
 The server validates the whole matrix at boot and **refuses to start** with a
@@ -285,6 +287,39 @@ snapshot stores flattened address strings; ANAF's validator wants it for RO
 addresses. Resolve it together with the adapter work (extend the snapshot),
 or accept manual SPV upload with ANAF's web validation until then.
 
+### Shipping (courier & AWB)
+
+Shipping prices are site settings (`/admin/settings` → Magazin): the standard
+option's price is launch-required — `launch:check` fails until it is
+consciously saved (0 is a valid, deliberate "we ship free"). The cart offers
+the configured options, Stripe charges the selected one, the invoice carries
+it as its own VAT line, and the admin order detail generates the AWB through
+the `CourierProvider` seam (`apps/web/src/lib/modules/shop/courier.ts`).
+
+The real adapter is **Sameday** (`COURIER_PROVIDER=sameday` + the `SAMEDAY_*`
+credentials — §2). Sameday was chosen as Romania's largest e-commerce courier
+with a public, token-authenticated REST API; the interface is
+provider-agnostic, so a Cargus adapter would implement the same four calls.
+The adapter follows Sameday's public API but has NOT been exercised against a
+live account from this codebase — human launch steps:
+
+1. Sign a Sameday business contract and get eAWB portal credentials
+   (`SAMEDAY_USERNAME` / `SAMEDAY_PASSWORD`).
+2. Create the pickup point (warehouse) in eAWB and put its id in
+   `SAMEDAY_PICKUP_POINT`; pick the service with Sameday (standard 24h is
+   service 7, the default — override with `SAMEDAY_SERVICE_ID` if the
+   contract says otherwise).
+3. Set `COURIER_PROVIDER=sameday` and redeploy — a half-set config refuses
+   to boot.
+4. **Verify with one real AWB**: generate it from a (test) paid order in
+   `/admin/orders/[id]`, download the label, confirm the shipment appears in
+   the eAWB dashboard, then cancel it there. Until this step passes, treat
+   the adapter as unverified against the live API.
+
+Until then `COURIER_PROVIDER=mock` keeps everything working end-to-end with
+deterministic fake AWBs (dev/test default) — usable for staging, never for a
+real customer parcel.
+
 ## 8. Email (Resend)
 
 1. Add and verify the sending domain in Resend (SPF + DKIM DNS records).
@@ -302,10 +337,12 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 | Schedule | Command | Purpose |
 | --- | --- | --- |
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
+| hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every in-flight AWB (bounded batch per run, oldest first), updates shipment + fulfillment state (`delivered`/`returned`) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
 
-Where no machine can run scripts (Vercel), the same job is available over HTTP
-at `GET /api/cron/chat-prune` — see §12. Both call `runRetentionSweep()` in
-`src/lib/server/retention.ts`, so they cannot drift apart.
+Where no machine can run scripts (Vercel), the retention job is also
+available over HTTP at `GET /api/cron/chat-prune` — see §12. Both forms call
+`runRetentionSweep()` in `src/lib/server/retention.ts`, so they cannot drift
+apart. On Vercel both routes are scheduled by `apps/web/vercel.json`.
 
 On-demand (not cron): `pnpm subscriber:delete -- --email x@y.ro` for GDPR
 erasure requests (deletes the subscriber, unlinks quiz results, anonymizes
@@ -441,15 +478,19 @@ DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin -
 `pnpm db:seed` uploads the placeholder product images, so it needs the R2
 credentials too. All of these are idempotent — safe to re-run on later deploys.
 
-### Retention job
+### Scheduled jobs
 
-`vercel.json` schedules `GET /api/cron/chat-prune` daily. The route requires
-`Authorization: Bearer $CRON_SECRET`; without `CRON_SECRET` set it answers
-`503` rather than running unauthenticated. Verify once by hand:
+`vercel.json` schedules `GET /api/cron/chat-prune` daily (retention) and
+`GET /api/cron/shipment-sync` hourly (courier tracking poll — §9). Both
+routes require `Authorization: Bearer $CRON_SECRET`; without `CRON_SECRET`
+set they answer `503` rather than running unauthenticated. Verify once by
+hand:
 
 ```bash
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/chat-prune
 # {"sessions":0,"chatRateLimitRows":0,…,"retentionDays":30}
+curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync
+# {"polled":0,"updated":0,"errors":0}
 ```
 
 ### Verification

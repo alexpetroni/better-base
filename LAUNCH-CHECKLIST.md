@@ -12,6 +12,10 @@ list applies later to better-life (with its own domain/accounts).
       (business verification takes days — start early).
 - [ ] Resend account; billing configured.
 - [ ] Anthropic API account with billing + usage limits set (chat assistant).
+- [ ] Courier contract signed — Sameday is the implemented adapter (business
+      contract + eAWB portal credentials; negotiating rates takes days —
+      start early). A different courier means implementing another
+      `CourierProvider` adapter first (DEPLOYMENT.md §7 "Shipping").
 - [ ] Deploy target decided and provisioned: a VPS/PaaS + Postgres 16
       (adapter-node, DEPLOYMENT.md §3–§4) or Vercel + Neon (§12); automated
       database backups enabled and restore tested once.
@@ -99,6 +103,15 @@ list applies later to better-life (with its own domain/accounts).
       read+write; imgproxy: read-only).
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock).
+- [ ] `COURIER_PROVIDER=sameday` + `SAMEDAY_USERNAME`/`SAMEDAY_PASSWORD`/
+      `SAMEDAY_PICKUP_POINT` set from the courier contract (DEPLOYMENT.md §2,
+      §7 "Shipping"). The mock default generates FAKE AWBs — fine for
+      staging, never for a customer parcel.
+- [ ] Shipping prices decided and saved at `/admin/settings` → "Magazin":
+      standard price (launch-required — `launch:check` refuses until it is
+      consciously saved; 0 = deliberate free shipping), optional express
+      option, free-shipping threshold, delivery estimates. They render in the
+      cart and are charged by Stripe automatically once saved.
 - [ ] `pnpm launch:check` exits 0 with the prod env exported — it knows every
       committed dev default, checks https + domain + per-target secrets,
       probes imgproxy signature agreement, and reads the database to refuse
@@ -155,6 +168,14 @@ in the split boxes.
       - Vercel: `CRON_SECRET` set in the project env — `vercel.json` already
         schedules `GET /api/cron/chat-prune` daily; verified once by hand
         with `curl -H "Authorization: Bearer $CRON_SECRET" …` (§12).
+- [ ] Shipment-status sync, per target (§9): Vercel — `vercel.json` already
+      schedules `GET /api/cron/shipment-sync` hourly (same `CRON_SECRET`);
+      adapter-node — machine cron curls the same route hourly. Verified once
+      by hand: the authorized curl answers `{"polled":…}`.
+- [ ] One real AWB generated and cancelled against the live Sameday account
+      (DEPLOYMENT.md §7 "Shipping" step 4) — the adapter follows the public
+      API but is unverified against a live account until this passes; the
+      shipping email (with tracking link) arrives.
 - [ ] Uptime monitor pointed at `https://bettersleep.ro/api/health`
       (alert on non-200).
 - [ ] Log collection captures the app's stderr JSON lines (Vercel: a log
