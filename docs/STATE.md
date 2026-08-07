@@ -1,4 +1,70 @@
-# STATE — after the deploy pipeline (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after site settings (2026-08-07, branch `feat/vercel-neon`)
+
+## Site settings: the operator-editable data layer (2026-08-07, NEXT-3)
+
+Everything the launch checklist asks a human to "add to the site" — company
+identification, ANPC/SOL links, invoice series/VAT rate, shop shipping knobs —
+now has a home: `modules/settings`, edited at `/admin/settings` (the last admin
+stub is gone; `StubPage.svelte` deleted). One new migration
+(`0014_equal_hardball.sql`), no new env vars.
+
+- **Storage** — `site_settings` (key text PK, value jsonb primitive,
+  `updated_at`, `updated_by` → users.id on-delete-set-null). One row per
+  setting so later phases add keys WITHOUT a migration. No `site_id` (one db
+  per site stays binding).
+- **`modules/settings/registry.ts` is THE declaration** of every known key:
+  kind (`text`/`multiline`/`url`/`email`/`boolean`/`int`/`bani`/`percentBp` —
+  drives the form control, the parser and the validator), default,
+  `launchRequired`, `clientSafe`, and the seeded placeholder text. Groups:
+  `company.*` (legal name, CUI, VAT-registered flag, Reg. Com., address,
+  contact email/phone, optional IBAN/bank), `legal.*` (ANPC SAL/SOL URLs,
+  extra notices), `invoice.*` (series prefix, next number, issuer place, VAT
+  rate in **basis points**, payment-terms note — consumed by NEXT-6), `shop.*`
+  (free-shipping threshold in **bani**, shipping note — consumed by NEXT-8).
+  Reading an unknown key is a type error (`SettingKey`); an unset key returns
+  the declared default. Validators are hand-rolled (no Zod in this repo) and
+  return error CODES mapped to `admin_settings_err_*` paraglide messages.
+  Money/VAT input converts via `parseLeiToCents` ("21" → 2100 bp, "49,90" →
+  4990 bani) — integer math only. Adding a setting = registry entry + ro/en
+  label messages + (if visible) a field label in the admin page's
+  `fieldLabels` map; the form/action/seed/launch-rule all derive from the
+  registry.
+- **Read path** — `event.locals.settings` (typed in `app.d.ts`) is a lazy
+  request-scoped loader set by the new `handleSettings` hook: any number of
+  loads share ONE query per request (memoized promise), nothing outlives the
+  request (serverless-correct — a save is visible on the next request).
+  Proven by a query-counting fake-db spec. Admin settings page uses
+  `loadSettingsForAdmin` instead (same single query, left-joins users for the
+  audit line).
+- **Client exposure is explicit** — the `(public)` layout exposes
+  `data.publicSettings = clientSafeSettings(await locals.settings())`; ONLY
+  registry keys marked `clientSafe` reach PageData. A spec serializes the
+  layout payload and asserts IBAN/invoice-series values never appear. Nothing
+  RENDERS the settings publicly yet — the footer legal block is NEXT-4's
+  deliverable and should read `page.data.publicSettings`.
+- **`/admin/settings`** — per-group forms (company/legal/invoice/shop)
+  generated from the registry, one `?/save` action per group (hidden `group`
+  field) so a half-configured site can still save company data. Server-side
+  validation, per-field error codes + echoed values on `fail(400, { group,
+  errors, values })`, `saved`/audit testids (`settings-field-<key>`,
+  `settings-save-<group>`, `settings-error-<key>`, `settings-saved`,
+  `settings-audit`). Plain no-JS POST forms (pages-editor pattern). Settings
+  was already in `ADMIN_ONLY_SECTIONS` — editor gets 403 (covered in
+  admin.e2e.ts).
+- **Seed + preflight** — `pnpm db:seed` inserts `PLACEHOLDER — …` rows for the
+  10 launch-required text keys (`seedPlaceholderSettings`, onConflictDoNothing
+  — operator edits never overwritten). `pnpm launch:check` now also reads the
+  target db (`settingsLaunchProblems`): every launch-required key must be
+  saved, not a placeholder, and valid; `invoice.vatRateBp` has no placeholder
+  on purpose — it stays "not set" until the operator consciously saves the
+  rate. `--dev` acknowledges placeholders; `--no-probe` skips the db read
+  (CI). Verified: `--dev` OK on the seeded local env; without `--dev` the same
+  env fails with 11 site-setting problems (10 placeholders + the VAT rate).
+- e2e `settings.e2e.ts`: admin saves company identification, values persist
+  after reload; invalid CUI shows the field error and persists nothing.
+  `global-setup.ts` now clears `site_settings` between runs.
+- Gate + e2e green on both sites; migration applied cleanly on fresh AND
+  populated dbs.
 
 ## Deploy pipeline: CI migrations, launch preflight, imgproxy host (2026-08-07, NEXT-2)
 
@@ -1533,11 +1599,19 @@ Not run in CI/agent runs — do this by hand when you have keys:
 
 ## For the next phase
 
-- Admin screens land under `src/routes/admin/(shell)/<section>/` — replace the
-  stub `+page.svelte` (they render `StubPage.svelte`; the only remaining stub
-  is settings). The sidebar entry already exists; nav labels are paraglide
-  messages (`admin_nav_*`). Articles, quizzes and products are full reference
-  implementations (list + editor + form actions).
+- No admin stubs remain — `StubPage.svelte` is deleted. Articles, quizzes,
+  products and settings are full reference implementations (nav labels are
+  paraglide `admin_nav_*` messages).
+- Site settings: read them via `await locals.settings()` in any server load
+  (one query per request, already wired); client-safe values are on
+  `page.data.publicSettings` in the `(public)` layout tree. Add a setting in
+  `modules/settings/registry.ts` (+ ro/en messages + a `fieldLabels` entry in
+  the admin page) — storage/form/validation/launch-rule all derive from the
+  registry. Never put a non-`clientSafe` value into PageData; the exposure
+  spec greps the serialized payload.
+- The footer legal block (NEXT-4) renders from `page.data.publicSettings`
+  (company identification + `legal.anpcSalUrl`/`legal.anpcSolUrl`) — the data
+  and the read path exist; nothing renders them yet.
 - E2E login: use `login`/`submitLogin` from `e2e/helpers.ts` — they wait for
   the `data-hydrated` marker the root layout sets on `<html>` at mount.
   Filling an input that has a server-echoed `value` attribute BEFORE

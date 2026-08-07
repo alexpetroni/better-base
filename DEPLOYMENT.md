@@ -79,11 +79,17 @@ Stripe webhook dev value), `PUBLIC_SITE_URL` https and matching the
 (`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live imgproxy probe: it uploads
 a 1×1 PNG with the app's S3 credentials and requires the signed imgproxy URL
 to answer 200 and an unsigned one 403 — proving key/salt agree between app
-and imgproxy and that imgproxy can read the bucket. Non-zero exit with a
-numbered report on any problem. Flags: `--dev` (local dev acknowledgement:
-dev defaults and http are fine, everything else still checked), `--no-probe`
-(env-only, no network), `--target=node|vercel` (default: `vercel` when
-`VERCEL`/`DEPLOY_TARGET=vercel` is set, else `node`).
+and imgproxy and that imgproxy can read the bucket. It also reads the target
+database's `site_settings` and fails while any launch-required setting
+(company identification, ANPC/SOL links, invoice series/VAT rate — see
+`src/lib/modules/settings/registry.ts`) is unset, still the seeded
+`PLACEHOLDER — …` value, or invalid: fill them in at `/admin/settings`.
+Non-zero exit with a numbered report on any problem. Flags: `--dev` (local
+dev acknowledgement: dev defaults, http and placeholder settings are fine,
+everything else still checked), `--no-probe` (env-only: skips both the
+imgproxy probe and the site-settings database read, e.g. for CI),
+`--target=node|vercel` (default: `vercel` when `VERCEL`/`DEPLOY_TARGET=vercel`
+is set, else `node`).
 
 Not used in prod: `TEST_DATABASE_URL`, `DB_PORT`, `MINIO_*`, `IMGPROXY_PORT`
 (compose/dev knobs only).
@@ -157,6 +163,11 @@ Notes:
   may delete the demo articles/quiz/products in the admin afterwards, or keep
   them until real content lands. Seeding demo products needs the bucket to
   exist (it uploads placeholder covers).
+- Seeding also inserts `PLACEHOLDER — …` rows for the launch-required site
+  settings (company identification, ANPC/SOL links, invoice series) — only
+  where missing, so values saved in `/admin/settings` are never overwritten.
+  Replace every placeholder before launch; `pnpm launch:check` refuses to
+  pass while one stands.
 - Staff users: `user:create` is idempotent by email (re-running updates
   role/password). Roles: `admin` (everything) / `editor` (content only).
 

@@ -27,16 +27,23 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] Terms & conditions reviewed likewise (`/pagini/termeni-si-conditii`),
       especially: 14-day withdrawal right (OUG 34/2014), pricing/VAT wording,
       the not-medical-advice disclaimers.
-- [ ] Company identification (name, CUI, registered address, contact email)
-      added to the legal pages and/or footer — legally required in RO.
-- [ ] ANPC / SOL (online dispute resolution) links added to the footer or
-      terms page — required for RO e-commerce.
+- [ ] Company identification (legal name, CUI, Reg. Com., registered address,
+      contact email/phone — legally required in RO) filled in at
+      `/admin/settings` → "Identificarea companiei". The seed leaves
+      `PLACEHOLDER — …` values and `pnpm launch:check` refuses to pass while
+      any stand. (Rendering this block in the footer/legal pages is the next
+      code phase; the data entry is this box.)
+- [ ] ANPC SAL / SOL (online dispute resolution) URLs — required for RO
+      e-commerce — filled in at `/admin/settings` → "Linkuri legale"
+      (enforced by `pnpm launch:check` the same way).
 - [ ] Decision recorded: who answers GDPR requests, and the process for
       `pnpm subscriber:delete -- --email …` (who runs it, response deadline
       30 days).
 - [ ] VAT/invoicing decision: current build does NOT issue invoices
       (suggested next phase) — confirm the accountant's interim process for
-      Stripe orders.
+      Stripe orders. The invoice series, place of issue and VAT rate the
+      future invoicing phase will consume are set at `/admin/settings` →
+      "Facturare" (launch:check requires them saved).
 
 ## DNS & TLS
 
@@ -57,8 +64,10 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock).
 - [ ] `pnpm launch:check` exits 0 with the prod env exported — it knows every
-      committed dev default, checks https + domain + per-target secrets, and
-      probes imgproxy signature agreement (DEPLOYMENT.md §2 "Preflight").
+      committed dev default, checks https + domain + per-target secrets,
+      probes imgproxy signature agreement, and reads the database to refuse
+      unset/placeholder launch-required site settings (DEPLOYMENT.md §2
+      "Preflight").
 
 ## Stripe (live)
 
