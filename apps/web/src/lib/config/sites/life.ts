@@ -30,5 +30,35 @@ export const lifeSite: SiteConfig = {
 	email: {
 		from: 'salut@betterlife.ro',
 		replyTo: 'salut@betterlife.ro'
-	}
+	},
+	// Deliberately DIFFERENT from better-sleep: same code, other data rows.
+	nurture: [
+		{
+			key: 'bun-venit',
+			name: 'Bun venit la newsletter',
+			trigger: { kind: 'consent-confirmed' },
+			consentKey: 'newsletter',
+			steps: [
+				{
+					offsetDays: 0,
+					templateKey: 'nurture',
+					subject: 'Bine ai venit la Better Life',
+					paragraphs: [
+						'Îți mulțumim că te-ai abonat! Îți trimitem periodic idei practice din cei nouă piloni ai unei vieți mai bune — somn, nutriție, mișcare și restul.',
+						'Începe cu pilonul care te interesează cel mai mult.'
+					],
+					cta: { label: 'Explorează pilonii', url: '/sanatate/somn' }
+				},
+				{
+					offsetDays: 7,
+					hourLocal: 9,
+					templateKey: 'nurture',
+					subject: 'Un pilon pe săptămână',
+					paragraphs: [
+						'Nu încerca să schimbi totul deodată: alege un singur pilon și dă-i o săptămână întreagă. Progresul mic și constant bate entuziasmul de trei zile.'
+					]
+				}
+			]
+		}
+	]
 };

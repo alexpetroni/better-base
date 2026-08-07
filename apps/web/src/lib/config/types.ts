@@ -1,3 +1,5 @@
+import type { NurtureSequenceDefinition } from '$lib/modules/nurture';
+
 export interface NavItem {
 	label: string;
 	href: string;
@@ -22,4 +24,10 @@ export interface SiteConfig {
 		from: string;
 		replyTo: string;
 	};
+	/**
+	 * Nurture sequence definitions seeded into `nurture_sequences` rows by
+	 * `pnpm db:seed` (upsert by key; the operator's active flag survives).
+	 * Sequences are DATA — the two sites differ here, not in code.
+	 */
+	nurture: NurtureSequenceDefinition[];
 }
