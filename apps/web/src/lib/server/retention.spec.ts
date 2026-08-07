@@ -57,9 +57,27 @@ describe('runRetentionSweep', () => {
 		// days) — a 31-day-old row must SURVIVE the sweep that takes the
 		// 30-day counters above.
 		await db.insert(processedEvents).values([
-			{ provider: 'stripe', eventId: 'evt-expired', eventType: 't', outcome: 'ok', receivedAt: daysAgo(91) },
-			{ provider: 'stripe', eventId: 'evt-aging', eventType: 't', outcome: 'ok', receivedAt: daysAgo(31) },
-			{ provider: 'stripe', eventId: 'evt-fresh', eventType: 't', outcome: 'ok', receivedAt: daysAgo(1) }
+			{
+				provider: 'stripe',
+				eventId: 'evt-expired',
+				eventType: 't',
+				outcome: 'ok',
+				receivedAt: daysAgo(91)
+			},
+			{
+				provider: 'stripe',
+				eventId: 'evt-aging',
+				eventType: 't',
+				outcome: 'ok',
+				receivedAt: daysAgo(31)
+			},
+			{
+				provider: 'stripe',
+				eventId: 'evt-fresh',
+				eventType: 't',
+				outcome: 'ok',
+				receivedAt: daysAgo(1)
+			}
 		]);
 
 		const result = await runRetentionSweep(db, NOW);

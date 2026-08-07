@@ -876,11 +876,7 @@ describe('webhook: processed_events ledger', () => {
 		const product = await makeProduct({ name: 'Sesiune reemisă', priceCents: 2000, stock: 5 });
 		const cart = [{ productId: product.id, qty: 1, priceCents: 2000 }];
 		const firstPayload = completedSessionEvent({ id: 'cs_reissued', cart, amountTotal: 2000 });
-		const first = await verifyStripeEvent(
-			firstPayload,
-			signedHeader(firstPayload),
-			WEBHOOK_SECRET
-		);
+		const first = await verifyStripeEvent(firstPayload, signedHeader(firstPayload), WEBHOOK_SECRET);
 		expect((await processStripeEvent(webhookDeps, first)).kind).toBe('order-created');
 
 		const secondPayload = completedSessionEvent({

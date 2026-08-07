@@ -132,7 +132,9 @@
 								{formatDate(event.createdAt, 'medium-time')} · {event.actor}
 							</p>
 							{#if event.note}
-								<p class="mt-1 text-(--color-ink)/80" data-testid="order-event-note">{event.note}</p>
+								<p class="mt-1 text-(--color-ink)/80" data-testid="order-event-note">
+									{event.note}
+								</p>
 							{/if}
 						</li>
 					{/each}
@@ -157,8 +159,7 @@
 						<textarea
 							name="note"
 							rows="2"
-							class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
-						></textarea>
+							class="w-full rounded border border-(--color-brand-soft) px-2 py-1"></textarea>
 					</label>
 					<div class="flex flex-wrap gap-2">
 						{#each transitions as target (target)}

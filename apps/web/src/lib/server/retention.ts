@@ -41,7 +41,9 @@ export async function runRetentionSweep(
 	const cutoff = new Date(now.getTime() - CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 	// The event ledger only needs to outlive the provider's redelivery window
 	// (see PROCESSED_EVENTS_RETENTION_DAYS) — a longer, separate cutoff.
-	const ledgerCutoff = new Date(now.getTime() - PROCESSED_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+	const ledgerCutoff = new Date(
+		now.getTime() - PROCESSED_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000
+	);
 	const chat = await pruneChatSessions(db, now);
 	return {
 		sessions: chat.sessions,
