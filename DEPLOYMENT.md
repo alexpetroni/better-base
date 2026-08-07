@@ -338,11 +338,13 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 | --- | --- | --- |
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
 | hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every in-flight AWB (bounded batch per run, oldest first), updates shipment + fulfillment state (`delivered`/`returned`) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
+| every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: claims a bounded batch of due sends (25/run), re-checks the marketing consent per send, mails through the idempotent email wrapper, retries failures with backoff and parks them after 5 attempts (visible in `/admin/nurture`). Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. Design notes: `src/lib/modules/nurture/README.md`. |
 
 Where no machine can run scripts (Vercel), the retention job is also
 available over HTTP at `GET /api/cron/chat-prune` — see §12. Both forms call
 `runRetentionSweep()` in `src/lib/server/retention.ts`, so they cannot drift
-apart. On Vercel both routes are scheduled by `apps/web/vercel.json`.
+apart (the sweep also expires closed nurture enrollments after 180 days). On
+Vercel all three routes are scheduled by `apps/web/vercel.json`.
 
 On-demand (not cron): `pnpm subscriber:delete -- --email x@y.ro` for GDPR
 erasure requests (deletes the subscriber, unlinks quiz results, anonymizes
@@ -480,17 +482,20 @@ credentials too. All of these are idempotent — safe to re-run on later deploys
 
 ### Scheduled jobs
 
-`vercel.json` schedules `GET /api/cron/chat-prune` daily (retention) and
-`GET /api/cron/shipment-sync` hourly (courier tracking poll — §9). Both
-routes require `Authorization: Bearer $CRON_SECRET`; without `CRON_SECRET`
-set they answer `503` rather than running unauthenticated. Verify once by
-hand:
+`vercel.json` schedules `GET /api/cron/chat-prune` daily (retention),
+`GET /api/cron/shipment-sync` hourly (courier tracking poll — §9) and
+`GET /api/cron/nurture-send` every 15 minutes (nurture email queue — §9).
+All routes require `Authorization: Bearer $CRON_SECRET`; without
+`CRON_SECRET` set they answer `503` rather than running unauthenticated.
+Verify once by hand:
 
 ```bash
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/chat-prune
 # {"sessions":0,"chatRateLimitRows":0,…,"retentionDays":30}
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync
 # {"polled":0,"updated":0,"errors":0}
+curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send
+# {"claimed":0,"sent":0,"retried":0,"parked":0,"cancelled":0,"completed":0}
 ```
 
 ### Verification

@@ -1,4 +1,99 @@
-# STATE — after shipping (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after nurture sequences (2026-08-07, branch `feat/vercel-neon`)
+
+## Nurture sequences: DB-backed email queue on the cron seam (2026-08-07, NEXT-9)
+
+The "no scheduled sending" gap is closed with the design decision the README
+records first: **a database-backed queue drained by the existing guarded cron
+seam** — no worker, no external scheduler, identical on adapter-node and
+Vercel. Migration `0019_milky_gateway` (tables `nurture_sequences`,
+`nurture_enrollments`, `nurture_sends`). No new env vars (`CRON_SECRET` now
+also guards `/api/cron/nurture-send`).
+
+- **`modules/nurture`** (new module; design record in its README — read it
+  before touching scheduling/drain semantics):
+  - Sequences are DATA rows: unique `key`, `trigger` jsonb
+    (`consent-confirmed` | `quiz-completed` (quizSlug + optional band filter)
+    | `order-paid`), `consent_key` (which marketing consent gates it), ordered
+    `steps` jsonb (offsetDays, optional `hourLocal` in Europe/Bucharest,
+    templateKey, subject/paragraphs/cta — the COPY itself is data), `active`.
+    Definitions live per site in `config/sites/{sleep,life}.ts` under
+    `nurture:` (sleep: 3 sequences, life: 1 — deliberately different, proving
+    sites diverge without code). `pnpm db:seed` upserts by key via
+    `seedNurtureSequences` — updates name/trigger/steps/consent but NEVER
+    `active`: the operator kill switch survives reseeds. Definitions are
+    validated loudly (`validateSequenceDefinition`).
+  - **Enrollment**: `UNIQUE (sequence_id, subscriber_id)` IS the
+    re-enrollment rule — once per sequence, ever; every re-trigger
+    (quiz retake, second order, re-confirm) is a no-op, even after
+    cancellation. `isMailable` is THE consent gate (GDPR-critical): granted
+    `consent_key` consent AND `confirmed_at` — every trigger path runs
+    through it and the drain re-checks it per send. Enrollment materializes
+    all step sends atomically with `scheduled_at` from
+    `computeStepScheduledAt` (pure; Intl-based Europe/Bucharest wall-clock,
+    DST-proof — unit-tested across both 2026 transitions; never schedules
+    into the past).
+  - **Trigger hook points**: newsletter confirm route (also back-fills
+    quiz-triggered sequences for results claimed before confirming — the
+    quiz → signup → confirm path), quiz rezultat `?/email` action (mailable
+    subscribers only), shop webhook post-commit for paid orders
+    (best-effort, try/caught — nurture must never fail a processed payment;
+    "first order only" falls out of the unique enrollment, no counting).
+  - **Drain** (`drain.ts`, behind `/api/cron/nurture-send`, every 15 min in
+    `vercel.json`): one transaction claims ≤ `NURTURE_SEND_BATCH=25` due
+    sends with `FOR UPDATE SKIP LOCKED` (concurrent invocations get DISJOINT
+    batches — proven with real parallel drains) and flips them `sending`;
+    per send it re-checks the consent gate (cancels the enrollment when
+    consent is gone), renders the step and sends with idempotency key
+    `nurture:<enrollmentId>:<stepIndex>` — the email_log unique key is the
+    independent second layer (a stale-claim retry after delivery comes back
+    `skipped`, recorded as sent). Failures: back to `pending` with backoff
+    15m/1h/4h/16h (`retryDelayMs`), parked as `failed` after
+    `NURTURE_MAX_ATTEMPTS=5`. Crashed invocations: `sending` rows re-claim
+    after `NURTURE_STALE_CLAIM_MINUTES=15`. Max drift = one cron interval
+    (+1 per 25 backlogged sends) — day-granular steps make that irrelevant.
+  - **Withdrawal stops everything**: unsubscribe route calls
+    `cancelSubscriberNurture` (pending sends + active enrollments cancelled
+    across sequences, immediately); the per-send gate recheck is defense in
+    depth. Every nurture email renders the subscriber's non-expiring
+    unsubscribe link (template `nurture` — subject/copy from step data,
+    unsubscribe footer NOT optional). GDPR erasure cascades enrollments +
+    sends with the subscriber row.
+  - Barrels: `index.ts` universal (types + pure schedule/definition — safe
+    for site config and plain node), `server.ts` (schema, services, drain,
+    `getNurtureDrainDeps()`); `service.ts` stays alias-free and node-safe
+    (the seed script imports it directly). NOTE: runtime imports of another
+    module's non-schema internals are lint-banned — nurture inlines crm's
+    one-line granted check in `isMailable` instead of importing `hasConsent`.
+- **Admin** `/admin/nurture` (admin-only; in `ADMIN_ONLY_SECTIONS` + nav):
+  per-sequence stats (enrolled, sends pending/sent/failed) and the
+  activate/deactivate toggle — deactivation pauses the queue rows in place
+  (the claim filters on `sequences.active`), reactivation resumes them; no
+  deploy needed to stop a bad sequence. Parked sends listed with email,
+  step, attempts, error. Toggle action re-checks `role === 'admin'`.
+- **Retention**: `runRetentionSweep` also deletes closed (completed or
+  cancelled, via `closed_at`) enrollments after `NURTURE_RETENTION_DAYS=180`;
+  sends cascade. email_log stays the durable proof of what was sent.
+- **Tests** (+37; unit suite 698 green): `schedule.spec.ts` (DST both ways,
+  Bucharest-calendar-day anchoring, past-clamp, backoff table, definition
+  validation), `nurture.spec.ts` (consent gate incl. NO-consent ⇒ NO
+  enrollment ever, once-per-sequence, quiz band filter + confirm back-fill,
+  order normalization, step1-then-step2 time-travelled via injected `now`,
+  2-concurrent-drains exactly-once, bound + backlog drains over runs,
+  retry→park visible via `listParkedSends`, stale-claim recovery without
+  double delivery, deactivate/reactivate, withdrawal cancels everything +
+  drain-time recheck, unsubscribe link end-to-end through the REAL route
+  module, seed idempotence + kill-switch survival, GDPR cascade, retention
+  window), `nurture-send-route.spec.ts` (503/401/no-op contract),
+  `nurture-page.spec.ts` (stats + parked surfaced, editor 403 writes
+  nothing, admin toggle, bad payload 400), nurture template render in
+  `email.spec.ts`, nurture rows in `retention.spec.ts`. e2e `global-setup`
+  clears `nurture_sequences` (cascade) before subscribers.
+- Docs: DEPLOYMENT §9 (cron row + retention note), §12 "Scheduled jobs"
+  (third route + curl); LAUNCH-CHECKLIST: nurture-cron box (incl. "review
+  seeded sequences in /admin/nurture before going live").
+- Verified: gate green (lint + check + 698 unit), migrate clean on fresh
+  (every DB spec re-migrates from zero) AND populated dev DBs, `db:seed` on
+  BOTH sites (3 vs 1 sequences).
 
 ## Shipping: cost at checkout, courier seam, AWB, tracking (2026-08-07, NEXT-8)
 
@@ -1771,8 +1866,6 @@ Not run in CI/agent runs — do this by hand when you have keys:
   the most likely next phase, see LAUNCH-CHECKLIST note. The groundwork
   landed in NEXT-5: the `processed_events` ledger gives their webhooks/crons
   exactly-once semantics, and `order_events` is the trail they append to.
-- **Nurture sequences**: only transactional + double-opt-in emails exist; no
-  scheduled newsletter/drip sending (needs a queue/cron design decision).
 - **Chat history restore**: the widget's conversation is client-local (the
   cookie only carries provider context) — a GET /api/chat could restore it.
 - **Media blurhash** column exists but is never populated (needs pixel

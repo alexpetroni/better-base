@@ -172,6 +172,13 @@ in the split boxes.
       schedules `GET /api/cron/shipment-sync` hourly (same `CRON_SECRET`);
       adapter-node — machine cron curls the same route hourly. Verified once
       by hand: the authorized curl answers `{"polled":…}`.
+- [ ] Nurture email queue, per target (§9): Vercel — `vercel.json` already
+      schedules `GET /api/cron/nurture-send` every 15 minutes (same
+      `CRON_SECRET`); adapter-node — machine cron curls the same route.
+      Verified once by hand: the authorized curl answers `{"claimed":…}`.
+      The seeded sequences are live-checked in `/admin/nurture` (deactivate
+      any you do not want sending at launch — sends only leave while
+      `EMAIL_DRYRUN=false`).
 - [ ] One real AWB generated and cancelled against the live Sameday account
       (DEPLOYMENT.md §7 "Shipping" step 4) — the adapter follows the public
       API but is unverified against a live account until this passes; the
