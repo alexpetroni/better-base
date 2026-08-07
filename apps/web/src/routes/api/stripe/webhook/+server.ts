@@ -5,6 +5,7 @@ import { getEmailSender } from '$lib/modules/email/server';
 import { invoicePdfAttachmentForOrder } from '$lib/modules/invoice/server';
 import { getStorage } from '$lib/modules/media/server';
 import {
+	getCourierProvider,
 	getStripeWebhookSecret,
 	processStripeEvent,
 	verifyStripeEvent
@@ -38,7 +39,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			// surfaces as a caught attachment failure, never a dead webhook.
 			invoiceAttachment: (orderId) =>
 				invoicePdfAttachmentForOrder({ db: getDb(), storage: getStorage() }, orderId),
-			publicBaseUrl: publicEnv.PUBLIC_SITE_URL
+			publicBaseUrl: publicEnv.PUBLIC_SITE_URL,
+			// Refunds cancel a not-yet-picked-up AWB with the courier (best effort).
+			courier: getCourierProvider()
 		},
 		event
 	);

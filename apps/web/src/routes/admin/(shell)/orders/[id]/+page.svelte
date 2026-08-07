@@ -24,6 +24,14 @@
 
 	const transitions = $derived(legalTransitions(data.order.fulfillmentStatus));
 
+	const shipmentStatusLabels: Record<string, () => string> = {
+		registered: m.admin_order_shipment_status_registered,
+		'in-transit': m.admin_order_shipment_status_in_transit,
+		delivered: m.admin_order_shipment_status_delivered,
+		returned: m.admin_order_shipment_status_returned,
+		cancelled: m.admin_order_shipment_status_cancelled
+	};
+
 	function eventLabel(event: (typeof data.events)[number]): string {
 		if (event.kind === 'created') return m.admin_order_event_created();
 		if (event.kind === 'refund-marked') return m.admin_order_event_refund_marked();
@@ -31,6 +39,11 @@
 		if (event.kind === 'invoice-failed') return m.admin_order_event_invoice_failed();
 		if (event.kind === 'storno-issued') return m.admin_order_event_storno_issued();
 		if (event.kind === 'storno-failed') return m.admin_order_event_storno_failed();
+		if (event.kind === 'awb-generated') return m.admin_order_event_awb_generated();
+		if (event.kind === 'shipment-status') return m.admin_order_event_shipment_status();
+		if (event.kind === 'shipment-cancelled') return m.admin_order_event_shipment_cancelled();
+		if (event.kind === 'shipment-cancel-failed')
+			return m.admin_order_event_shipment_cancel_failed();
 		if (event.kind === 'fulfillment-transition' && event.fromStatus && event.toStatus) {
 			return m.admin_order_event_fulfillment({
 				from: fulfillmentLabels[event.fromStatus](),
@@ -112,6 +125,19 @@
 						</span>
 					</li>
 				{/each}
+				{#if data.order.shippingCents > 0}
+					<li class="flex items-center justify-between gap-4 px-4 py-3">
+						<span>
+							{m.admin_order_shipping_cost()}
+							{#if data.order.shippingName}
+								<span class="text-(--color-ink)/60">— {data.order.shippingName}</span>
+							{/if}
+						</span>
+						<span class="font-semibold" data-testid="order-detail-shipping-cost">
+							{formatCents(data.order.shippingCents, data.order.currency)}
+						</span>
+					</li>
+				{/if}
 				<li class="flex items-center justify-between gap-4 px-4 py-3">
 					<span class="font-semibold">{m.cart_total()}</span>
 					<strong data-testid="order-detail-total">
@@ -264,6 +290,62 @@
 				<p class="mt-2 text-xs text-red-700" data-testid="order-invoice-error">
 					{m.admin_order_invoice_error()}
 					{form.invoiceDetail ? ` (${form.invoiceDetail})` : ''}
+				</p>
+			{/if}
+		</div>
+		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
+			<p class="mb-2 font-semibold">{m.admin_order_shipment()}</p>
+			{#if data.shipment}
+				<div data-testid="order-shipment" data-status={data.shipment.status}>
+					<p class="font-mono font-semibold" data-testid="order-shipment-awb">
+						{data.shipment.awb}
+					</p>
+					<p class="text-xs text-(--color-ink)/60" data-testid="order-shipment-status">
+						{(shipmentStatusLabels[data.shipment.status] ?? (() => data.shipment?.status ?? ''))()}
+						· {formatDate(data.shipment.createdAt, 'medium-time')}
+					</p>
+					<p class="mt-1 flex gap-3 text-xs">
+						<a
+							href={data.shipment.trackingUrl}
+							target="_blank"
+							rel="noopener"
+							data-testid="order-shipment-tracking"
+							class="text-(--color-brand) hover:underline"
+						>
+							{m.admin_order_shipment_tracking()}
+						</a>
+						<a
+							href={resolve('/api/shipments/[id]/label', { id: data.shipment.id })}
+							data-testid="order-shipment-label"
+							class="text-(--color-brand) hover:underline"
+						>
+							{m.admin_order_shipment_label()}
+						</a>
+					</p>
+				</div>
+			{:else}
+				<p class="text-(--color-ink)/70" data-testid="order-shipment-none">
+					{m.admin_order_shipment_none()}
+				</p>
+				{#if data.order.status === 'paid' && (data.order.fulfillmentStatus === 'unfulfilled' || data.order.fulfillmentStatus === 'packed')}
+					<form method="POST" action="?/generateAwb" class="mt-3">
+						<button
+							type="submit"
+							data-testid="order-shipment-generate"
+							class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+						>
+							{m.admin_order_shipment_generate()}
+						</button>
+					</form>
+				{/if}
+			{/if}
+			{#if form?.awbError}
+				<p class="mt-2 text-xs text-red-700" data-testid="order-shipment-error">
+					{form.awbError === 'order-not-paid'
+						? m.admin_order_shipment_err_not_paid()
+						: form.awbError === 'order-not-shippable'
+							? m.admin_order_shipment_err_not_shippable()
+							: m.admin_order_shipment_err_courier({ detail: form.awbDetail ?? '' })}
 				</p>
 			{/if}
 		</div>

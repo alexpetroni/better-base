@@ -53,7 +53,12 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 
 	const pathname = deLocalizeUrl(event.url).pathname;
 	const isAdminPath = pathname === '/admin' || pathname.startsWith('/admin/');
-	if (isAdminPath || pathname.startsWith('/api/invoices/')) {
+	// /api/shipments serves only staff (AWB labels), so it needs the session too.
+	if (
+		isAdminPath ||
+		pathname.startsWith('/api/invoices/') ||
+		pathname.startsWith('/api/shipments/')
+	) {
 		const session = await getAuth().api.getSession({ headers: event.request.headers });
 		if (session && isStaffRole(session.user.role)) {
 			const { id, email, name, role } = session.user;

@@ -10,7 +10,10 @@ import {
 import { getStorage } from '$lib/modules/media/server';
 import { isFulfillmentStatus } from '$lib/modules/shop';
 import {
+	createShipmentForOrder,
+	getCourierProvider,
 	getOrderWithItems,
+	getShipmentForOrder,
 	listOrderEvents,
 	orderLookupUrl,
 	transitionFulfillment
@@ -26,6 +29,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		...found,
 		events: await listOrderEvents({ db: getDb() }, params.id),
 		invoices: await listInvoicesForOrder({ db: getDb() }, params.id),
+		shipment: (await getShipmentForOrder({ db: getDb() }, params.id)) ?? null,
 		// One nonce per rendered page: the re-send form posts it back and the
 		// email idempotency key derives from (invoice id, nonce), so a double
 		// submit of the SAME form sends exactly one email, while a fresh page
@@ -73,6 +77,35 @@ export const actions: Actions = {
 			return fail(400, { invoiceError: result.error, invoiceDetail: result.detail ?? '' });
 		}
 		return { invoiceIssued: true };
+	},
+
+	/**
+	 * Register the order's AWB with the courier and move fulfillment to
+	 * `shipped` (via `packed`) — the whole unit is idempotent: the service
+	 * holds the order row lock and the unique shipment-per-order index, so a
+	 * double click returns the existing AWB instead of creating a second one.
+	 * The shipping email goes out once per AWB. Same defense-in-depth admin
+	 * check as the other actions.
+	 */
+	generateAwb: async ({ params, locals }) => {
+		if (locals.user?.role !== 'admin') error(403);
+
+		const result = await createShipmentForOrder(
+			{
+				db: getDb(),
+				courier: getCourierProvider(),
+				email: getEmailSender(),
+				siteName: getSite().name,
+				publicBaseUrl: publicEnv.PUBLIC_SITE_URL
+			},
+			params.id,
+			locals.user.email
+		);
+		if (!result.ok) {
+			if (result.error === 'order-not-found') error(404);
+			return fail(400, { awbError: result.error, awbDetail: result.detail ?? '' });
+		}
+		return { awbGenerated: true, awbExisting: !result.value.created };
 	},
 
 	/**
