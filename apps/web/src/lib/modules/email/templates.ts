@@ -54,6 +54,18 @@ export interface TemplateData {
 		/** Durable no-account link back to the order. */
 		orderUrl?: string;
 	};
+	/**
+	 * Nurture sequence step (modules/nurture): subject and copy come from the
+	 * sequence DATA, so sites differ without new templates. Marketing mail —
+	 * the unsubscribe link is required and always rendered.
+	 */
+	nurture: {
+		siteName: string;
+		subject: string;
+		paragraphs: string[];
+		cta?: { label: string; url: string };
+		unsubscribeUrl: string;
+	};
 }
 
 export type TemplateKey = keyof TemplateData;
@@ -63,7 +75,8 @@ export const EMAIL_TEMPLATE_KEYS = [
 	'newsletter-confirm',
 	'order-confirmation',
 	'invoice-email',
-	'shipping-notification'
+	'shipping-notification',
+	'nurture'
 ] as const satisfies readonly TemplateKey[];
 
 export function escapeHtml(value: string): string {
@@ -256,6 +269,33 @@ ${data.orderUrl ? `<p style="margin:24px 0 0;">Poți reveni oricând la comanda 
 	return { subject, html, text };
 }
 
+function renderNurture(data: TemplateData['nurture']): RenderedEmail {
+	const paragraphsHtml = data.paragraphs
+		.map((p) => `<p style="margin:0 0 16px;">${escapeHtml(p)}</p>`)
+		.join('\n');
+	const ctaHtml = data.cta
+		? `<p style="margin:8px 0 0;"><a href="${escapeHtml(data.cta.url)}" style="display:inline-block;background:#4c4b9e;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;">${escapeHtml(data.cta.label)}</a></p>`
+		: '';
+	const html = htmlShell(
+		data.siteName,
+		`<h1 style="font-size:20px;margin:0 0 16px;">${escapeHtml(data.subject)}</h1>
+${paragraphsHtml}
+${ctaHtml}
+<p style="margin:24px 0 0;font-size:12px;color:#6b7280;">Primești acest email pentru că te-ai abonat la ${escapeHtml(data.siteName)}. <a href="${escapeHtml(data.unsubscribeUrl)}" style="color:#6b7280;">Dezabonează-te</a> oricând, cu un clic.</p>`
+	);
+	const text = [
+		data.subject,
+		'',
+		...data.paragraphs.flatMap((p) => [p, '']),
+		...(data.cta ? [`${data.cta.label}: ${data.cta.url}`, ''] : []),
+		`Primești acest email pentru că te-ai abonat la ${data.siteName}.`,
+		`Dezabonează-te oricând: ${data.unsubscribeUrl}`,
+		'',
+		data.siteName
+	].join('\n');
+	return { subject: data.subject, html, text };
+}
+
 export function renderEmailTemplate<K extends TemplateKey>(
 	template: K,
 	data: TemplateData[K]
@@ -271,6 +311,8 @@ export function renderEmailTemplate<K extends TemplateKey>(
 			return renderInvoiceEmail(data as TemplateData['invoice-email']);
 		case 'shipping-notification':
 			return renderShippingNotification(data as TemplateData['shipping-notification']);
+		case 'nurture':
+			return renderNurture(data as TemplateData['nurture']);
 		default:
 			throw new Error(`Unknown email template "${template}"`);
 	}
