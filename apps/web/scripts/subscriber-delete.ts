@@ -30,7 +30,8 @@ try {
 	console.log(
 		`Subscriber ${s.subscriberDeleted ? 'deleted' : 'not found (nothing to delete)'}; ` +
 			`quiz results unlinked: ${s.quizResultsUnlinked}; orders anonymized: ${s.ordersAnonymized}; ` +
-			`email log entries anonymized: ${s.emailLogAnonymized}`
+			`email log entries anonymized: ${s.emailLogAnonymized}; ` +
+			`invoices retained under accounting law (see modules/invoice/README.md): ${s.invoicesRetained}`
 	);
 } finally {
 	await db.$client.end();

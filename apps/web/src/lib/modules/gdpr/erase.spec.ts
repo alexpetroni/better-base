@@ -87,7 +87,8 @@ describe('eraseSubscriberData', () => {
 			subscriberDeleted: true,
 			quizResultsUnlinked: 1,
 			ordersAnonymized: 1,
-			emailLogAnonymized: 1
+			emailLogAnonymized: 1,
+			invoicesRetained: 0
 		});
 
 		expect(await db.select().from(subscribers).where(eq(subscribers.email, EMAIL))).toHaveLength(0);
@@ -120,7 +121,8 @@ describe('eraseSubscriberData', () => {
 			subscriberDeleted: false,
 			quizResultsUnlinked: 0,
 			ordersAnonymized: 0,
-			emailLogAnonymized: 0
+			emailLogAnonymized: 0,
+			invoicesRetained: 0
 		});
 	});
 
