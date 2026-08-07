@@ -5,6 +5,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../db/client.ts';
 import { loginAttempts } from '../modules/auth/schema.ts';
 import { chatRateLimits, chatSessions } from '../modules/chat/schema.ts';
+import { processedEvents } from './event-ledger/schema.ts';
 import { rateLimits } from './rate-limit/schema.ts';
 import { formatRetentionSweep, runRetentionSweep } from './retention.ts';
 
@@ -52,6 +53,14 @@ describe('runRetentionSweep', () => {
 			{ key: 'login:sweep-old', count: 9, windowStartedAt: daysAgo(31) },
 			{ key: 'login:sweep-fresh', count: 1, windowStartedAt: daysAgo(1) }
 		]);
+		// The event ledger keeps rows well past Stripe's redelivery window (90
+		// days) — a 31-day-old row must SURVIVE the sweep that takes the
+		// 30-day counters above.
+		await db.insert(processedEvents).values([
+			{ provider: 'stripe', eventId: 'evt-expired', eventType: 't', outcome: 'ok', receivedAt: daysAgo(91) },
+			{ provider: 'stripe', eventId: 'evt-aging', eventType: 't', outcome: 'ok', receivedAt: daysAgo(31) },
+			{ provider: 'stripe', eventId: 'evt-fresh', eventType: 't', outcome: 'ok', receivedAt: daysAgo(1) }
+		]);
 
 		const result = await runRetentionSweep(db, NOW);
 
@@ -60,7 +69,9 @@ describe('runRetentionSweep', () => {
 			chatRateLimitRows: 1,
 			publicEmailRateLimitRows: 1,
 			loginRateLimitRows: 1,
-			retentionDays: 30
+			processedEventRows: 1,
+			retentionDays: 30,
+			ledgerRetentionDays: 90
 		});
 		// The fresh row of every table survives — a sweep that took live
 		// counters would reset limits for anyone currently being throttled.
@@ -72,6 +83,10 @@ describe('runRetentionSweep', () => {
 		expect((await db.select().from(loginAttempts)).map((r) => r.key)).toEqual([
 			'login:sweep-fresh'
 		]);
+		expect((await db.select().from(processedEvents)).map((r) => r.eventId).sort()).toEqual([
+			'evt-aging',
+			'evt-fresh'
+		]);
 	});
 
 	it('is a no-op on a swept database', async () => {
@@ -80,7 +95,8 @@ describe('runRetentionSweep', () => {
 			sessions: 0,
 			chatRateLimitRows: 0,
 			publicEmailRateLimitRows: 0,
-			loginRateLimitRows: 0
+			loginRateLimitRows: 0,
+			processedEventRows: 0
 		});
 	});
 
@@ -90,9 +106,12 @@ describe('runRetentionSweep', () => {
 			chatRateLimitRows: 3,
 			publicEmailRateLimitRows: 4,
 			loginRateLimitRows: 5,
-			retentionDays: 30
+			processedEventRows: 6,
+			retentionDays: 30,
+			ledgerRetentionDays: 90
 		});
 		expect(line).toContain('2 session(s) older than 30 days');
 		expect(line).toContain('3 chat / 4 public-email / 5 login');
+		expect(line).toContain('6 processed-event row(s) older than 90 days');
 	});
 });

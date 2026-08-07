@@ -8,6 +8,7 @@
 import type { Db } from '../db/client.ts';
 import { loginAttempts } from '../modules/auth/schema.ts';
 import { CHAT_RETENTION_DAYS, pruneChatSessions } from '../modules/chat/service.ts';
+import { PROCESSED_EVENTS_RETENTION_DAYS, pruneProcessedEvents } from './event-ledger/core.ts';
 import { pruneStaleRateLimits } from './rate-limit/core.ts';
 import { rateLimits } from './rate-limit/schema.ts';
 
@@ -18,7 +19,10 @@ export interface RetentionSweepResult {
 	chatRateLimitRows: number;
 	publicEmailRateLimitRows: number;
 	loginRateLimitRows: number;
+	/** Webhook idempotency-ledger rows past the redelivery window. */
+	processedEventRows: number;
 	retentionDays: number;
+	ledgerRetentionDays: number;
 }
 
 /**
@@ -35,13 +39,18 @@ export async function runRetentionSweep(
 	now: Date = new Date()
 ): Promise<RetentionSweepResult> {
 	const cutoff = new Date(now.getTime() - CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+	// The event ledger only needs to outlive the provider's redelivery window
+	// (see PROCESSED_EVENTS_RETENTION_DAYS) — a longer, separate cutoff.
+	const ledgerCutoff = new Date(now.getTime() - PROCESSED_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 	const chat = await pruneChatSessions(db, now);
 	return {
 		sessions: chat.sessions,
 		chatRateLimitRows: chat.rateLimitRows,
 		publicEmailRateLimitRows: await pruneStaleRateLimits(db, rateLimits, cutoff),
 		loginRateLimitRows: await pruneStaleRateLimits(db, loginAttempts, cutoff),
-		retentionDays: CHAT_RETENTION_DAYS
+		processedEventRows: await pruneProcessedEvents(db, ledgerCutoff),
+		retentionDays: CHAT_RETENTION_DAYS,
+		ledgerRetentionDays: PROCESSED_EVENTS_RETENTION_DAYS
 	};
 }
 
@@ -50,6 +59,7 @@ export function formatRetentionSweep(r: RetentionSweepResult): string {
 	return (
 		`retention sweep — deleted ${r.sessions} session(s) older than ${r.retentionDays} days, ` +
 		`${r.chatRateLimitRows} chat / ${r.publicEmailRateLimitRows} public-email / ` +
-		`${r.loginRateLimitRows} login rate-limit row(s)`
+		`${r.loginRateLimitRows} login rate-limit row(s), ` +
+		`${r.processedEventRows} processed-event row(s) older than ${r.ledgerRetentionDays} days`
 	);
 }

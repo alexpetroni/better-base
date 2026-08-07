@@ -91,6 +91,18 @@ export const orders = pgTable(
 			.notNull()
 			.default('pending'),
 		/**
+		 * Fulfillment is a separate dimension from payment `status`: an order can
+		 * be paid yet unpacked, or refunded after delivery. Written ONLY by
+		 * `transitionFulfillment` (fulfillment-service.ts), which enforces the
+		 * state machine in fulfillment.ts and records every change in
+		 * `order_events`.
+		 */
+		fulfillmentStatus: text('fulfillment_status', {
+			enum: ['unfulfilled', 'packed', 'shipped', 'delivered', 'returned', 'cancelled']
+		})
+			.notNull()
+			.default('unfulfilled'),
+		/**
 		 * The payment claimed more units than were in stock (concurrent
 		 * checkouts both passed the pre-payment stock check). Flagged by the
 		 * webhook for manual follow-up — restock, partial refund, or apology.
@@ -103,8 +115,36 @@ export const orders = pgTable(
 		index('orders_created_at_idx').on(table.createdAt),
 		// GDPR erase anonymizes by email; the refund webhook matches by intent.
 		index('orders_email_idx').on(table.email),
-		index('orders_stripe_payment_intent_idx').on(table.stripePaymentIntent)
+		index('orders_stripe_payment_intent_idx').on(table.stripePaymentIntent),
+		// The admin work queue filters on the fulfillment dimension.
+		index('orders_fulfillment_status_idx').on(table.fulfillmentStatus)
 	]
+);
+
+/**
+ * Append-only per-order history: who or what changed the order, when, and a
+ * free-text note — the operator's answer to "what happened to this order".
+ * Rows are only ever inserted (by the webhook and the fulfillment service);
+ * invoices and AWBs hook into the same trail in later phases.
+ */
+export const orderEvents = pgTable(
+	'order_events',
+	{
+		id: text('id').primaryKey(),
+		orderId: text('order_id')
+			.notNull()
+			.references(() => orders.id, { onDelete: 'cascade' }),
+		/** Machine-readable event class, e.g. `created`, `refund-marked`, `fulfillment-transition`. */
+		kind: text('kind').notNull(),
+		/** Staff email for admin actions; a system name (e.g. `stripe-webhook`) otherwise. */
+		actor: text('actor').notNull(),
+		/** Fulfillment transition endpoints; null for non-transition events. */
+		fromStatus: text('from_status'),
+		toStatus: text('to_status'),
+		note: text('note').notNull().default(''),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [index('order_events_order_id_idx').on(table.orderId)]
 );
 
 export const orderItems = pgTable(
@@ -132,3 +172,4 @@ export type ProductStatus = ProductRow['status'];
 export type OrderRow = typeof orders.$inferSelect;
 export type OrderStatus = OrderRow['status'];
 export type OrderItemRow = typeof orderItems.$inferSelect;
+export type OrderEventRow = typeof orderEvents.$inferSelect;

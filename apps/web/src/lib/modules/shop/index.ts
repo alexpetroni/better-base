@@ -12,7 +12,16 @@ export {
 	setCartQty,
 	type CartItem
 } from './cart.ts';
+export {
+	canTransition,
+	FULFILLMENT_STATUSES,
+	IllegalTransitionError,
+	isFulfillmentStatus,
+	legalTransitions,
+	type FulfillmentStatus
+} from './fulfillment.ts';
 export type {
+	OrderEventRow,
 	OrderItemRow,
 	OrderRow,
 	OrderStatus,

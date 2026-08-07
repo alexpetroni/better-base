@@ -25,9 +25,16 @@ export type {
 	GatewayProductInput,
 	StripeGateway
 } from './gateway.ts';
+export {
+	appendOrderEvent,
+	listOrderEvents,
+	transitionFulfillment,
+	type TransitionActor,
+	type TransitionResult
+} from './fulfillment-service.ts';
 export { productsMediaReferenceCheck } from './media-ref.ts';
 export { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
-export { orderItems, orders, productPillars, products } from './schema.ts';
+export { orderEvents, orderItems, orders, productPillars, products } from './schema.ts';
 export {
 	createProduct,
 	getProduct,
@@ -48,9 +55,13 @@ export { syncProductToStripe, type SyncDeps, type SyncOutcome } from './sync.ts'
 export {
 	getOrderBySessionId,
 	getOrderWithItems,
+	isOrderListFilter,
 	listOrders,
+	ORDER_LIST_FILTERS,
 	processStripeEvent,
 	verifyStripeEvent,
+	WEBHOOK_ACTOR,
+	type OrderListFilter,
 	type WebhookDeps,
 	type WebhookOutcome
 } from './webhook.ts';

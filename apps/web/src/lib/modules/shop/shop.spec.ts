@@ -8,13 +8,14 @@ import { resolveSiteConfig } from '../../config/index.ts';
 import { createDb, type Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
+import { processedEvents } from '../../server/event-ledger/schema.ts';
 import { emailLog } from '../email/schema.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { media } from '../media/schema.ts';
 import { buildCartMetadata, createCheckoutFromCart, loadCartDetails } from './checkout.ts';
 import { productsMediaReferenceCheck } from './media-ref.ts';
 import { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
-import { orderItems, orders, productPillars, products } from './schema.ts';
+import { orderEvents, orderItems, orders, productPillars, products } from './schema.ts';
 import {
 	createProduct,
 	getProductBySlug,
@@ -343,11 +344,13 @@ interface SessionOverrides {
 	amountTotal: number;
 	paymentIntent?: string;
 	email?: string;
+	/** Provider event id; defaults to one derived from the session id. */
+	eventId?: string;
 }
 
 function completedSessionEvent(overrides: SessionOverrides): string {
 	return JSON.stringify({
-		id: `evt_${overrides.id}`,
+		id: overrides.eventId ?? `evt_${overrides.id}`,
 		object: 'event',
 		type: 'checkout.session.completed',
 		api_version: '2026-01-01',
@@ -420,8 +423,27 @@ describe('webhook: checkout.session.completed', () => {
 		expect(order.email).toBe('client@example.ro');
 		expect(order.amountTotalCents).toBe(22530);
 		expect(order.status).toBe('paid');
+		// Fulfillment starts at the head of the state machine; only
+		// transitionFulfillment moves it from here.
+		expect(order.fulfillmentStatus).toBe('unfulfilled');
 		expect(order.shippingAddress?.city).toBe('Cluj-Napoca');
 		expect(order.shippingAddress?.postalCode).toBe('400001');
+
+		// The audit trail opens with the creation event, committed with the order.
+		const trail = await db.select().from(orderEvents).where(eq(orderEvents.orderId, order.id));
+		expect(trail).toHaveLength(1);
+		expect(trail[0]).toMatchObject({ kind: 'created', actor: 'stripe-webhook', note: 'cs_happy' });
+
+		// And the ledger recorded what this event did.
+		const [ledger] = await db
+			.select()
+			.from(processedEvents)
+			.where(eq(processedEvents.eventId, 'evt_cs_happy'));
+		expect(ledger).toMatchObject({
+			provider: 'stripe',
+			eventType: 'checkout.session.completed',
+			outcome: 'order-created'
+		});
 
 		const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
 		expect(items).toHaveLength(2);
@@ -454,8 +476,14 @@ describe('webhook: checkout.session.completed', () => {
 
 		const first = await processStripeEvent(webhookDeps, event);
 		expect(first.kind).toBe('order-created');
+		// Same event id again: the ledger reports the hit and what the first
+		// delivery did, so the operator can see why nothing changed.
 		const second = await processStripeEvent(webhookDeps, event);
-		expect(second.kind).toBe('duplicate-session');
+		expect(second).toEqual({
+			kind: 'duplicate-event',
+			eventId: 'evt_cs_duplicate',
+			firstOutcome: 'order-created'
+		});
 
 		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_duplicate'));
 		expect(rows).toHaveLength(1);
@@ -543,11 +571,18 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 		);
 		expect(fault.hits).toBe(1);
 
-		// NOTHING committed: the stripeSessionId claim rolled back with the
-		// failure, stock is untouched, no email attempted — so Stripe's
-		// redelivery genuinely retries instead of hitting a headless duplicate.
+		// NOTHING committed: the stripeSessionId claim AND the processed_events
+		// claim rolled back with the failure, stock is untouched, no email
+		// attempted — so Stripe's redelivery genuinely retries instead of
+		// hitting a headless duplicate (a poisoned event stays retryable).
 		expect(
 			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_atomic_items'))
+		).toHaveLength(0);
+		expect(
+			await db
+				.select()
+				.from(processedEvents)
+				.where(eq(processedEvents.eventId, 'evt_cs_atomic_items'))
 		).toHaveLength(0);
 		const [afterFailure] = await db.select().from(products).where(eq(products.id, product.id));
 		expect(afterFailure.stock).toBe(5);
@@ -575,6 +610,12 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 			.where(eq(emailLog.idempotencyKey, `order-confirmation:${rows[0].id}`));
 		expect(logs).toHaveLength(1);
 		expect(logs[0].status).toBe('dryrun');
+		// The retried delivery is the one that committed the ledger row.
+		const [ledger] = await db
+			.select()
+			.from(processedEvents)
+			.where(eq(processedEvents.eventId, 'evt_cs_atomic_items'));
+		expect(ledger.outcome).toBe('order-created');
 	});
 
 	it('rolls back the order and items when the stock decrement fails', async () => {
@@ -622,7 +663,7 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 			processStripeEvent(webhookDeps, event),
 			processStripeEvent(webhookDeps, event)
 		]);
-		expect(outcomes.map((o) => o.kind).sort()).toEqual(['duplicate-session', 'order-created']);
+		expect(outcomes.map((o) => o.kind).sort()).toEqual(['duplicate-event', 'order-created']);
 
 		const rows = await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_concurrent'));
 		expect(rows).toHaveLength(1);
@@ -678,7 +719,7 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 		// Redelivery: still exactly one order (no double decrement), and the
 		// FAILED email is re-attempted — idempotency only skips delivered sends.
 		const second = await processStripeEvent(webhookDeps, event);
-		expect(second.kind).toBe('duplicate-session');
+		expect(second.kind).toBe('duplicate-event');
 		expect(
 			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_error'))
 		).toHaveLength(1);
@@ -721,7 +762,7 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 		// Stripe redelivers (the route 500s on the throw): no second order, and
 		// the email finally goes out.
 		const second = await processStripeEvent(webhookDeps, event);
-		expect(second.kind).toBe('duplicate-session');
+		expect(second.kind).toBe('duplicate-event');
 		expect(
 			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_email_throw'))
 		).toHaveLength(1);
@@ -776,5 +817,97 @@ describe('webhook: charge.refunded', () => {
 			WEBHOOK_SECRET
 		);
 		expect((await processStripeEvent(webhookDeps, unmatchedEvent)).kind).toBe('refund-unmatched');
+	});
+
+	it('delivered twice, the refund is applied once and the redelivery reports the ledger hit', async () => {
+		const product = await makeProduct({ name: 'Rambursare dublă', priceCents: 3000 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 3000 }];
+		const payload = completedSessionEvent({
+			id: 'cs_refund_twice',
+			cart,
+			amountTotal: 3000,
+			paymentIntent: 'pi_refund_twice'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+		await processStripeEvent(webhookDeps, event);
+
+		const refundPayload = JSON.stringify({
+			id: 'evt_refund_twice',
+			object: 'event',
+			type: 'charge.refunded',
+			data: { object: { id: 'ch_twice', object: 'charge', payment_intent: 'pi_refund_twice' } }
+		});
+		const refundEvent = await verifyStripeEvent(
+			refundPayload,
+			signedHeader(refundPayload),
+			WEBHOOK_SECRET
+		);
+
+		const first = await processStripeEvent(webhookDeps, refundEvent);
+		expect(first.kind).toBe('refund-marked');
+		// Redelivery of the SAME provider event: acknowledged via the ledger,
+		// effect NOT repeated. (Before the ledger this re-ran the whole
+		// handler and reported a second 'refund-marked'.)
+		const second = await processStripeEvent(webhookDeps, refundEvent);
+		expect(second).toEqual({
+			kind: 'duplicate-event',
+			eventId: 'evt_refund_twice',
+			firstOutcome: 'refund-marked'
+		});
+
+		const [order] = await db
+			.select()
+			.from(orders)
+			.where(eq(orders.stripeSessionId, 'cs_refund_twice'));
+		expect(order.status).toBe('refunded');
+		// Exactly ONE refund entry in the audit trail — the proof the effect
+		// ran once. The trail also has the creation event.
+		const trail = await db.select().from(orderEvents).where(eq(orderEvents.orderId, order.id));
+		expect(trail.filter((e) => e.kind === 'refund-marked')).toHaveLength(1);
+		expect(trail.filter((e) => e.kind === 'refund-marked')[0]).toMatchObject({
+			actor: 'stripe-webhook',
+			note: 'ch_twice'
+		});
+	});
+});
+
+describe('webhook: processed_events ledger', () => {
+	it('the same session under a NEW event id is still one order (session claim, not ledger)', async () => {
+		const product = await makeProduct({ name: 'Sesiune reemisă', priceCents: 2000, stock: 5 });
+		const cart = [{ productId: product.id, qty: 1, priceCents: 2000 }];
+		const firstPayload = completedSessionEvent({ id: 'cs_reissued', cart, amountTotal: 2000 });
+		const first = await verifyStripeEvent(
+			firstPayload,
+			signedHeader(firstPayload),
+			WEBHOOK_SECRET
+		);
+		expect((await processStripeEvent(webhookDeps, first)).kind).toBe('order-created');
+
+		const secondPayload = completedSessionEvent({
+			id: 'cs_reissued',
+			cart,
+			amountTotal: 2000,
+			eventId: 'evt_cs_reissued_resent'
+		});
+		const second = await verifyStripeEvent(
+			secondPayload,
+			signedHeader(secondPayload),
+			WEBHOOK_SECRET
+		);
+		const outcome = await processStripeEvent(webhookDeps, second);
+		expect(outcome).toEqual({ kind: 'duplicate-session', sessionId: 'cs_reissued' });
+
+		// One order, stock decremented once — and BOTH event ids are on the
+		// ledger, the second recording why it did nothing.
+		expect(
+			await db.select().from(orders).where(eq(orders.stripeSessionId, 'cs_reissued'))
+		).toHaveLength(1);
+		const [after] = await db.select().from(products).where(eq(products.id, product.id));
+		expect(after.stock).toBe(4);
+		const [resent] = await db
+			.select()
+			.from(processedEvents)
+			.where(eq(processedEvents.eventId, 'evt_cs_reissued_resent'));
+		expect(resent.outcome).toBe('duplicate-session');
 	});
 });
