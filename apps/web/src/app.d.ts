@@ -1,6 +1,7 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 import type { StaffRole } from '$lib/modules/auth';
+import type { SiteSettings } from '$lib/modules/settings';
 
 declare global {
 	namespace App {
@@ -17,6 +18,12 @@ declare global {
 				name: string;
 				role: StaffRole;
 			} | null;
+			/**
+			 * Lazy request-scoped site settings, set by hooks.server.ts: memoized
+			 * per request, so any number of loads share one query. Expose values
+			 * to the client ONLY via `clientSafeSettings(...)`.
+			 */
+			settings: () => Promise<SiteSettings>;
 		}
 		interface PageData {
 			/**

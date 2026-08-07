@@ -4,7 +4,9 @@ import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
 import { deLocalizeUrl, getTextDirection } from '$lib/paraglide/runtime';
 import { paraglideMiddleware } from '$lib/paraglide/server';
+import { getDb } from '$lib/db';
 import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
+import { createSettingsLoader } from '$lib/modules/settings/server';
 import { assertBootEnv } from '$lib/server/boot';
 import { formatServerError } from '$lib/server/log';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
@@ -26,6 +28,17 @@ const handleParaglide: Handle = ({ event, resolve }) =>
 					.replace('%paraglide.dir%', getTextDirection(locale))
 		});
 	});
+
+/**
+ * Request-scoped site settings: a lazy loader every load function shares, so
+ * however many of them ask, the request costs at most ONE settings query —
+ * and nothing is cached across requests (a save is visible on the next one,
+ * also on serverless instances).
+ */
+const handleSettings: Handle = ({ event, resolve }) => {
+	event.locals.settings = createSettingsLoader(getDb);
+	return resolve(event);
+};
 
 /**
  * Server-side protection for everything under /admin (except /admin/login):
@@ -51,7 +64,7 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-export const handle: Handle = sequence(handleParaglide, handleAdminGuard);
+export const handle: Handle = sequence(handleParaglide, handleSettings, handleAdminGuard);
 
 /**
  * Every unexpected server error is logged as one structured JSON line and
