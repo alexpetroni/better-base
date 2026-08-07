@@ -10,4 +10,5 @@ export * from '../../modules/email/schema.ts';
 export * from '../../modules/media/schema.ts';
 export * from '../../modules/pages/schema.ts';
 export * from '../../modules/quiz/schema.ts';
+export * from '../../modules/settings/schema.ts';
 export * from '../../modules/shop/schema.ts';
