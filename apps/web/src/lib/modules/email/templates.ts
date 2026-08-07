@@ -43,6 +43,17 @@ export interface TemplateData {
 		invoiceNumber: string;
 		orderUrl?: string;
 	};
+	/** Sent once per shipment when the AWB is generated (key derives from it). */
+	'shipping-notification': {
+		siteName: string;
+		orderId: string;
+		awb: string;
+		trackingUrl: string;
+		/** Delivery option chosen at checkout, e.g. `Curier standard`. */
+		shippingName?: string;
+		/** Durable no-account link back to the order. */
+		orderUrl?: string;
+	};
 }
 
 export type TemplateKey = keyof TemplateData;
@@ -51,7 +62,8 @@ export const EMAIL_TEMPLATE_KEYS = [
 	'quiz-result',
 	'newsletter-confirm',
 	'order-confirmation',
-	'invoice-email'
+	'invoice-email',
+	'shipping-notification'
 ] as const satisfies readonly TemplateKey[];
 
 export function escapeHtml(value: string): string {
@@ -217,6 +229,33 @@ ${data.orderUrl ? `<p style="margin:16px 0 0;"><a href="${escapeHtml(data.orderU
 	return { subject, html, text };
 }
 
+function renderShippingNotification(data: TemplateData['shipping-notification']): RenderedEmail {
+	const subject = `Comanda ta de la ${data.siteName} a fost expediată`;
+	const carrierLine = data.shippingName
+		? `Coletul a fost predat către ${data.shippingName}.`
+		: 'Coletul a fost predat curierului.';
+	const html = htmlShell(
+		data.siteName,
+		`<h1 style="font-size:20px;margin:0 0 16px;">Comanda ta e pe drum!</h1>
+<p style="margin:0 0 8px;">${escapeHtml(carrierLine)}</p>
+<p style="margin:0 0 16px;">Număr de urmărire (AWB): <strong>${escapeHtml(data.awb)}</strong></p>
+<p><a href="${escapeHtml(data.trackingUrl)}" style="display:inline-block;background:#4c4b9e;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px;">Urmărește coletul</a></p>
+${data.orderUrl ? `<p style="margin:24px 0 0;">Poți reveni oricând la comanda ta: <a href="${escapeHtml(data.orderUrl)}" style="color:#4c4b9e;">vezi comanda</a>.</p>` : ''}`
+	);
+	const text = [
+		'Comanda ta e pe drum!',
+		'',
+		carrierLine,
+		`Număr de urmărire (AWB): ${data.awb}`,
+		'',
+		`Urmărește coletul: ${data.trackingUrl}`,
+		...(data.orderUrl ? ['', `Poți reveni oricând la comanda ta: ${data.orderUrl}`] : []),
+		'',
+		data.siteName
+	].join('\n');
+	return { subject, html, text };
+}
+
 export function renderEmailTemplate<K extends TemplateKey>(
 	template: K,
 	data: TemplateData[K]
@@ -230,6 +269,8 @@ export function renderEmailTemplate<K extends TemplateKey>(
 			return renderOrderConfirmation(data as TemplateData['order-confirmation']);
 		case 'invoice-email':
 			return renderInvoiceEmail(data as TemplateData['invoice-email']);
+		case 'shipping-notification':
+			return renderShippingNotification(data as TemplateData['shipping-notification']);
 		default:
 			throw new Error(`Unknown email template "${template}"`);
 	}

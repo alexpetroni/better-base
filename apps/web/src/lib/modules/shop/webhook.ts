@@ -16,6 +16,10 @@ import {
 import { appendOrderEvent } from './fulfillment-service.ts';
 import { FULFILLMENT_STATUSES, type FulfillmentStatus } from './fulfillment.ts';
 import { orderItems, orders, products, type OrderRow, type ShippingAddress } from './schema.ts';
+import { parseShippingMetadata, SHIPPING_METADATA_KEY } from './shipping.ts';
+import type { CourierProvider } from './courier.ts';
+import { orderLookupUrl } from './order-link.ts';
+import { applyRefundShipmentInTx, cancelShipmentBestEffort } from './shipment-service.ts';
 
 /**
  * Stripe webhook processing, split from the route so integration tests can
@@ -66,6 +70,12 @@ export interface WebhookDeps {
 	invoiceAttachment?: (orderId: string) => Promise<InvoiceEmailInfo | null>;
 	/** Canonical origin (PUBLIC_SITE_URL) for durable customer links. */
 	publicBaseUrl?: string;
+	/**
+	 * Courier seam, used on refund to cancel a not-yet-picked-up AWB with the
+	 * carrier (best effort, after commit). Optional so callers without a
+	 * shipping concern (older tests) keep working; the route always passes it.
+	 */
+	courier?: CourierProvider;
 }
 
 export type WebhookOutcome =
@@ -101,10 +111,7 @@ function extractShipping(session: Stripe.Checkout.Session): ShippingAddress | nu
 	};
 }
 
-/** `https://site.ro` + session id → the durable no-account order/invoice URL. */
-export function orderLookupUrl(publicBaseUrl: string, stripeSessionId: string): string {
-	return `${publicBaseUrl.replace(/\/$/, '')}/cos/succes?session_id=${stripeSessionId}`;
-}
+export { orderLookupUrl } from './order-link.ts';
 
 async function sendOrderConfirmation(
 	deps: WebhookDeps,
@@ -168,7 +175,12 @@ async function createOrderFromSession(
 		typeof session.payment_intent === 'string'
 			? session.payment_intent
 			: (session.payment_intent?.id ?? null);
-	const amountFromCart = cart.reduce((sum, item) => sum + item.p * item.q, 0);
+	const goodsFromCart = cart.reduce((sum, item) => sum + item.p * item.q, 0);
+	// Stripe's shipping_cost is the authority on what was charged for delivery;
+	// the metadata snapshot (what WE quoted at session creation — the session
+	// carries exactly that one option) is the fallback for older payloads.
+	const shippingMeta = parseShippingMetadata(session.metadata?.[SHIPPING_METADATA_KEY]);
+	const shippingCents = session.shipping_cost?.amount_total ?? shippingMeta?.priceCents ?? 0;
 
 	// Claim the session id by insert: the unique constraint makes duplicate
 	// (and concurrent) deliveries collapse to exactly one order.
@@ -179,7 +191,9 @@ async function createOrderFromSession(
 			email: session.customer_details?.email ?? '',
 			stripeSessionId: session.id,
 			stripePaymentIntent: paymentIntent,
-			amountTotalCents: session.amount_total ?? amountFromCart,
+			amountTotalCents: session.amount_total ?? goodsFromCart + shippingCents,
+			shippingCents,
+			shippingName: shippingMeta?.name ?? '',
 			currency: session.currency ?? 'ron',
 			status: session.payment_status === 'paid' ? 'paid' : 'pending',
 			shippingAddress: extractShipping(session),
@@ -351,16 +365,32 @@ async function handleChargeRefunded(
 					note: reversed.error
 				});
 			}
-			return { outcome: 'refund-marked', value: order.id };
+			// Refund vs fulfillment/shipment (NEXT-8 rule): before an AWB exists
+			// the order is cancelled; after one, it is marked returned and a
+			// not-yet-picked-up AWB is flagged for courier cancellation (below).
+			const plan = await applyRefundShipmentInTx(tx, order, WEBHOOK_ACTOR);
+			return {
+				outcome: 'refund-marked',
+				value: { orderId: order.id, cancelAwb: plan.cancelAwb }
+			};
 		}
 	);
 
 	if (result.duplicate) {
 		return { kind: 'duplicate-event', eventId: event.id, firstOutcome: result.outcome };
 	}
-	return result.value
-		? { kind: 'refund-marked', orderId: result.value }
-		: { kind: 'refund-unmatched' };
+	if (!result.value) return { kind: 'refund-unmatched' };
+	// Deliberately AFTER the commit: a courier API failure must never roll back
+	// the refund bookkeeping — it is recorded on the trail for manual follow-up.
+	if (result.value.cancelAwb && deps.courier) {
+		await cancelShipmentBestEffort(
+			{ db: deps.db, courier: deps.courier },
+			result.value.orderId,
+			result.value.cancelAwb,
+			WEBHOOK_ACTOR
+		);
+	}
+	return { kind: 'refund-marked', orderId: result.value.orderId };
 }
 
 /**

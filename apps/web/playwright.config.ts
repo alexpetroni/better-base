@@ -4,9 +4,9 @@ import { E2E_STRIPE_WEBHOOK_SECRET, siteDatabaseUrl } from './e2e/env.ts';
 // One build serves both sites: SITE_ID is read at runtime, so we start two
 // preview servers from the same output. `pnpm test:e2e` builds first.
 // Each server gets its own site database (auth sessions live in the DB).
-// EMAIL_DRYRUN, an EMPTY STRIPE_SECRET_KEY and the MOCK chat provider are
-// forced: an e2e run must never deliver real email, call Stripe, or call an
-// LLM (CHAT_PROVIDER=mock with an empty key can never reach Anthropic).
+// EMAIL_DRYRUN, an EMPTY STRIPE_SECRET_KEY and the MOCK chat and courier
+// providers are forced: an e2e run must never deliver real email, call
+// Stripe, an LLM or a courier API.
 // Analytics points at the app's OWN origin so nothing ever leaves localhost:
 // the script URL 404s harmlessly except in analytics-consent.e2e.ts, which
 // intercepts it to prove the consent gating end-to-end.
@@ -19,6 +19,10 @@ function siteEnv(siteId: 'sleep' | 'life', port: number) {
 		STRIPE_WEBHOOK_SECRET: E2E_STRIPE_WEBHOOK_SECRET,
 		CHAT_PROVIDER: 'mock',
 		ANTHROPIC_API_KEY: '',
+		COURIER_PROVIDER: 'mock',
+		SAMEDAY_USERNAME: '',
+		SAMEDAY_PASSWORD: '',
+		SAMEDAY_PICKUP_POINT: '',
 		PUBLIC_ANALYTICS_PROVIDER: 'plausible',
 		PUBLIC_ANALYTICS_HOST: `http://localhost:${port}`,
 		PUBLIC_ANALYTICS_SITE_ID: siteId === 'sleep' ? 'bettersleep.ro' : 'betterlife.ro'

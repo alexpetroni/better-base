@@ -23,6 +23,37 @@ export type TransitionResult =
 	| { ok: false; error: 'not-found' }
 	| { ok: false; error: 'illegal-transition'; from: FulfillmentStatus; to: FulfillmentStatus };
 
+/**
+ * Apply one validated transition inside the CALLER's transaction. The caller
+ * must already hold the order's row lock (`FOR UPDATE`) and pass the locked
+ * row — this is the shared core of `transitionFulfillment` and the shipment
+ * service (AWB generation and the refund rule move the same column).
+ */
+export async function applyFulfillmentTransitionInTx(
+	tx: DbTx,
+	order: Pick<OrderRow, 'id' | 'fulfillmentStatus'>,
+	to: FulfillmentStatus,
+	by: TransitionActor
+): Promise<TransitionResult> {
+	const from = order.fulfillmentStatus;
+	if (!canTransition(from, to)) return { ok: false, error: 'illegal-transition', from, to };
+
+	const [updated] = await tx
+		.update(orders)
+		.set({ fulfillmentStatus: to })
+		.where(eq(orders.id, order.id))
+		.returning();
+	const event = await appendOrderEvent(tx, {
+		orderId: order.id,
+		kind: 'fulfillment-transition',
+		actor: by.actor,
+		fromStatus: from,
+		toStatus: to,
+		note: by.note
+	});
+	return { ok: true, order: updated, event };
+}
+
 export async function transitionFulfillment(
 	deps: { db: Db },
 	orderId: string,
@@ -34,23 +65,7 @@ export async function transitionFulfillment(
 		// revalidates against the state the first one committed.
 		const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update');
 		if (!order) return { ok: false, error: 'not-found' };
-		const from = order.fulfillmentStatus;
-		if (!canTransition(from, to)) return { ok: false, error: 'illegal-transition', from, to };
-
-		const [updated] = await tx
-			.update(orders)
-			.set({ fulfillmentStatus: to })
-			.where(eq(orders.id, orderId))
-			.returning();
-		const event = await appendOrderEvent(tx, {
-			orderId,
-			kind: 'fulfillment-transition',
-			actor: by.actor,
-			fromStatus: from,
-			toStatus: to,
-			note: by.note
-		});
-		return { ok: true, order: updated, event };
+		return applyFulfillmentTransitionInTx(tx, order, to, by);
 	});
 }
 
