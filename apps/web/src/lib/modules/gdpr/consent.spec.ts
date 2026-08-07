@@ -4,6 +4,7 @@ import {
 	CONSENT_COOKIE,
 	CONSENT_MAX_AGE_SECONDS,
 	consentCookieString,
+	consentFromCookieHeader,
 	parseCookieConsent
 } from './consent.ts';
 
@@ -27,6 +28,21 @@ describe('analyticsAllowed — the analytics hook point', () => {
 		expect(analyticsAllowed('granted')).toBe(true);
 		expect(analyticsAllowed('denied')).toBe(false);
 		expect(analyticsAllowed(null)).toBe(false); // no decision = no analytics
+	});
+});
+
+describe('consentFromCookieHeader', () => {
+	it('finds the decision inside a document.cookie-style header', () => {
+		expect(consentFromCookieHeader(`cart=abc; ${CONSENT_COOKIE}=granted; x=1`)).toBe('granted');
+		expect(consentFromCookieHeader(`${CONSENT_COOKIE}=denied`)).toBe('denied');
+	});
+
+	it('maps a missing or mangled cookie to "not decided"', () => {
+		expect(consentFromCookieHeader('')).toBeNull();
+		expect(consentFromCookieHeader('cart=abc; x=1')).toBeNull();
+		expect(consentFromCookieHeader(`${CONSENT_COOKIE}=maybe`)).toBeNull();
+		// A cookie whose name merely ends with ours must not match.
+		expect(consentFromCookieHeader(`not_${CONSENT_COOKIE}=granted`)).toBeNull();
 	});
 });
 

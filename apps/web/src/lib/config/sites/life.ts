@@ -22,7 +22,8 @@ export const lifeSite: SiteConfig = {
 	],
 	footerLinks: [
 		{ label: 'Politica de confidențialitate', href: '/pagini/politica-de-confidentialitate' },
-		{ label: 'Termeni și condiții', href: '/pagini/termeni-si-conditii' }
+		{ label: 'Termeni și condiții', href: '/pagini/termeni-si-conditii' },
+		{ label: 'Politica de cookie-uri', href: '/pagini/politica-de-cookie-uri' }
 	],
 	chatPersonaKey: 'life-coach',
 	chatWidget: true,

@@ -8,6 +8,18 @@
 
 export const PRIVACY_PAGE_SLUG = 'politica-de-confidentialitate';
 export const TERMS_PAGE_SLUG = 'termeni-si-conditii';
+export const COOKIE_PAGE_SLUG = 'politica-de-cookie-uri';
+
+/**
+ * Pages that must carry the trader-identification block (rendered from
+ * /admin/settings by the route, NOT pasted into the markdown — pasted copies
+ * would drift from the settings the footer shows).
+ */
+export const LEGAL_PAGE_SLUGS: readonly string[] = [
+	PRIVACY_PAGE_SLUG,
+	TERMS_PAGE_SLUG,
+	COOKIE_PAGE_SLUG
+];
 
 export const DEFAULT_PAGES = [
 	{
@@ -75,5 +87,27 @@ Conținutul site-ului nu poate fi reprodus fără acord prealabil scris.
 ## Modificări
 
 Putem actualiza acești termeni; versiunea curentă este întotdeauna cea publicată pe această pagină.`
+	},
+	{
+		id: 'seed-page-cookies',
+		slug: COOKIE_PAGE_SLUG,
+		title: 'Politica de cookie-uri',
+		seoDescription:
+			'Ce cookie-uri folosește acest site, în ce scop, cât timp și cum îți poți schimba oricând decizia privind analiza.',
+		bodyMd: `_Ultima actualizare: august 2026. Acest text este un model de lucru și trebuie revizuit de un consilier juridic înainte de lansare._
+
+## Ce sunt cookie-urile
+
+Cookie-urile sunt fișiere text de mici dimensiuni stocate de browser la cererea unui site. Acest site folosește cookie-uri strict necesare pentru funcționare (coșul de cumpărături, decizia ta de consimțământ, sesiunea asistentului virtual și sesiunea de administrare pentru personal).
+
+Lista completă a cookie-urilor pe care le setăm — cu scopul și durata fiecăruia — este afișată automat în tabelul de mai jos și reflectă întotdeauna versiunea curentă a site-ului.
+
+## Analiza de trafic
+
+Scripturile de analiză nu se încarcă decât după acordul tău, exprimat prin bannerul de consimțământ sau prin secțiunea de preferințe de mai jos. Îți poți retrage acordul oricând din aceeași secțiune; după retragere niciun script de analiză nu se mai încarcă.
+
+## Cum ștergi cookie-urile din browser
+
+Poți șterge oricând cookie-urile deja stocate din setările browserului tău (Ștergere date de navigare / Clear browsing data). Blocarea cookie-urilor strict necesare poate afecta funcționarea coșului de cumpărături.`
 	}
 ] as const;

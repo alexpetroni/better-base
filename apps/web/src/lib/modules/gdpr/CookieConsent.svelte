@@ -1,10 +1,17 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { COOKIE_PAGE_SLUG } from '$lib/modules/pages';
 	import { m } from '$lib/paraglide/messages';
 	import { consentCookieString, type CookieConsentValue } from './consent.ts';
 
 	// `initial` is the server-read cookie value: null = not decided yet.
-	let { initial }: { initial: CookieConsentValue | null } = $props();
+	// `onchange` lets the layout react to a decision made here (it feeds the
+	// consent-gated AnalyticsLoader without a reload).
+	let {
+		initial,
+		onchange
+	}: { initial: CookieConsentValue | null; onchange?: (value: CookieConsentValue) => void } =
+		$props();
 
 	// The server-read cookie is only the seed; later changes are local decisions.
 	// svelte-ignore state_referenced_locally
@@ -14,6 +21,7 @@
 	function decide(value: CookieConsentValue) {
 		document.cookie = consentCookieString(value);
 		decision = value;
+		onchange?.(value);
 	}
 
 	// Publish the banner's height as --cookie-banner-h so other fixed-bottom UI
@@ -46,10 +54,7 @@
 		<div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3">
 			<p class="text-sm text-(--color-ink)">
 				{m.consent_text()}
-				<a
-					href={resolve('/(public)/pagini/[slug]', { slug: 'politica-de-confidentialitate' })}
-					class="underline"
-				>
+				<a href={resolve('/(public)/pagini/[slug]', { slug: COOKIE_PAGE_SLUG })} class="underline">
 					{m.consent_more()}
 				</a>
 			</p>
@@ -76,7 +81,7 @@
 {/if}
 
 <!--
-	Analytics hook point: when an analytics script ships, load it from here —
-	only when `analyticsAllowed(decision)` is true — so consent stays enforced
-	in exactly one place.
+	The analytics script itself is injected by AnalyticsLoader in the (public)
+	layout, gated on `analyticsAllowed(decision)`; this banner only surfaces
+	the decision (via the cookie + `onchange`).
 -->
