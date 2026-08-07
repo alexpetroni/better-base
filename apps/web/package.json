@@ -19,6 +19,8 @@
 		"test:e2e": "npm run build && playwright install chromium && playwright test",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
+		"db:status": "node scripts/migrate-status.ts",
+		"launch:check": "node scripts/launch-check.ts",
 		"db:seed": "node scripts/seed.ts",
 		"storage:init": "node scripts/storage-init.ts",
 		"chat:prune": "node scripts/chat-prune.ts",

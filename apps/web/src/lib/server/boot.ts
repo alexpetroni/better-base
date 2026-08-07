@@ -4,22 +4,13 @@
  * misconfigured deploy refuses to boot with one clear message instead of
  * booting "healthy" and 500ing on first use. Framework-free: the env record
  * is passed in (hooks.server.ts passes $env/dynamic/private + PUBLIC_SITE_URL).
+ *
+ * The variable list itself lives in `env-matrix.ts`, shared with the
+ * `pnpm launch:check` preflight — add a variable there and both see it.
  */
+import { ENV_MATRIX } from './env-matrix.ts';
 
-export const REQUIRED_BOOT_ENV = [
-	'SITE_ID',
-	'DATABASE_URL',
-	'PUBLIC_SITE_URL',
-	'BETTER_AUTH_SECRET',
-	'TOKEN_SECRET',
-	'S3_ENDPOINT',
-	'S3_ACCESS_KEY',
-	'S3_SECRET_KEY',
-	'S3_BUCKET',
-	'IMGPROXY_URL',
-	'IMGPROXY_KEY',
-	'IMGPROXY_SALT'
-] as const;
+export const REQUIRED_BOOT_ENV = ENV_MATRIX.filter((spec) => spec.boot).map((spec) => spec.name);
 
 /** Every problem found, or an empty list when the env is boot-worthy. */
 export function bootEnvProblems(env: Record<string, string | undefined>): string[] {
