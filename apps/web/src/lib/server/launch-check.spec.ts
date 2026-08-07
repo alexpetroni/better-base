@@ -195,6 +195,21 @@ describe('launch:check rules', () => {
 			'ANTHROPIC_API_KEY is required when CHAT_PROVIDER=anthropic'
 		]);
 	});
+
+	it('flags a half-configured analytics provider (it would 500 every public page)', () => {
+		const half = { ...devEnv(), PUBLIC_ANALYTICS_PROVIDER: 'plausible' };
+		expect(launchCheckProblems(half, { target: 'node', dev: true })).toEqual([
+			'PUBLIC_ANALYTICS_PROVIDER=plausible requires PUBLIC_ANALYTICS_HOST and PUBLIC_ANALYTICS_SITE_ID to be set'
+		]);
+
+		const full = {
+			...devEnv(),
+			PUBLIC_ANALYTICS_PROVIDER: 'plausible',
+			PUBLIC_ANALYTICS_HOST: 'https://plausible.io',
+			PUBLIC_ANALYTICS_SITE_ID: 'bettersleep.ro'
+		};
+		expect(launchCheckProblems(full, { target: 'node', dev: true })).toEqual([]);
+	});
 });
 
 describe('env matrix single-sourcing', () => {

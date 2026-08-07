@@ -12,6 +12,7 @@
  * just must never LAUNCH on them.
  */
 import { resolveSiteConfig } from '../config/index.ts';
+import { selectAnalyticsProvider } from '../modules/analytics/server.ts';
 import { imgproxyConfigFromEnv, storageConfigFromEnv } from '../modules/media/env.ts';
 import { buildImgUrl, imgproxyPath } from '../modules/media/imgproxy.ts';
 import { createStorage } from '../modules/media/storage.ts';
@@ -49,6 +50,14 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 	// re-derives the same rule from the same env.
 	if (env.CHAT_PROVIDER === 'anthropic' && !env.ANTHROPIC_API_KEY) {
 		problems.push('ANTHROPIC_API_KEY is required when CHAT_PROVIDER=anthropic');
+	}
+
+	// A half-configured analytics provider would 500 every public page load —
+	// surface it here with the seam's own error message.
+	try {
+		selectAnalyticsProvider(env);
+	} catch (cause) {
+		problems.push(cause instanceof Error ? cause.message : String(cause));
 	}
 
 	if (opts.dev) return problems;
