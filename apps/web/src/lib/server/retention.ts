@@ -8,6 +8,7 @@
 import type { Db } from '../db/client.ts';
 import { loginAttempts } from '../modules/auth/schema.ts';
 import { CHAT_RETENTION_DAYS, pruneChatSessions } from '../modules/chat/service.ts';
+import { NURTURE_RETENTION_DAYS, pruneNurtureEnrollments } from '../modules/nurture/service.ts';
 import { PROCESSED_EVENTS_RETENTION_DAYS, pruneProcessedEvents } from './event-ledger/core.ts';
 import { pruneStaleRateLimits } from './rate-limit/core.ts';
 import { rateLimits } from './rate-limit/schema.ts';
@@ -21,8 +22,11 @@ export interface RetentionSweepResult {
 	loginRateLimitRows: number;
 	/** Webhook idempotency-ledger rows past the redelivery window. */
 	processedEventRows: number;
+	/** Closed nurture enrollments (sends cascade) past their window. */
+	nurtureEnrollmentRows: number;
 	retentionDays: number;
 	ledgerRetentionDays: number;
+	nurtureRetentionDays: number;
 }
 
 /**
@@ -44,6 +48,7 @@ export async function runRetentionSweep(
 	const ledgerCutoff = new Date(
 		now.getTime() - PROCESSED_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000
 	);
+	const nurtureCutoff = new Date(now.getTime() - NURTURE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 	const chat = await pruneChatSessions(db, now);
 	return {
 		sessions: chat.sessions,
@@ -51,8 +56,10 @@ export async function runRetentionSweep(
 		publicEmailRateLimitRows: await pruneStaleRateLimits(db, rateLimits, cutoff),
 		loginRateLimitRows: await pruneStaleRateLimits(db, loginAttempts, cutoff),
 		processedEventRows: await pruneProcessedEvents(db, ledgerCutoff),
+		nurtureEnrollmentRows: await pruneNurtureEnrollments(db, nurtureCutoff),
 		retentionDays: CHAT_RETENTION_DAYS,
-		ledgerRetentionDays: PROCESSED_EVENTS_RETENTION_DAYS
+		ledgerRetentionDays: PROCESSED_EVENTS_RETENTION_DAYS,
+		nurtureRetentionDays: NURTURE_RETENTION_DAYS
 	};
 }
 
@@ -62,6 +69,7 @@ export function formatRetentionSweep(r: RetentionSweepResult): string {
 		`retention sweep — deleted ${r.sessions} session(s) older than ${r.retentionDays} days, ` +
 		`${r.chatRateLimitRows} chat / ${r.publicEmailRateLimitRows} public-email / ` +
 		`${r.loginRateLimitRows} login rate-limit row(s), ` +
-		`${r.processedEventRows} processed-event row(s) older than ${r.ledgerRetentionDays} days`
+		`${r.processedEventRows} processed-event row(s) older than ${r.ledgerRetentionDays} days, ` +
+		`${r.nurtureEnrollmentRows} closed nurture enrollment(s) older than ${r.nurtureRetentionDays} days`
 	);
 }
