@@ -61,6 +61,9 @@ export default async function globalSetup() {
 			await db.execute(sql`delete from media`);
 			// Funnel leftovers: results reference subscribers, so they go first.
 			await db.execute(sql`delete from quiz_results`);
+			// Nurture sequences cascade enrollments + sends; a dev-db `db:seed`
+			// could have left sequences that would enroll confirm-flow subscribers.
+			await db.execute(sql`delete from nurture_sequences`);
 			await db.execute(sql`delete from subscribers`);
 			await db.execute(sql`delete from email_log`);
 			// Chat leftovers: hourly rate-limit counters outlive a test cycle.

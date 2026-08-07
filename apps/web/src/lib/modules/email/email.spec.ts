@@ -46,6 +46,25 @@ describe('email templates', () => {
 		expect(rendered.text).toContain('Scor: 7\n');
 	});
 
+	it('renders the nurture template with the mandatory unsubscribe link in html AND text', () => {
+		const rendered = renderEmailTemplate('nurture', {
+			siteName: 'Better Sleep',
+			subject: 'Bine ai venit & spor',
+			paragraphs: ['Primul <paragraf>.', 'Al doilea.'],
+			cta: { label: 'Fă testul', url: 'https://example.ro/quiz/evaluare-somn' },
+			unsubscribeUrl: 'https://example.ro/unsubscribe/tok-123'
+		});
+		expect(rendered.subject).toBe('Bine ai venit & spor');
+		expect(rendered.html).toContain('Primul &lt;paragraf&gt;.');
+		expect(rendered.html).toContain('https://example.ro/quiz/evaluare-somn');
+		// Marketing mail: the unsubscribe link is not optional.
+		expect(rendered.html).toContain('https://example.ro/unsubscribe/tok-123');
+		expect(rendered.text).toContain(
+			'Dezabonează-te oricând: https://example.ro/unsubscribe/tok-123'
+		);
+		expect(rendered.text).toContain('Fă testul: https://example.ro/quiz/evaluare-somn');
+	});
+
 	it('escapes HTML in interpolated data', () => {
 		const rendered = renderEmailTemplate('newsletter-confirm', {
 			siteName: '<script>alert(1)</script>',
