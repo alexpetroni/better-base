@@ -26,6 +26,21 @@ serverless driver speaks Postgres over a WebSocket proxy, and that proxy runs lo
    unchanged, pointing at the existing `db` service. Configure the driver in tests via
    `neonConfig` (`wsProxy`, `useSecureWebSocket=false`, `pipelineConnect=false` as the
    local proxy requires). Document the exact commands in `DEPLOYMENT.md` §12.
+
+   **Verified on this machine (2026-08-07): `ghcr.io/neondatabase/wsproxy` and
+   `ghcr.io/neondatabase/neon_local` are NOT anonymously pullable** (`denied`), under any
+   tag tried, from ghcr or docker.io — do not burn time on a pull. What the phase needs is
+   only a WebSocket↔TCP bridge in front of Postgres. Two workable routes, pick one and say
+   why in the module/compose comment:
+   - **Build the official proxy from source** — `github.com/neondatabase/wsproxy` (Go,
+     `master` reachable) via a small `docker/wsproxy/Dockerfile` with a pinned commit. Most
+     faithful to the real transport.
+   - **A ~40-line Node bridge** vendored under `docker/` or `apps/web/scripts/` (`ws` +
+     `node:net`), run as the compose service. Fewer moving parts, no Go toolchain, and it
+     is our own code to debug.
+
+   If neither can be made to work, that is a genuine BLOCKER — write it up rather than
+   quietly downgrading the phase to a `pg`-driver test wearing a neon label.
 2. **`pnpm test:neon`**: runs the FULL unit+integration suite with `DB_DRIVER=neon`
    against that stack. It must be one command, and it must fail loudly (not skip) if the
    proxy is not up.
