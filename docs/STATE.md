@@ -1,4 +1,98 @@
-# STATE — after order lifecycle (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after the fiscal record (2026-08-07, branch `feat/vercel-neon`)
+
+## Invoices part 1 — the fiscal record: numbering, snapshot, VAT, storno (2026-08-07, NEXT-6)
+
+`modules/invoice` owns the DATA of Romanian invoicing; NEXT-7 renders/delivers
+the document and must need nothing beyond what is stored here. Migration
+`0016_special_ken_ellis` (tables `invoices`, `invoice_lines`, `invoice_series`;
+`orders.billing_company` jsonb; append-only triggers). No new env vars. One new
+setting key: `invoice.vatUnregisteredMention` (default „Neplătitor de TVA”).
+
+- **Append-only record** — `invoices` + `invoice_lines` store a COMPLETE
+  snapshot at issue time: issuer identification copied from settings (a later
+  settings edit cannot rewrite history — proven by test), buyer (name, email,
+  flattened shipping address, optional B2B company fields), series/number/
+  display number (`BSL-0042`), issue = due date (orders are prepaid), per-line
+  qty/unit-price/VAT-rate-bp/net/vat/gross and summed totals, `mentions`
+  (neplătitor mention + payment-terms note). Immutability is enforced at the
+  DB level — `BEFORE UPDATE OR DELETE` triggers on both tables raise (in
+  migration 0016; TRUNCATE deliberately stays possible for the test harness)
+  — and at the service level (no update/delete API). The `orders` FK has no
+  cascade, so an invoiced order cannot be deleted. GDPR erase (`modules/gdpr`)
+  now also nulls `orders.billing_company` but leaves invoices intact
+  (Legea 82/1991 art. 25 retention, GDPR art. 17(3)(b); the erase summary/CLI
+  reports `invoicesRetained`) — decision + basis in `modules/invoice/README.md`.
+- **Gapless race-free numbering** — `invoice_series` (series PK, next_number);
+  allocation is `UPDATE … SET next_number = next_number + 1 … RETURNING` so
+  concurrent issuances serialize on the row lock INSIDE the issuing
+  transaction: rollback returns the number (no gap), unique `(series, number)`
+  backstops duplicates. The series row is created on first use from
+  `invoice.seriesPrefix`/`invoice.nextNumber` settings (so a series can
+  continue off-app numbering); afterwards the ROW is the authority — proven by
+  a test that edits the setting and issues again. Race test: 8 truly
+  concurrent issuances → consecutive numbers, then continuation; green on
+  `pg` AND `neon` drivers.
+- **VAT in integer bani** — `modules/invoice/vat.ts` (pure): catalog prices
+  are gross (what Stripe charged), VAT is EXTRACTED per line —
+  `vat = gross·r/(10000+r)` rounded HALF-UP per line, totals = sums of lines
+  (per-line is what RO practice/Ordinul 2634/2015 expects; rationale + the
+  pinned case where total-rounding disagrees are in the README and
+  `vat.spec.ts`). `company.vatRegistered=false` ⇒ 0% lines + the
+  `invoice.vatUnregisteredMention` setting snapshotted into `mentions`.
+- **Automatic idempotent issuance** — the webhook issues the invoice INSIDE
+  the same `runOnce` ledger transaction that creates the order (paid orders
+  only), so a redelivery/resend cannot double-issue (partial unique index
+  `(order_id) WHERE kind='invoice'` backstops). `charge.refunded` issues the
+  storno the same way: a NEW document, own number in the same series,
+  `storno_of_invoice_id` → original, lines NEGATE the original's stored
+  amounts (never recomputed — exact reversal; one storno per invoice by
+  unique index). Issuance failure (issuer settings unset/placeholder —
+  `REQUIRED_ISSUER_SETTINGS`) never fails the order: recorded as
+  `invoice-failed`/`storno-failed` on `order_events`, naming the missing keys.
+- **B2B capture** — optional company fields (name/CUI/Reg. Com.) on the cart
+  checkout form (`parseBuyerCompanyForm`: all-empty ⇒ consumer sale, CUI shape
+  validated via the new `$lib/util/cui.ts` CUI_PATTERN, name required if any
+  field set), carried in session metadata key `company` (compact `{n,c,r}`),
+  stored on `orders.billing_company`, snapshotted into the invoice buyer
+  fields. Erased on GDPR anonymization; retained on the invoice.
+- **Admin surface** — orders list: new filter `invoice-missing` (paid or
+  refunded without invoice, or refunded without storno) + amber „fără
+  factură” badge; `listOrders` now left-joins the fiscal documents and
+  returns `invoiceNumber`/`stornoNumber` per row (`OrderListRow`). Order
+  detail: fiscal-documents box (number, kind, date, gross) and the one-click
+  `?/issueInvoice` action → `ensureInvoicesForOrder` (locks the order row
+  FOR UPDATE — safe against a racing webhook redelivery — issues whatever is
+  missing: invoice, plus storno for refunded orders; admin-role re-checked in
+  the handler). New order-event kinds rendered: `invoice-issued`,
+  `invoice-failed`, `storno-issued`, `storno-failed`.
+- **Module boundaries kept honest** — invoice/service writes `order_events`
+  via schema (documented: importing the shop service barrel would cycle);
+  webhook imports `$lib/modules/invoice/server` + `$lib/modules/settings/server`;
+  CUI_PATTERN moved from the settings registry to `$lib/util/cui.ts` because
+  e2e helpers import `shop/checkout.ts` outside Vite (no `$lib` there).
+- Tests — `vat.spec.ts` (rate table incl. the exact-.5 tie at 3 bani/20%, the
+  per-line vs per-total divergence case, integer guards); `invoice.spec.ts`
+  (race; snapshot incl. later-settings-edit immunity; neplătitor; webhook
+  exactly-one-invoice under redelivery AND dashboard resend; storno negation
+  with original bit-for-bit unchanged; DB-level UPDATE/DELETE rejection incl.
+  drizzle-level and order-delete FK; failure → `invoice-failed` note →
+  work-queue filter → retry-after-fix → idempotent second click; refund
+  without invoice → `storno-failed` → retry issues both; erase leaves the
+  snapshot readable and reports the retained count); `orders-page.spec.ts`
+  (the REAL `?/issueInvoice` action: editor 403 writes nothing, no-settings
+  400 with trail entry, success + detail load shows the document);
+  `shop.spec.ts` updated: order-creation trail is now `created` +
+  `invoice-failed` (that spec runs settings-less on purpose — the failure
+  path is exercised by every legacy webhook test). e2e `global-setup` resets
+  order+fiscal tables AND `processed_events` via TRUNCATE (row DELETE is
+  trigger-blocked on invoices; the ledger row for the fixed per-site webhook
+  event id would make a rerun's first delivery a duplicate). `shop.e2e.ts`
+  had a STALE pre-NEXT-5 expectation (never rerun since — NEXT-5 had no e2e
+  deliverable): same-event-id redelivery now correctly expects
+  `duplicate-event`, and a new-event-id resend covers `duplicate-session`.
+  Verified: gate green (`lint`/`check`/`test:unit` 582), `test:neon` green
+  (582/582), migrate clean on fresh AND populated (2 pre-existing orders) DBs,
+  FULL e2e green on both sites (75 passed / 3 skipped).
 
 ## Order lifecycle: event ledger, fulfillment states, admin work queue (2026-08-07, NEXT-5)
 

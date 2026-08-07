@@ -48,12 +48,28 @@ list applies later to better-life (with its own domain/accounts).
       configure beyond the env vars.
 - [ ] Decision recorded: who answers GDPR requests, and the process for
       `pnpm subscriber:delete -- --email …` (who runs it, response deadline
-      30 days).
-- [ ] VAT/invoicing decision: current build does NOT issue invoices
-      (suggested next phase) — confirm the accountant's interim process for
-      Stripe orders. The invoice series, place of issue and VAT rate the
-      future invoicing phase will consume are set at `/admin/settings` →
-      "Facturare" (launch:check requires them saved).
+      30 days). Note for the answer template: erasure anonymizes account,
+      order-contact and marketing data but KEEPS issued invoices — legally
+      retained accounting records (GDPR art. 17(3)(b); see
+      `modules/invoice/README.md`); the CLI reports how many were kept.
+- [ ] VAT/invoicing: the app now ISSUES invoices automatically — every paid
+      Stripe order gets a numbered invoice in the declared series, and a
+      refund issues the storno (see `apps/web/src/lib/modules/invoice/`;
+      NEXT-7 adds the PDF/delivery). What remains human:
+      - fill in `/admin/settings` → "Facturare": series prefix, first number
+        (continue the accountant's interim numbering, or start a fresh
+        declared series at 1), place of issue, VAT rate, and — while the
+        entity is not VAT-registered — leave "Plătitor de TVA" unchecked so
+        invoices carry the neplătitor mention (launch:check enforces the
+        required ones);
+      - confirm with the accountant: the declared series/number regime, the
+        per-line VAT rounding documented in `modules/invoice/README.md`, and
+        how they receive the invoice data until NEXT-7 delivers documents
+        (admin order pages show number + totals today);
+      - orders paid before this phase went live have no invoice — the admin
+        work queue filter "Fără factură" lists them; issue each with the
+        one-click button on the order page if the accountant did not already
+        invoice them by hand.
 
 ## DNS & TLS
 
