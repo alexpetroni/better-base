@@ -1,6 +1,8 @@
 // Universal module barrel: the typed settings registry and its pure helpers,
 // safe to import from components and client code. Everything db-bound lives
 // behind `$lib/modules/settings/server` instead.
+export { default as LegalIdentity } from './LegalIdentity.svelte';
+export { displayCui, legalIdentity, type LegalIdentity as LegalIdentityFields } from './legal.ts';
 export {
 	clientSafeSettings,
 	isSettingGroup,
