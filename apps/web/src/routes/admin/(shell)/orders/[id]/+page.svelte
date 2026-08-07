@@ -27,6 +27,10 @@
 	function eventLabel(event: (typeof data.events)[number]): string {
 		if (event.kind === 'created') return m.admin_order_event_created();
 		if (event.kind === 'refund-marked') return m.admin_order_event_refund_marked();
+		if (event.kind === 'invoice-issued') return m.admin_order_event_invoice_issued();
+		if (event.kind === 'invoice-failed') return m.admin_order_event_invoice_failed();
+		if (event.kind === 'storno-issued') return m.admin_order_event_storno_issued();
+		if (event.kind === 'storno-failed') return m.admin_order_event_storno_failed();
 		if (event.kind === 'fulfillment-transition' && event.fromStatus && event.toStatus) {
 			return m.admin_order_event_fulfillment({
 				from: fulfillmentLabels[event.fromStatus](),
@@ -184,10 +188,62 @@
 			{/if}
 		</div>
 		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
+			<p class="mb-2 font-semibold">{m.admin_order_invoice()}</p>
+			{#if data.invoices.length === 0}
+				<p class="text-(--color-ink)/70" data-testid="order-invoice-none">
+					{m.admin_order_invoice_none()}
+				</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each data.invoices as doc (doc.id)}
+						<li data-testid="order-invoice" data-kind={doc.kind}>
+							<p class="font-mono font-semibold">{doc.displayNumber}</p>
+							<p class="text-xs text-(--color-ink)/60">
+								{doc.kind === 'storno'
+									? m.admin_order_invoice_kind_storno()
+									: m.admin_order_invoice_kind_invoice()}
+								· {formatDate(doc.issuedAt, 'medium-time')}
+								· {formatCents(doc.grossTotalCents, doc.currency)}
+							</p>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			{#if (data.order.status === 'paid' || data.order.status === 'refunded') && (data.invoices.length === 0 || (data.order.status === 'refunded' && !data.invoices.some((d) => d.kind === 'storno')))}
+				<form method="POST" action="?/issueInvoice" class="mt-3">
+					<button
+						type="submit"
+						data-testid="order-invoice-issue"
+						class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+					>
+						{m.admin_order_invoice_issue()}
+					</button>
+				</form>
+			{/if}
+			{#if form?.invoiceError}
+				<p class="mt-2 text-xs text-red-700" data-testid="order-invoice-error">
+					{m.admin_order_invoice_error()}
+					{form.invoiceDetail ? ` (${form.invoiceDetail})` : ''}
+				</p>
+			{/if}
+		</div>
+		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
 			<p class="mb-1 text-(--color-ink)/60">{m.admin_orders_col_date()}</p>
 			<p>{formatDate(data.order.createdAt, 'long-time')}</p>
 			<p class="mt-3 mb-1 text-(--color-ink)/60">{m.admin_orders_col_email()}</p>
 			<p data-testid="order-detail-email">{data.order.email}</p>
+			{#if data.order.billingCompany}
+				<p class="mt-3 mb-1 text-(--color-ink)/60">{m.admin_order_company()}</p>
+				<p data-testid="order-detail-company">
+					{[
+						data.order.billingCompany.name,
+						data.order.billingCompany.cui,
+						data.order.billingCompany.regCom
+					]
+						.filter(Boolean)
+						.join(' · ')}
+				</p>
+			{/if}
 		</div>
 		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
 			<p class="mb-1 text-(--color-ink)/60">{m.admin_order_shipping()}</p>

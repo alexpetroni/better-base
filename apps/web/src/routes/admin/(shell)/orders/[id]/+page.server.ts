@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
+import { ensureInvoicesForOrder, listInvoicesForOrder } from '$lib/modules/invoice/server';
 import { isFulfillmentStatus } from '$lib/modules/shop';
 import {
 	getOrderWithItems,
@@ -12,7 +13,11 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getOrderWithItems({ db: getDb() }, params.id);
 	if (!found) error(404);
-	return { ...found, events: await listOrderEvents({ db: getDb() }, params.id) };
+	return {
+		...found,
+		events: await listOrderEvents({ db: getDb() }, params.id),
+		invoices: await listInvoicesForOrder({ db: getDb() }, params.id)
+	};
 };
 
 export const actions: Actions = {
@@ -37,5 +42,22 @@ export const actions: Actions = {
 			return fail(400, { error: result.error, from: result.from, to: result.to });
 		}
 		return { transitioned: true, to };
+	},
+
+	/**
+	 * One-click (re)issue of the order's missing fiscal documents: the invoice
+	 * (when webhook issuance failed, e.g. on incomplete issuer settings) and
+	 * the storno for a refunded order. Idempotent — an already-complete order
+	 * is a no-op. Same defense-in-depth admin check as `transition`.
+	 */
+	issueInvoice: async ({ params, locals }) => {
+		if (locals.user?.role !== 'admin') error(403);
+
+		const result = await ensureInvoicesForOrder({ db: getDb() }, params.id, locals.user.email);
+		if (!result.ok) {
+			if (result.error === 'order-not-found') error(404);
+			return fail(400, { invoiceError: result.error, invoiceDetail: result.detail ?? '' });
+		}
+		return { invoiceIssued: true };
 	}
 };

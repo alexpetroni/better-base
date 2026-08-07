@@ -11,6 +11,8 @@ import {
 	transitionFulfillment
 } from '../../../../lib/modules/shop/fulfillment-service.ts';
 import type { FulfillmentStatus } from '../../../../lib/modules/shop/fulfillment.ts';
+import { invoices } from '../../../../lib/modules/invoice/schema.ts';
+import { siteSettings } from '../../../../lib/modules/settings/schema.ts';
 import { orderEvents, orders, type OrderRow } from '../../../../lib/modules/shop/schema.ts';
 import { listOrders } from '../../../../lib/modules/shop/webhook.ts';
 
@@ -55,6 +57,7 @@ let transitionAction: (event: {
 	params: { id: string };
 	locals: App.Locals;
 }) => Promise<unknown>;
+let issueInvoiceAction: (event: { params: { id: string }; locals: App.Locals }) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
 	return { user, settings: createSettingsLoader(() => db) };
@@ -132,6 +135,7 @@ beforeAll(async () => {
 	const detailPage = await import('./[id]/+page.server.ts');
 	detailLoad = detailPage.load;
 	transitionAction = detailPage.actions.transition as unknown as typeof transitionAction;
+	issueInvoiceAction = detailPage.actions.issueInvoice as unknown as typeof issueInvoiceAction;
 });
 
 afterAll(async () => {
@@ -332,5 +336,59 @@ describe('/admin/orders/[id] transition action', () => {
 		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
 		expect(result.status).toBe(400);
 		expect(result.data).toEqual({ error: 'invalid-status' });
+	});
+});
+
+describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () => {
+	it('editor: 403 before anything is written', async () => {
+		const order = await insertOrder({});
+		try {
+			await issueInvoiceAction({ params: { id: order.id }, locals: locals(EDITOR) });
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(403);
+		}
+		expect(await db.select().from(invoices).where(eq(invoices.orderId, order.id))).toEqual([]);
+	});
+
+	it('admin without issuer settings: 400 with the failure recorded on the trail', async () => {
+		const order = await insertOrder({});
+		const result = await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		expect(result.data).toMatchObject({ invoiceError: 'settings-incomplete' });
+		const trail = await db.select().from(orderEvents).where(eq(orderEvents.orderId, order.id));
+		expect(trail.map((e) => e.kind)).toEqual(['invoice-failed']);
+		expect(trail[0].actor).toBe(ADMIN.email);
+	});
+
+	it('admin with settings: issues the invoice, and the detail load returns it', async () => {
+		await db
+			.insert(siteSettings)
+			.values(
+				Object.entries({
+					'company.legalName': 'Better Sleep SRL',
+					'company.cui': 'RO12345678',
+					'company.regCom': 'J40/1234/2025',
+					'company.address': 'Str. Somnului 10, București',
+					'invoice.seriesPrefix': 'QUE'
+				}).map(([key, value]) => ({ key, value }))
+			)
+			.onConflictDoNothing();
+
+		const order = await insertOrder({});
+		const result = await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(result).toEqual({ invoiceIssued: true });
+
+		const data = (await detailLoad({
+			params: { id: order.id }
+		} as Parameters<DetailPage['load']>[0])) as {
+			invoices: Array<{ kind: string; displayNumber: string }>;
+			events: Array<Record<string, unknown>>;
+		};
+		expect(data.invoices).toHaveLength(1);
+		expect(data.invoices[0]).toMatchObject({ kind: 'invoice', displayNumber: 'QUE-0001' });
+		expect(data.events.some((e) => e.kind === 'invoice-issued')).toBe(true);
 	});
 });

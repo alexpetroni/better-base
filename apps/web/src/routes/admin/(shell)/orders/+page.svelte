@@ -31,9 +31,17 @@
 	const filters = $derived([
 		{ id: 'action', label: m.admin_orders_filter_action() },
 		{ id: 'oversold', label: m.admin_orders_filter_oversold() },
+		{ id: 'invoice-missing', label: m.admin_orders_filter_invoice_missing() },
 		{ id: 'all', label: m.admin_orders_filter_all() },
 		...FULFILLMENT_STATUSES.map((status) => ({ id: status, label: fulfillmentLabels[status]() }))
 	]);
+
+	/** Fiscal record incomplete: no invoice, or refunded without its storno. */
+	function invoiceMissing(order: (typeof data.orders)[number]): boolean {
+		if (order.status === 'paid') return !order.invoiceNumber;
+		if (order.status === 'refunded') return !order.invoiceNumber || !order.stornoNumber;
+		return false;
+	}
 </script>
 
 <svelte:head>
@@ -106,6 +114,14 @@
 								class="ml-1 rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800"
 							>
 								{m.admin_order_oversold()}
+							</span>
+						{/if}
+						{#if invoiceMissing(order)}
+							<span
+								data-testid="order-row-no-invoice"
+								class="ml-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+							>
+								{m.admin_order_invoice_missing_badge()}
 							</span>
 						{/if}
 					</td>
