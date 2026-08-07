@@ -185,7 +185,9 @@ const VALID_LAUNCH_VALUES: Partial<SiteSettings> = {
 	'legal.anpcSolUrl': 'https://ec.europa.eu/consumers/odr',
 	'invoice.seriesPrefix': 'BSL',
 	'invoice.issuerPlace': 'București',
-	'invoice.vatRateBp': 2100
+	'invoice.vatRateBp': 2100,
+	// NEXT-8: shipping must be a conscious pricing decision before launch.
+	'shop.shippingStandardPriceBani': 1990
 };
 
 beforeAll(async () => {

@@ -6,7 +6,8 @@ import {
 	pgTable,
 	primaryKey,
 	text,
-	timestamp
+	timestamp,
+	uniqueIndex
 } from 'drizzle-orm/pg-core';
 import { pillars } from '../../db/schema/core.ts';
 import { media } from '../media/schema.ts';
@@ -120,6 +121,14 @@ export const orders = pgTable(
 		 * webhook for manual follow-up — restock, partial refund, or apology.
 		 */
 		oversold: boolean('oversold').notNull().default(false),
+		/**
+		 * Shipping charged by Stripe on top of the goods, in bani (0 = free).
+		 * Kept separate from `amount_total_cents` (the grand total as charged)
+		 * because the invoice must carry shipping as its own VAT-bearing line.
+		 */
+		shippingCents: integer('shipping_cents').notNull().default(0),
+		/** Display name of the delivery option chosen at checkout ('' pre-NEXT-8). */
+		shippingName: text('shipping_name').notNull().default(''),
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
 		/** Optional company details for a B2B invoice, as entered at checkout. */
 		billingCompany: jsonb('billing_company').$type<BuyerCompany>(),
@@ -181,9 +190,47 @@ export const orderItems = pgTable(
 	]
 );
 
+/**
+ * One courier shipment (AWB) per order, created by the admin "generate AWB"
+ * action through the CourierProvider seam. The unique order id is the
+ * idempotency backstop — pressing the button twice can never register two
+ * shipments. `status` mirrors the courier's tracking state (normalized by the
+ * provider adapter); the cron sync polls rows still in flight
+ * (`registered`/`in-transit`) and stops once a terminal state is reached.
+ */
+export const shipments = pgTable(
+	'shipments',
+	{
+		id: text('id').primaryKey(),
+		orderId: text('order_id')
+			.notNull()
+			.references(() => orders.id, { onDelete: 'cascade' }),
+		/** Courier adapter that registered the AWB (`mock` | `sameday`). */
+		provider: text('provider').notNull(),
+		awb: text('awb').notNull(),
+		trackingUrl: text('tracking_url').notNull().default(''),
+		status: text('status', {
+			enum: ['registered', 'in-transit', 'delivered', 'returned', 'cancelled']
+		})
+			.notNull()
+			.default('registered'),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+		/** When the cron sync last polled this AWB; orders the per-run batch. */
+		lastSyncedAt: timestamp('last_synced_at', { withTimezone: true })
+	},
+	(table) => [
+		uniqueIndex('shipments_order_id_uq').on(table.orderId),
+		// The cron sync selects in-flight rows by status.
+		index('shipments_status_idx').on(table.status)
+	]
+);
+
 export type ProductRow = typeof products.$inferSelect;
 export type ProductStatus = ProductRow['status'];
 export type OrderRow = typeof orders.$inferSelect;
 export type OrderStatus = OrderRow['status'];
 export type OrderItemRow = typeof orderItems.$inferSelect;
 export type OrderEventRow = typeof orderEvents.$inferSelect;
+export type ShipmentRow = typeof shipments.$inferSelect;
+export type ShipmentStatus = ShipmentRow['status'];

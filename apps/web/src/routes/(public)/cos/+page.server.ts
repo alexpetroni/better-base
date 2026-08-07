@@ -3,7 +3,7 @@ import { env } from '$env/dynamic/public';
 import { getDb } from '$lib/db';
 import type { ImageSources } from '$lib/modules/media';
 import { imgSources, media } from '$lib/modules/media/server';
-import { removeFromCart, setCartQty } from '$lib/modules/shop';
+import { removeFromCart, setCartQty, shippingOptionsForCart } from '$lib/modules/shop';
 import {
 	createCheckoutFromCart,
 	getStripeGateway,
@@ -28,10 +28,11 @@ export interface CartPageLine {
 	cover: ImageSources | null;
 }
 
-export const load: PageServerLoad = async ({ cookies }) => {
+export const load: PageServerLoad = async ({ cookies, locals }) => {
 	const site = getSite();
 	const items = readCart(cookies);
 	const details = await loadCartDetails({ db: getDb() }, items, site.pillars);
+	const settings = await locals.settings();
 
 	const coverIds = details.lines
 		.map((l) => l.product.coverMediaId)
@@ -58,7 +59,14 @@ export const load: PageServerLoad = async ({ cookies }) => {
 		};
 	});
 
-	return { lines, totalCents: details.totalCents, currency: details.currency };
+	return {
+		lines,
+		totalCents: details.totalCents,
+		currency: details.currency,
+		// Settings-driven delivery choice, priced for THIS cart's goods total.
+		shippingOptions: shippingOptionsForCart(settings, details.totalCents),
+		shippingNote: settings['shop.shippingNote']
+	};
 };
 
 export const actions: Actions = {
@@ -79,7 +87,7 @@ export const actions: Actions = {
 		return { updated: true };
 	},
 
-	checkout: async ({ request, cookies }) => {
+	checkout: async ({ request, cookies, locals }) => {
 		const site = getSite();
 		// Optional B2B fields for the invoice; empty inputs mean a consumer sale.
 		const form = await request.formData();
@@ -105,7 +113,14 @@ export const actions: Actions = {
 				gateway: getStripeGateway(),
 				baseUrl: (env.PUBLIC_SITE_URL ?? '').replace(/\/$/, '')
 			},
-			{ items: readCart(cookies), sitePillarSlugs: site.pillars, buyerCompany: company.value }
+			{
+				items: readCart(cookies),
+				sitePillarSlugs: site.pillars,
+				shippingSettings: await locals.settings(),
+				// The standard option is the no-JS form's pre-checked default.
+				shippingOptionId: formStr(form, 'shippingOption') || 'standard',
+				buyerCompany: company.value
+			}
 		);
 		if (!outcome.ok) {
 			return fail(400, { checkoutError: outcome.error, detail: outcome.detail ?? '' });

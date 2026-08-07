@@ -89,6 +89,24 @@ export function createStripeGateway(
 					allowed_countries:
 						input.shippingCountries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[]
 				},
+				// The option was chosen in our cart, so the session carries exactly
+				// one fixed-amount rate — the charged total is fixed at creation.
+				...(input.shippingOption
+					? {
+							shipping_options: [
+								{
+									shipping_rate_data: {
+										display_name: input.shippingOption.displayName,
+										type: 'fixed_amount' as const,
+										fixed_amount: {
+											amount: input.shippingOption.amountCents,
+											currency: input.shippingOption.currency
+										}
+									}
+								}
+							]
+						}
+					: {}),
 				metadata: input.metadata
 			});
 			if (!session.url) throw new Error('Stripe did not return a Checkout URL');
@@ -115,6 +133,7 @@ function sessionView(session: Stripe.Checkout.Session): CheckoutSessionView {
 		status: session.status ?? 'open',
 		paymentStatus: session.payment_status,
 		amountTotalCents: session.amount_total,
+		shippingCents: session.shipping_cost?.amount_total ?? null,
 		currency: session.currency,
 		email: session.customer_details?.email ?? null,
 		metadata: session.metadata ?? {}

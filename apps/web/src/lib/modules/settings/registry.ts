@@ -193,7 +193,11 @@ export const SETTINGS_REGISTRY = {
 		clientSafe: false
 	},
 
-	// --- shop.* — declared here, consumed by the shipping phase -------------
+	// --- shop.* — shipping options offered at checkout (NEXT-8) -------------
+	// Two option slots: `standard` (always offered) and `express` (offered only
+	// while its name is non-empty). Prices are gross bani, charged by Stripe on
+	// top of the goods. The free threshold applies to the STANDARD option only —
+	// express stays a paid upgrade. See modules/shop/shipping.ts.
 	'shop.freeShippingThresholdBani': {
 		kind: 'bani',
 		default: 0,
@@ -201,6 +205,43 @@ export const SETTINGS_REGISTRY = {
 		launchRequired: false,
 		clientSafe: true
 	},
+	'shop.shippingStandardName': {
+		kind: 'text',
+		default: 'Curier standard',
+		launchRequired: false,
+		clientSafe: true
+	},
+	// Launch-required with no placeholder (like invoice.vatRateBp): shipping
+	// must be a conscious pricing decision, not free by accident — the operator
+	// has to save the rate (0 is a valid, deliberate "we ship free") before
+	// launch:check goes green.
+	'shop.shippingStandardPriceBani': {
+		kind: 'bani',
+		default: 0,
+		min: 0,
+		launchRequired: true,
+		clientSafe: true
+	},
+	'shop.shippingStandardEta': {
+		kind: 'text',
+		default: '1-3 zile lucrătoare',
+		launchRequired: false,
+		clientSafe: true
+	},
+	'shop.shippingExpressName': {
+		kind: 'text',
+		default: '',
+		launchRequired: false,
+		clientSafe: true
+	},
+	'shop.shippingExpressPriceBani': {
+		kind: 'bani',
+		default: 0,
+		min: 0,
+		launchRequired: false,
+		clientSafe: true
+	},
+	'shop.shippingExpressEta': { kind: 'text', default: '', launchRequired: false, clientSafe: true },
 	'shop.shippingNote': { kind: 'multiline', default: '', launchRequired: false, clientSafe: true }
 } as const satisfies Record<string, SettingSpec>;
 

@@ -97,6 +97,43 @@
 	</ul>
 
 	<form method="POST" action="?/checkout" use:singleSubmit class="mt-6">
+		<fieldset
+			class="mb-4 rounded border border-(--color-brand-soft) bg-white p-3 text-sm"
+			data-testid="cart-shipping"
+		>
+			<legend class="px-1 font-medium">{m.cart_shipping_heading()}</legend>
+			<div class="space-y-2">
+				{#each data.shippingOptions as option, i (option.id)}
+					<label class="flex items-center gap-2">
+						<input
+							type="radio"
+							name="shippingOption"
+							value={option.id}
+							checked={i === 0}
+							data-testid="cart-shipping-option"
+							data-option={option.id}
+							class="h-4 w-4 accent-(--color-brand)"
+						/>
+						<span class="grow">
+							{option.name}
+							{#if option.etaText}
+								<span class="text-(--color-ink)/60">({option.etaText})</span>
+							{/if}
+						</span>
+						<span class="font-semibold" data-testid="cart-shipping-price" data-option={option.id}>
+							{option.priceCents === 0
+								? m.cart_shipping_free()
+								: formatCents(option.priceCents, data.currency)}
+						</span>
+					</label>
+				{/each}
+			</div>
+			{#if data.shippingNote}
+				<p class="mt-2 text-xs text-(--color-ink)/60" data-testid="cart-shipping-note">
+					{data.shippingNote}
+				</p>
+			{/if}
+		</fieldset>
 		<details
 			open={!!form?.companyValues}
 			class="mb-4 rounded border border-(--color-brand-soft) bg-white p-3 text-sm"
@@ -163,6 +200,8 @@
 				{m.cart_err_company_name()}
 			{:else if form.checkoutError === 'company-cui'}
 				{m.cart_err_company_cui()}
+			{:else if form.checkoutError === 'invalid-shipping'}
+				{m.cart_err_shipping()}
 			{:else}
 				{m.cart_err_gateway()}
 			{/if}

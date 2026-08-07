@@ -24,6 +24,19 @@ export interface CheckoutLineItem {
 	qty: number;
 }
 
+/**
+ * The delivery option chosen in the cart, charged by Stripe on top of the
+ * goods as the session's single fixed-amount shipping option. Selection
+ * happens in OUR cart (settings-driven radio), so the charged total is fixed
+ * at session creation: goods total + `amountCents`.
+ */
+export interface CheckoutShippingOption {
+	/** Customer-facing name, ETA included (e.g. `Curier standard (1-3 zile)`). */
+	displayName: string;
+	amountCents: number;
+	currency: string;
+}
+
 export interface CheckoutSessionInput {
 	lineItems: CheckoutLineItem[];
 	/** May contain Stripe's `{CHECKOUT_SESSION_ID}` placeholder. */
@@ -31,6 +44,8 @@ export interface CheckoutSessionInput {
 	cancelUrl: string;
 	/** Countries shipping may be collected for (Stripe Checkout collects the address). */
 	shippingCountries: string[];
+	/** Absent only for carts created before shipping existed (NEXT-8). */
+	shippingOption?: CheckoutShippingOption;
 	metadata: Record<string, string>;
 }
 
@@ -39,7 +54,10 @@ export interface CheckoutSessionView {
 	url: string | null;
 	status: 'open' | 'complete' | 'expired';
 	paymentStatus: string;
+	/** Grand total as charged: goods + shipping. */
 	amountTotalCents: number | null;
+	/** The shipping part of the total; null when the session carried none. */
+	shippingCents: number | null;
 	currency: string | null;
 	email: string | null;
 	metadata: Record<string, string>;

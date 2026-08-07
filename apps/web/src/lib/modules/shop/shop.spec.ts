@@ -10,6 +10,7 @@ import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
 import { processedEvents } from '../../server/event-ledger/schema.ts';
 import { emailLog } from '../email/schema.ts';
+import { settingsDefaults } from '../settings/registry.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { media } from '../media/schema.ts';
 import { buildCartMetadata, createCheckoutFromCart, loadCartDetails } from './checkout.ts';
@@ -298,7 +299,9 @@ describe('cart details and checkout session', () => {
 					{ productId: a.id, qty: 2 },
 					{ productId: b.id, qty: 1 }
 				],
-				sitePillarSlugs: SLEEP_PILLARS
+				sitePillarSlugs: SLEEP_PILLARS,
+				shippingSettings: settingsDefaults(),
+				shippingOptionId: 'standard'
 			}
 		);
 		expect(outcome.ok).toBe(true);
@@ -324,14 +327,24 @@ describe('cart details and checkout session', () => {
 	it('refuses an empty cart and carts with unavailable products', async () => {
 		const empty = await createCheckoutFromCart(
 			{ db, gateway, baseUrl: 'https://example.ro' },
-			{ items: [], sitePillarSlugs: SLEEP_PILLARS }
+			{
+				items: [],
+				sitePillarSlugs: SLEEP_PILLARS,
+				shippingSettings: settingsDefaults(),
+				shippingOptionId: 'standard'
+			}
 		);
 		expect(!empty.ok && empty.error).toBe('empty-cart');
 
 		const out = await makeProduct({ name: 'Checkout epuizat', stock: 0 });
 		const unavailable = await createCheckoutFromCart(
 			{ db, gateway, baseUrl: 'https://example.ro' },
-			{ items: [{ productId: out.id, qty: 1 }], sitePillarSlugs: SLEEP_PILLARS }
+			{
+				items: [{ productId: out.id, qty: 1 }],
+				sitePillarSlugs: SLEEP_PILLARS,
+				shippingSettings: settingsDefaults(),
+				shippingOptionId: 'standard'
+			}
 		);
 		expect(!unavailable.ok && unavailable.error).toBe('unavailable');
 		expect(!unavailable.ok && unavailable.detail).toContain('Checkout epuizat');

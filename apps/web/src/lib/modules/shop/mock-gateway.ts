@@ -70,12 +70,15 @@ export function createMockStripeGateway(): MockStripeGateway {
 			const id = `cs_test_mock_${++seq}`;
 			const lines = input.lineItems.map((li) => ({ priceCents: li.unitAmountCents, qty: li.qty }));
 			const url = `${MOCK_CHECKOUT_URL_BASE}/${id}`;
+			const shippingCents = input.shippingOption?.amountCents ?? null;
 			sessions.set(id, {
 				id,
 				url,
 				status: 'open',
 				paymentStatus: 'unpaid',
-				amountTotalCents: cartTotalCents(lines),
+				// Like Stripe: the charged total is goods plus the shipping option.
+				amountTotalCents: cartTotalCents(lines) + (shippingCents ?? 0),
+				shippingCents,
 				currency: input.lineItems[0]?.currency ?? 'ron',
 				email: null,
 				metadata: input.metadata,

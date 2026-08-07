@@ -32,6 +32,12 @@
 		'invoice.paymentTermsNote': m.admin_settings_invoice_payment_terms,
 		'invoice.vatUnregisteredMention': m.admin_settings_invoice_vat_unregistered_mention,
 		'shop.freeShippingThresholdBani': m.admin_settings_shop_free_shipping,
+		'shop.shippingStandardName': m.admin_settings_shop_shipping_standard_name,
+		'shop.shippingStandardPriceBani': m.admin_settings_shop_shipping_standard_price,
+		'shop.shippingStandardEta': m.admin_settings_shop_shipping_standard_eta,
+		'shop.shippingExpressName': m.admin_settings_shop_shipping_express_name,
+		'shop.shippingExpressPriceBani': m.admin_settings_shop_shipping_express_price,
+		'shop.shippingExpressEta': m.admin_settings_shop_shipping_express_eta,
 		'shop.shippingNote': m.admin_settings_shop_shipping_note
 	};
 

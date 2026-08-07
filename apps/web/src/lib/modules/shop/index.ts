@@ -28,5 +28,16 @@ export type {
 	OrderStatus,
 	ProductRow,
 	ProductStatus,
+	ShipmentRow,
+	ShipmentStatus,
 	ShippingAddress
 } from './schema.ts';
+export {
+	findShippingOption,
+	shippingDisplayName,
+	shippingOptionsForCart,
+	SHIPPING_OPTION_IDS,
+	type ShippingOption,
+	type ShippingOptionId,
+	type ShippingSettings
+} from './shipping.ts';

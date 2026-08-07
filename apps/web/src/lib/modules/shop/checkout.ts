@@ -6,6 +6,14 @@ import { cartTotalCents, type CartItem } from './cart.ts';
 import type { StripeGateway } from './gateway.ts';
 import { productPillars, products, type BuyerCompany, type ProductRow } from './schema.ts';
 import { isOutOfStock } from './service.ts';
+import {
+	buildShippingMetadata,
+	findShippingOption,
+	SHIPPING_METADATA_KEY,
+	shippingDisplayName,
+	shippingOptionsForCart,
+	type ShippingSettings
+} from './shipping.ts';
 
 /**
  * Checkout-session creation from the cookie cart. Prices come from the
@@ -176,11 +184,23 @@ export async function loadCartDetails(
 
 export type CheckoutOutcome =
 	| { ok: true; sessionId: string; url: string }
-	| { ok: false; error: 'empty-cart' | 'unavailable' | 'gateway'; detail?: string };
+	| {
+			ok: false;
+			error: 'empty-cart' | 'unavailable' | 'invalid-shipping' | 'gateway';
+			detail?: string;
+	  };
 
 export async function createCheckoutFromCart(
 	deps: CheckoutDeps,
-	input: { items: CartItem[]; sitePillarSlugs: string[]; buyerCompany?: BuyerCompany | null }
+	input: {
+		items: CartItem[];
+		sitePillarSlugs: string[];
+		/** The `shop.*` settings the shipping options derive from. */
+		shippingSettings: ShippingSettings;
+		/** Option id chosen in the cart; validated against the offered options. */
+		shippingOptionId: string;
+		buyerCompany?: BuyerCompany | null;
+	}
 ): Promise<CheckoutOutcome> {
 	const details = await loadCartDetails(deps, input.items, input.sitePillarSlugs);
 	if (details.lines.length === 0) return { ok: false, error: 'empty-cart' };
@@ -194,6 +214,13 @@ export async function createCheckoutFromCart(
 		};
 	}
 
+	// Priced HERE, from settings and this cart's goods total — never from the
+	// client. An id that is not currently offered (e.g. express got disabled
+	// while the cart page was open) is refused, not silently substituted.
+	const options = shippingOptionsForCart(input.shippingSettings, details.totalCents);
+	const shipping = findShippingOption(options, input.shippingOptionId);
+	if (!shipping) return { ok: false, error: 'invalid-shipping', detail: input.shippingOptionId };
+
 	try {
 		const session = await deps.gateway.createCheckoutSession({
 			lineItems: details.lines.map((l) => ({
@@ -206,6 +233,11 @@ export async function createCheckoutFromCart(
 			successUrl: `${deps.baseUrl}/cos/succes?session_id={CHECKOUT_SESSION_ID}`,
 			cancelUrl: `${deps.baseUrl}/cos`,
 			shippingCountries: ['RO'],
+			shippingOption: {
+				displayName: shippingDisplayName(shipping),
+				amountCents: shipping.priceCents,
+				currency: details.currency
+			},
 			metadata: {
 				[CART_METADATA_KEY]: buildCartMetadata(
 					details.lines.map((l) => ({
@@ -214,6 +246,7 @@ export async function createCheckoutFromCart(
 						priceCents: l.product.priceCents
 					}))
 				),
+				[SHIPPING_METADATA_KEY]: buildShippingMetadata(shipping),
 				...(input.buyerCompany
 					? { [BUYER_COMPANY_METADATA_KEY]: buildBuyerCompanyMetadata(input.buyerCompany) }
 					: {})
