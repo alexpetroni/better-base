@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { asc, eq, lt, sql } from 'drizzle-orm';
+import { asc, desc, eq, lt, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import {
 	consumeRateLimit,
@@ -154,6 +154,80 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 		sessionId: session.id,
 		sessionToken: signSessionToken(secret, session.id, session.anonymousToken)
 	};
+}
+
+/** Most messages a history restore returns to the widget (newest win). */
+export const HISTORY_RESTORE_LIMIT = 50;
+
+export interface ChatHistoryDeps {
+	db: Db;
+	/** HMAC secret for the session cookie token. */
+	secret: string;
+	rateConfig?: RateLimitConfig;
+	now?: () => Date;
+}
+
+export type ChatHistoryOutcome =
+	| { kind: 'history'; sessionId: string; messages: ChatMessage[] }
+	/** No cookie, or a validly-signed token whose session was pruned. */
+	| { kind: 'none' }
+	| { kind: 'forbidden' }
+	| { kind: 'rate-limited' };
+
+/** Rate-limit keys for history restores — separate from the send keys so a
+ * page reload never consumes the visitor's message budget. */
+export function historySessionRateKey(sessionId: string): string {
+	return `history:session:${sessionId}`;
+}
+
+export function historyIpRateKey(ip: string): string {
+	return `history:ip:${ip}`;
+}
+
+/**
+ * Restore the stored conversation for the session the signed cookie proves
+ * ownership of — the token is the ONLY authorization. Mirrors the POST path's
+ * rules: tampered/foreign tokens are refused, a pruned session yields nothing
+ * (retention wins), the same sliding-window limiter applies (on `history:`
+ * keys), and the returned list is bounded to the newest messages in
+ * chronological order.
+ */
+export async function getChatHistory(
+	deps: ChatHistoryDeps,
+	input: { sessionToken: string | null; ip: string; limit?: number }
+): Promise<ChatHistoryOutcome> {
+	const { db, secret } = deps;
+	// A visitor without a cookie has nothing to restore — free, no DB touch.
+	if (!input.sessionToken) return { kind: 'none' };
+
+	const verified = verifySessionToken(secret, input.sessionToken);
+	if (!verified.ok) return { kind: 'forbidden' };
+
+	const [session] = await db
+		.select()
+		.from(chatSessions)
+		.where(eq(chatSessions.id, verified.sessionId));
+	if (!session) return { kind: 'none' };
+	if (session.anonymousToken !== verified.anonymousToken) return { kind: 'forbidden' };
+
+	const rateConfig = deps.rateConfig ?? CHAT_RATE_LIMIT;
+	const now = deps.now?.() ?? new Date();
+	const consumed = await Promise.all(
+		[historySessionRateKey(session.id), historyIpRateKey(input.ip)].map((key) =>
+			consumeRateLimit(db, chatRateLimits, key, rateConfig, now)
+		)
+	);
+	if (consumed.some((result) => result.limited)) return { kind: 'rate-limited' };
+
+	// Newest N, then flipped back to chronological order for display.
+	const limit = input.limit ?? HISTORY_RESTORE_LIMIT;
+	const rows = await db
+		.select({ role: chatMessages.role, content: chatMessages.content })
+		.from(chatMessages)
+		.where(eq(chatMessages.sessionId, session.id))
+		.orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+		.limit(limit);
+	return { kind: 'history', sessionId: session.id, messages: (rows as ChatMessage[]).reverse() };
 }
 
 async function bumpMessageCount(db: Db, sessionId: string): Promise<void> {

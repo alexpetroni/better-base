@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { m } from '$lib/paraglide/messages';
 	import { CHAT_ERRORS } from './copy.ts';
 
@@ -26,6 +27,23 @@
 	export function focusInput() {
 		inputEl?.focus();
 	}
+
+	// Restore the stored conversation for the session cookie (GET /api/chat).
+	// Best-effort: any failure just leaves the panel empty. Applied only while
+	// no local messages exist — if the visitor already sent something before
+	// this resolved, the snapshot may contain that very message, so merging
+	// could duplicate it; discarding the stale snapshot never can.
+	onMount(async () => {
+		try {
+			const res = await fetch('/api/chat');
+			if (!res.ok) return;
+			const body = (await res.json()) as { messages?: DisplayMessage[] } | null;
+			if (!body?.messages?.length || messages.length > 0) return;
+			messages = body.messages.map(({ role, content }) => ({ role, content }));
+		} catch {
+			// Restore is a convenience — never surface an error for it.
+		}
+	});
 
 	function onListScroll() {
 		if (!listEl) return;

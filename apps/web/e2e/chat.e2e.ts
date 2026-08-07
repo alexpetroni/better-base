@@ -48,6 +48,35 @@ test('widget: streamed mock reply, disclaimer, reset starts a new session', asyn
 	expect(secondSession).not.toBe(firstSession);
 });
 
+test('reloading the page restores the conversation without duplicates', async ({ page }) => {
+	await page.goto('/');
+	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+
+	await page.getByTestId('chat-toggle').click();
+	await send(page, SLEEP_QUESTION);
+	await expect(messages(page, 'user')).toHaveText([SLEEP_QUESTION]);
+	await expect(messages(page, 'assistant').last()).toContainText(SLEEP_REPLY_SNIPPET);
+
+	// Reload: the widget state is gone, the session cookie is not. Opening the
+	// panel restores the stored conversation — exactly once.
+	await page.reload();
+	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+	await page.getByTestId('chat-toggle').click();
+	await expect(messages(page, 'user')).toHaveText([SLEEP_QUESTION]);
+	await expect(messages(page, 'assistant')).toHaveCount(1);
+	await expect(messages(page, 'assistant').last()).toContainText(SLEEP_REPLY_SNIPPET);
+
+	// The restored conversation continues in the same session, and a second
+	// reload restores both turns without duplicating either.
+	await send(page, 'Mai am o întrebare');
+	await expect(messages(page, 'assistant')).toHaveCount(2);
+	await page.reload();
+	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+	await page.getByTestId('chat-toggle').click();
+	await expect(messages(page, 'user')).toHaveText([SLEEP_QUESTION, 'Mai am o întrebare']);
+	await expect(messages(page, 'assistant')).toHaveCount(2);
+});
+
 test('full page /asistent chats too', async ({ page }) => {
 	await page.goto('/asistent');
 	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');

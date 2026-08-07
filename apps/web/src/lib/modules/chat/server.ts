@@ -27,9 +27,15 @@ export {
 } from './schema.ts';
 export { selectChatProvider, type ChatProviderSelection } from './select.ts';
 export {
+	getChatHistory,
 	handleChatMessage,
+	HISTORY_RESTORE_LIMIT,
+	historyIpRateKey,
+	historySessionRateKey,
 	pruneChatSessions,
 	type ChatDeps,
+	type ChatHistoryDeps,
+	type ChatHistoryOutcome,
 	type ChatInput,
 	type ChatOutcome
 } from './service.ts';

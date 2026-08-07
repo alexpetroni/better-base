@@ -5,6 +5,7 @@ import {
 	CHAT_ERRORS,
 	CHAT_SESSION_COOKIE,
 	chatSseStream,
+	getChatHistory,
 	getChatProvider,
 	getChatSecret,
 	handleChatMessage
@@ -84,6 +85,30 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 			connection: 'keep-alive'
 		}
 	});
+};
+
+/**
+ * History restore: the stored conversation for the session the signed cookie
+ * proves ownership of, oldest first, bounded. No cookie or a pruned session →
+ * an empty list; a tampered/foreign token → 403 (the token is the only
+ * authorization). The widget calls this once on mount and treats every
+ * non-200 as "nothing to restore".
+ */
+export const GET: RequestHandler = async ({ cookies, getClientAddress }) => {
+	const outcome = await getChatHistory(
+		{ db: getDb(), secret: getChatSecret() },
+		{ sessionToken: cookies.get(CHAT_SESSION_COOKIE) ?? null, ip: getClientAddress() }
+	);
+	switch (outcome.kind) {
+		case 'forbidden':
+			return json({ error: CHAT_ERRORS.forbidden }, { status: 403 });
+		case 'rate-limited':
+			return json({ error: CHAT_ERRORS.rateLimited }, { status: 429 });
+		case 'none':
+			return json({ messages: [] });
+		case 'history':
+			return json({ messages: outcome.messages });
+	}
 };
 
 /** "New conversation": forget the session cookie (rows expire via pruning). */
