@@ -8,6 +8,10 @@
 		{
 			"path": "/api/cron/shipment-sync",
 			"schedule": "7 * * * *"
+		},
+		{
+			"path": "/api/cron/nurture-send",
+			"schedule": "*/15 * * * *"
 		}
 	]
 }

@@ -5,6 +5,7 @@ import type { Db } from '../../db/client.ts';
 import { runOnce, type DbTx } from '../../server/event-ledger/core.ts';
 import type { EmailAttachment, EmailSender } from '../email/service.ts';
 import { issueInvoiceForOrderInTx, issueStornoForOrderInTx } from '$lib/modules/invoice/server';
+import { enrollFromOrderEmail } from '$lib/modules/nurture/server';
 import { loadSettings } from '$lib/modules/settings/server';
 import { invoices } from '../invoice/schema.ts';
 import {
@@ -309,6 +310,16 @@ async function handleCheckoutCompleted(
 		// Deliberately AFTER the commit: a mail failure must never roll back a
 		// paid order — Stripe's redelivery retries the (idempotent) send instead.
 		await sendOrderConfirmation(deps, result.value.order, result.value.items);
+		// Nurture order-paid trigger, best-effort: enrollment is idempotent
+		// (unique per sequence+subscriber) and consent-gated inside; a failure
+		// here must never turn a processed payment into a webhook error.
+		if (result.value.order.status === 'paid' && result.value.order.email) {
+			try {
+				await enrollFromOrderEmail({ db: deps.db }, result.value.order.email);
+			} catch (err) {
+				console.error(`Nurture enrollment for order ${result.value.order.id} failed:`, err);
+			}
+		}
 		return { kind: 'order-created', orderId: result.value.order.id };
 	}
 	if (!result.duplicate && result.outcome === 'empty-cart') {

@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
+import { enrollFromQuizResult } from '$lib/modules/nurture/server';
 import { claimQuizResult, getQuizFunnelDeps, getResultWithQuiz } from '$lib/modules/quiz/server';
 import { consumePublicEmailBudget } from '$lib/server/rate-limit';
 import { getSite } from '$lib/server/site';
@@ -39,6 +40,10 @@ export const actions: Actions = {
 			if (outcome.error === 'not-found') error(404);
 			return fail(400, { error: 'invalid-email' });
 		}
+		// Quiz-completed nurture trigger (band-filtered). The consent gate
+		// inside refuses unconfirmed subscribers — those enroll when the
+		// double-opt-in confirm link is clicked. Idempotent.
+		await enrollFromQuizResult({ db: getDb() }, params.resultId);
 		return { sent: true };
 	}
 };

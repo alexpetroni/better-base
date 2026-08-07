@@ -20,6 +20,7 @@ import {
 } from '../src/lib/modules/content/init.ts';
 import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
+import { seedNurtureSequences } from '../src/lib/modules/nurture/service.ts';
 
 loadRootEnv();
 
@@ -43,6 +44,9 @@ const pageCount = await seedDefaultPages(db);
 console.log(`Seeded ${pageCount} default page(s)`);
 const settingCount = await seedPlaceholderSettings(db);
 console.log(`Seeded ${settingCount} placeholder site setting(s) — replace them in /admin/settings`);
+// Upserts by key; a sequence deactivated in /admin/nurture stays deactivated.
+const nurtureCount = await seedNurtureSequences(db, site.nurture);
+console.log(`Seeded/updated ${nurtureCount} nurture sequence(s)`);
 
 // Initial content last: importing needs the pillars above to already exist
 // (a bundle whose pillars are all missing is refused as invisible).
