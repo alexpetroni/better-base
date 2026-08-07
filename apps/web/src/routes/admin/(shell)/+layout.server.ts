@@ -12,6 +12,7 @@ const ADMIN_NAV = [
 	{ section: 'media', href: '/admin/media', message: 'media' },
 	{ section: 'pages', href: '/admin/pages', message: 'pages' },
 	{ section: 'subscribers', href: '/admin/subscribers', message: 'subscribers' },
+	{ section: 'nurture', href: '/admin/nurture', message: 'nurture' },
 	{ section: 'orders', href: '/admin/orders', message: 'orders' },
 	{ section: 'settings', href: '/admin/settings', message: 'settings' }
 ] as const;

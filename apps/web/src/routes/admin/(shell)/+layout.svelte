@@ -13,6 +13,7 @@
 		media: m.admin_nav_media,
 		pages: m.admin_nav_pages,
 		subscribers: m.admin_nav_subscribers,
+		nurture: m.admin_nav_nurture,
 		orders: m.admin_nav_orders,
 		settings: m.admin_nav_settings
 	};

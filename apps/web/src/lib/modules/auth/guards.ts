@@ -1,7 +1,13 @@
 export type StaffRole = 'admin' | 'editor';
 
 /** /admin/<section> prefixes an editor may NOT access (admin role only). */
-export const ADMIN_ONLY_SECTIONS = ['products', 'orders', 'subscribers', 'settings'] as const;
+export const ADMIN_ONLY_SECTIONS = [
+	'products',
+	'orders',
+	'subscribers',
+	'nurture',
+	'settings'
+] as const;
 
 export type AdminOnlySection = (typeof ADMIN_ONLY_SECTIONS)[number];
 
