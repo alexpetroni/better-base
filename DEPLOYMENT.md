@@ -249,6 +249,42 @@ checkout itself snapshots prices from our database, so an unsynced catalog
 never blocks selling. Local/dev with an empty `STRIPE_SECRET_KEY` runs a
 deterministic in-memory mock — never leave it empty in prod.
 
+### Fiscal documents (invoice PDF + e-Factura XML)
+
+Every issued invoice renders deterministically to a PDF and a UBL 2.1
+(CIUS-RO) XML, stored write-once in the S3/R2 bucket under the private
+`invoices/` prefix (same bucket as media, different prefix — imgproxy never
+serves it). Nothing to deploy: rendering is pure JS inside the app (works on
+Vercel), the confirmation email attaches the PDF, customers reach their
+documents through signed links on the order success page, and
+`/admin/orders/export?month=YYYY-MM` gives the accountant a monthly zip
+(CSV index + all PDFs/XMLs). `TOKEN_SECRET` (already required) signs the
+customer download links.
+
+**e-Factura submission to ANAF SPV is NOT automated** — it requires
+enrollment only a human can do. Until then the app produces the compliant
+XML artifact and an operator uploads it manually in the SPV web interface
+when required. To enable automated submission later, a human must:
+
+1. Obtain a **qualified digital certificate** for the company's legal
+   representative (certSIGN/DigiSign/AlfaSign…).
+2. Register the certificate and **enroll the CUI in SPV** (Spațiul Privat
+   Virtual) on anaf.ro.
+3. Register an OAuth application in the ANAF developer portal
+   (logincert.anaf.ro) to obtain client id/secret and a refresh token for
+   the e-Factura API.
+4. Implement the `EFacturaSubmitter` adapter
+   (`apps/web/src/lib/modules/invoice/efactura-submitter.ts`) against those
+   credentials. The seam is in place; setting `ANAF_EFACTURA_ENABLED=true`
+   before the adapter exists is a hard boot error by design — the app never
+   fakes a submission.
+
+Known artifact gap (documented in `modules/invoice/README.md`): the XML
+omits the ISO 3166-2:RO county code (`CountrySubentity`) because the fiscal
+snapshot stores flattened address strings; ANAF's validator wants it for RO
+addresses. Resolve it together with the adapter work (extend the snapshot),
+or accept manual SPV upload with ANAF's web validation until then.
+
 ## 8. Email (Resend)
 
 1. Add and verify the sending domain in Resend (SPF + DKIM DNS records).

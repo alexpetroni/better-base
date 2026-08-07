@@ -52,10 +52,13 @@ list applies later to better-life (with its own domain/accounts).
       order-contact and marketing data but KEEPS issued invoices — legally
       retained accounting records (GDPR art. 17(3)(b); see
       `modules/invoice/README.md`); the CLI reports how many were kept.
-- [ ] VAT/invoicing: the app now ISSUES invoices automatically — every paid
-      Stripe order gets a numbered invoice in the declared series, and a
-      refund issues the storno (see `apps/web/src/lib/modules/invoice/`;
-      NEXT-7 adds the PDF/delivery). What remains human:
+- [ ] VAT/invoicing: the app ISSUES and DELIVERS invoices automatically —
+      every paid Stripe order gets a numbered invoice in the declared series
+      with a PDF + e-Factura XML (stored in the bucket, PDF attached to the
+      confirmation email, downloadable by the buyer from the order page), a
+      refund issues the storno, and `/admin/orders` has a monthly zip export
+      for the accountant (see `apps/web/src/lib/modules/invoice/`). What
+      remains human:
       - fill in `/admin/settings` → "Facturare": series prefix, first number
         (continue the accountant's interim numbering, or start a fresh
         declared series at 1), place of issue, VAT rate, and — while the
@@ -64,12 +67,19 @@ list applies later to better-life (with its own domain/accounts).
         required ones);
       - confirm with the accountant: the declared series/number regime, the
         per-line VAT rounding documented in `modules/invoice/README.md`, and
-        how they receive the invoice data until NEXT-7 delivers documents
-        (admin order pages show number + totals today);
+        the invoice TEMPLATE itself — download a test PDF from an order page
+        and have them sign off the layout/fields before live sales;
       - orders paid before this phase went live have no invoice — the admin
         work queue filter "Fără factură" lists them; issue each with the
         one-click button on the order page if the accountant did not already
         invoice them by hand.
+- [ ] e-Factura (ANAF): decide the interim process — the app produces the
+      CIUS-RO XML per invoice (downloadable from the order page / monthly
+      export) but does NOT submit it; a human uploads to SPV when the
+      obligation applies. For automated submission later: qualified
+      certificate + SPV enrollment + ANAF OAuth app + implementing the
+      `EFacturaSubmitter` adapter — exact steps in DEPLOYMENT.md §7
+      "Fiscal documents". Record who owns the SPV upload until then.
 
 ## DNS & TLS
 
@@ -103,7 +113,9 @@ list applies later to better-life (with its own domain/accounts).
       `checkout.session.completed` + `charge.refunded`; its `whsec_…` set.
 - [ ] One real LIVE purchase made with a real card and refunded — order
       appears as `plătită`, then `rambursată` in `/admin/orders`; the
-      confirmation email arrives.
+      confirmation email arrives WITH the invoice PDF attached; the success
+      page offers the invoice download; the refund's storno shows on the
+      order page next to the invoice.
 - [ ] Stripe receipt/branding settings (logo, statement descriptor) filled.
 
 ## Email (Resend)

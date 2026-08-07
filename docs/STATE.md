@@ -1,4 +1,90 @@
-# STATE — after the fiscal record (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after the invoice documents (2026-08-07, branch `feat/vercel-neon`)
+
+## Invoices part 2 — PDF, e-Factura XML, delivery, admin (2026-08-07, NEXT-7)
+
+The NEXT-6 record now becomes documents a customer/accountant can hold, from
+the SAME snapshot (`modules/invoice/model.ts` — `InvoiceDocumentModel`; a
+storno model carries the original's number/date for the reference). One
+migration `0017_lazy_bruce_banner` (`email_log.attachments` jsonb — metadata
+only, never bytes). New deps: `pdf-lib` + `@pdf-lib/fontkit` (PDF),
+`fast-xml-parser` (offline XML validation), `fflate` (export zip); dev
+`unpdf` (text-layer assertions). No new REQUIRED env vars; reserved:
+`ANAF_EFACTURA_ENABLED` (setting it without an adapter is a boot error).
+
+- **Deterministic PDF** (`pdf.ts`) — pure pdf-lib+fontkit, no native/browser
+  deps (Vercel-safe); per-run stamps pinned to the snapshot ⇒ byte-identical
+  re-renders (proven). Font: DejaVu Sans, committed at
+  `modules/invoice/fonts/` (TTF + LICENSE + generated base64 module via
+  `node scripts/embed-font.ts` — no runtime fs; prettier/eslint-ignored).
+  739 KB font, but SUBSET at render ⇒ ~12 KB per invoice PDF. Text layer
+  proven complete by extraction (`pdf.spec.ts`): identification, per-line
+  VAT, totals, `neplătitor` mention, `FACTURĂ STORNO` + original reference,
+  comma-below diacritics. Dates print Europe/Bucharest (`invoiceDateIso/Ro`
+  in model.ts — 00:30 EET is NOT yesterday).
+- **e-Factura XML** (`efactura.ts`) — UBL 2.1, CIUS-RO 1.0.1
+  CustomizationID; storno = negative InvoiceTypeCode 380 + BillingReference
+  (RO practice, not 381); categories S/Z/O (O = neplătitor: no percent,
+  exemption reason from the snapshotted mention, no supplier VAT id).
+  `efactura-validate.ts` = offline tripwire (structure, BR-CO arithmetic
+  with the documented per-line-rounding tolerance on BR-CO-17, BR-O, exact
+  snapshot agreement), property-tested over odd-bani carts; NOT the ANAF
+  schematron. Known gap: no `CountrySubentity` county code (flattened
+  NEXT-6 addresses) — documented in README + DEPLOYMENT §7. Submission seam
+  `EFacturaSubmitter` (`efactura-submitter.ts`): no-op default returns
+  `skipped`, invoked once on first XML store; enrollment steps (qualified
+  cert, SPV, OAuth) in DEPLOYMENT.md §7 "Fiscal documents"; nothing fakes a
+  submission.
+- **Write-once storage + signed retrieval** — documents stored lazily on
+  first request in the S3 bucket under private `invoices/<id>.<pdf|xml>`
+  (never `uploads/`); determinism makes the write-once race-proof (second
+  render = identical bytes). `/api/invoices/[id]/[format]`: admin session
+  OR `?t=` HMAC token (`access.ts`, TOKEN_SECRET, 15-min TTL, binds
+  id+format+exp) — minted ONLY on the success/lookup page (the unguessable
+  Stripe session id is the buyer's proof of claim); anonymous/foreign/
+  expired/tampered/editor ⇒ 403, unknown ⇒ 404 (full matrix in
+  `invoice-doc-route.spec.ts` against real MinIO). hooks.server.ts now
+  resolves the staff session on `/api/invoices/*` too (route decides authz;
+  the hook only answers who is asking).
+- **Email delivery** — `modules/email` gained typed attachments
+  (`EmailAttachment`; Resend adapter posts base64; the log records
+  {filename, contentType, size}). Confirmation email attaches the invoice
+  PDF via the optional `WebhookDeps.invoiceAttachment` seam
+  (`invoicePdfAttachmentForOrder`) — attachment-path chosen over link-only
+  (PDFs are ~12 KB); ANY document-layer failure is caught and the email
+  still goes (customer keeps the durable link; test pins it). New template
+  `invoice-email` for the admin re-send. `order-confirmation` data gained
+  optional `invoiceNumber`/`orderUrl` — the durable no-account way back is
+  `PUBLIC_SITE_URL + /cos/succes?session_id=…` (`orderLookupUrl`).
+- **Customer access** — success page shows a "Factura ta" box (PDF + XML
+  links, fresh 15-min tokens per load) and the email links back to it.
+- **Admin** — order detail: PDF/XML download links per document, re-send
+  action (idempotency key = invoice id + hidden page nonce ⇒ double-click
+  sends once, fresh page = deliberate resend), wired next to the NEXT-6
+  storno/issue action. Orders list: month picker →
+  `/admin/orders/export?month=YYYY-MM` = zip of `facturi.csv`
+  (semicolon-separated, comma decimals — RO Excel/accounting import) + all
+  PDFs/XMLs; admin-only, month filtered on the Bucharest calendar.
+- **Serverless constraint enforced** — a grep spec (documents.spec.ts)
+  fails if anything under modules/invoice, modules/email, api/invoices,
+  api/stripe or admin/orders imports `fs`; `DEPLOY_TARGET=vercel pnpm
+  build` verified.
+- `util/money.ts` additions: `centsToDecimal` (dot/comma) and
+  `centsPerUnitToDecimal` (4-decimal unit net) — amounts still meet strings
+  only there.
+- Tests — `pdf.spec.ts` (determinism, text-layer completeness, diacritics,
+  storno, neplătitor); `efactura.spec.ts` (validity+snapshot agreement,
+  property over carts×rates, category O, storno shape, validator bites on
+  tampering, submitter seam honesty); `access.spec.ts` (token matrix);
+  `documents.spec.ts` (write-once with counting storage double, seam fired
+  once, dry-run email carries attachment meta+number+link, broken doc layer
+  never blocks email, idempotent resend, fs-grep); route specs for download
+  authz (real MinIO) and the monthly export (zip contents, CSV shape,
+  guards). e2e: purchase → invoice download (owner token + tamper/anon 403)
+  → admin download/resend/export, in `settings.e2e.ts` (it owns
+  site_settings; issuer config completed via the real settings UI).
+  Verified: gate green (lint/check/`test:unit` 618), full e2e green both
+  sites (77 passed / 3 skipped), migrate clean on fresh AND populated DBs,
+  `DEPLOY_TARGET=vercel pnpm build` green.
 
 ## Invoices part 1 — the fiscal record: numbering, snapshot, VAT, storno (2026-08-07, NEXT-6)
 
