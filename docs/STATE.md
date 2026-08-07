@@ -1,4 +1,61 @@
-# STATE — after the Neon-driver proof (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after the deploy pipeline (2026-08-07, branch `feat/vercel-neon`)
+
+## Deploy pipeline: CI migrations, launch preflight, imgproxy host (2026-08-07, NEXT-2)
+
+Everything between the Vercel/Neon branch and an executable deploy: migrations
+got a home in CI, the untickable "grep for dev secrets" checklist box became a
+script, and the imgproxy hosting question is decided and committed. No schema
+changes, no new required env vars (`CRON_SECRET`/`DIRECT_DATABASE_URL` were
+already §12 variables — they are now *enforced* on the vercel target instead
+of just documented).
+
+- **Single-source env matrix** — `apps/web/src/lib/server/env-matrix.ts` is
+  the ONE declaration of required env vars (boot + Vercel extras) and of every
+  committed dev-default value (.env.example secrets, compose `better:better`
+  credentials, MinIO keys, the dev Stripe webhook secret). `boot.ts` now
+  derives `REQUIRED_BOOT_ENV` from it; `launch-check.ts` derives everything
+  else. `launch-check.spec.ts` § "env matrix single-sourcing" asserts both
+  consumers see any var added to the matrix — do not grow a second list.
+- **`pnpm launch:check [--dev] [--no-probe] [--target=node|vercel]`** — deploy
+  preflight (rules: `src/lib/server/launch-check.ts`, CLI:
+  `scripts/launch-check.ts`). Numbered report, exit 1 on any problem, exit 2
+  on usage errors. Checks: missing vars per target, dev defaults, https +
+  `SITE_ID`-domain agreement for `PUBLIC_SITE_URL`, `EMAIL_DRYRUN=false` ⇒
+  `RESEND_API_KEY`, `CHAT_PROVIDER=anthropic` ⇒ `ANTHROPIC_API_KEY`,
+  test-Stripe-key-in-live-env, imgproxy key/salt shape (hex ≥32, key≠salt),
+  and a live probe: uploads `launch-check/probe.png` (1×1 PNG) with the app's
+  S3 credentials, requires signed imgproxy URL → 200 and unsigned → 403,
+  deletes the object after. `--dev` skips only the prod-only rules (dev
+  defaults/https/domain/shape); missing vars and conditionals stay enforced.
+  Verified: `--dev` passes on the local env, without it the same env fails
+  with 8 numbered problems.
+- **`.github/workflows/migrate.yml`** — migrations' home: `pnpm db:migrate`
+  against the `DIRECT_DATABASE_URL` **repository secret** on push to `main`
+  (before Vercel promotes) and on manual dispatch. Fails closed as its first
+  step when the secret is unset, `concurrency: migrate-production` serializes
+  runs, never seeds, and ends with **`pnpm db:status`**
+  (`scripts/migrate-status.ts`, new): prints applied/PENDING per committed
+  journal entry (drizzle stores the journal `when` as `created_at` — that is
+  the join key), exits non-zero while any are pending, treats a missing
+  migrations table (fresh db, error 42P01 on the *cause* of the wrapped
+  drizzle error) as "nothing applied". The workflow YAML is under test —
+  `src/lib/server/migrate-workflow.spec.ts` parses it (new devDep `yaml`) and
+  asserts triggers, secret, fail-closed guard, migrate→status order, no
+  seeding, concurrency.
+- **imgproxy runs on Fly.io** — decided; config committed under
+  `deploy/imgproxy/` (`fly.toml`: upstream v3 image, `otp`/Bucharest,
+  always-on shared-cpu-1x/512MB, `/health` check, same hardening as compose;
+  README: exact `fly launch`/`fly secrets set`/`fly deploy` lines, read-only
+  R2 token, Cloudflare Cache Everything, rotation). Decision + cost (a few
+  $/month) + rejected alternatives (Railway, VPS, Vercel Image Optimization)
+  recorded in DEPLOYMENT.md §12.
+- Docs: DEPLOYMENT.md §2 (preflight), §6 (pointer to `deploy/imgproxy/`), §12
+  (imgproxy decision, CI migrations, first-deploy-only deploy order);
+  LAUNCH-CHECKLIST.md accounts/DNS/secrets boxes updated and the Ops section
+  rewritten target-conditionally (machine cron vs `vercel.json` +
+  `CRON_SECRET`).
+- Verified at the phase boundary: gate green, `pnpm test:neon` green, both
+  `pnpm build` and `DEPLOY_TARGET=vercel pnpm build` green.
 
 ## Neon driver proven over a real WebSocket connection (2026-08-07, NEXT-1)
 
@@ -1253,6 +1310,10 @@ Not run in CI/agent runs — do this by hand when you have keys:
   blocks the other bundles.
 - `pnpm subscriber:delete -- --email x@y.ro` — GDPR erasure (subscriber row
   deleted, quiz results unlinked, orders/email log anonymized).
+- `pnpm launch:check --dev` — deploy preflight against the current env (drop
+  `--dev` for a real target env; `--no-probe` skips the imgproxy round trip).
+- `pnpm db:status` — applied/PENDING per committed migration for the target db
+  (prefers `DIRECT_DATABASE_URL`); non-zero exit while migrations are pending.
 - `pnpm db:migrate` / `pnpm db:seed` — for the site in `.env`; for the other site
   prefix e.g. `SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5433/better_life`
   (the host is normalized either way — see the service-hostname note in Env below).
