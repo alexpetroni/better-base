@@ -10,6 +10,13 @@ import { renderEmailTemplate, type TemplateData, type TemplateKey } from './temp
  * a fake, so no email can ever leave a test run.
  */
 
+/** A file attached to a message; bytes stay in memory, only meta is logged. */
+export interface EmailAttachment {
+	filename: string;
+	contentType: string;
+	content: Uint8Array;
+}
+
 export interface EmailMessage {
 	from: string;
 	replyTo?: string;
@@ -17,6 +24,7 @@ export interface EmailMessage {
 	subject: string;
 	html: string;
 	text: string;
+	attachments?: EmailAttachment[];
 }
 
 /** What actually delivers mail: the Resend adapter in prod, a fake in tests. */
@@ -39,6 +47,7 @@ export interface SendEmailInput<K extends TemplateKey = TemplateKey> {
 	data: TemplateData[K];
 	/** Same key → at most one delivery, ever (skip if already sent/recorded). */
 	idempotencyKey: string;
+	attachments?: EmailAttachment[];
 }
 
 export type SendEmailOutcome =
@@ -73,6 +82,16 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 			const rendered = renderEmailTemplate(input.template, input.data);
 			const claimStatus: EmailStatus = cfg.dryRun ? 'dryrun' : 'sending';
 
+			// The log records attachment METADATA (name/type/size) so a dry run
+			// or an audit shows what was carried — the bytes themselves are
+			// re-renderable from their source and never enter the database.
+			const attachmentMeta =
+				input.attachments?.map(({ filename, contentType, content }) => ({
+					filename,
+					contentType,
+					size: content.length
+				})) ?? null;
+
 			// Claim the key by insert: the unique index collapses concurrent
 			// retries of the same handler to a single claimant.
 			const inserted = await cfg.db
@@ -84,6 +103,7 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					template: input.template,
 					subject: rendered.subject,
 					data: input.data as Record<string, unknown>,
+					attachments: attachmentMeta,
 					status: claimStatus
 				})
 				.onConflictDoNothing({ target: emailLog.idempotencyKey })
@@ -124,7 +144,8 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					to: input.to,
 					subject: rendered.subject,
 					html: rendered.html,
-					text: rendered.text
+					text: rendered.text,
+					attachments: input.attachments
 				});
 				await markStatus(claimed.id, { status: 'sent', providerId });
 				return { status: 'sent', logId: claimed.id };

@@ -14,6 +14,8 @@ export const emailLog = pgTable(
 		template: text('template').notNull(),
 		subject: text('subject').notNull(),
 		data: jsonb('data').notNull().$type<Record<string, unknown>>(),
+		/** Metadata of attached files (never the bytes — those live in S3). */
+		attachments: jsonb('attachments').$type<EmailAttachmentMeta[]>(),
 		// sending = claimed, delivery in flight; error rows may be retried.
 		status: text('status', { enum: ['sending', 'sent', 'dryrun', 'error'] }).notNull(),
 		providerId: text('provider_id'),
@@ -23,6 +25,12 @@ export const emailLog = pgTable(
 	},
 	(table) => [index('email_log_to_email_idx').on(table.toEmail)]
 );
+
+export interface EmailAttachmentMeta {
+	filename: string;
+	contentType: string;
+	size: number;
+}
 
 export type EmailLogRow = typeof emailLog.$inferSelect;
 export type EmailStatus = EmailLogRow['status'];

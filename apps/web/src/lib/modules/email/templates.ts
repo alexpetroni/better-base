@@ -32,6 +32,16 @@ export interface TemplateData {
 		items: Array<{ name: string; qty: number; priceCents: number }>;
 		totalCents: number;
 		currency: string;
+		/** Set when the fiscal invoice was issued — its PDF rides along. */
+		invoiceNumber?: string;
+		/** Durable no-account link back to the order (and its invoice). */
+		orderUrl?: string;
+	};
+	/** Admin-triggered (re)delivery of an issued invoice, PDF attached. */
+	'invoice-email': {
+		siteName: string;
+		invoiceNumber: string;
+		orderUrl?: string;
 	};
 }
 
@@ -40,7 +50,8 @@ export type TemplateKey = keyof TemplateData;
 export const EMAIL_TEMPLATE_KEYS = [
 	'quiz-result',
 	'newsletter-confirm',
-	'order-confirmation'
+	'order-confirmation',
+	'invoice-email'
 ] as const satisfies readonly TemplateKey[];
 
 export function escapeHtml(value: string): string {
@@ -112,6 +123,36 @@ function renderNewsletterConfirm(data: TemplateData['newsletter-confirm']): Rend
 	return { subject, html, text };
 }
 
+function invoiceHtmlBlock(
+	data: Pick<TemplateData['order-confirmation'], 'invoiceNumber' | 'orderUrl'>
+): string {
+	const parts: string[] = [];
+	if (data.invoiceNumber) {
+		parts.push(
+			`<p style="margin:24px 0 0;">Factura <strong>${escapeHtml(data.invoiceNumber)}</strong> este atașată acestui email.</p>`
+		);
+	}
+	if (data.orderUrl) {
+		parts.push(
+			`<p style="margin:${data.invoiceNumber ? '8px' : '24px'} 0 0;">Poți reveni oricând la comanda ta${data.invoiceNumber ? ' și la factură' : ''}: <a href="${escapeHtml(data.orderUrl)}" style="color:#4c4b9e;">vezi comanda</a>.</p>`
+		);
+	}
+	return parts.join('\n');
+}
+
+function invoiceTextBlock(
+	data: Pick<TemplateData['order-confirmation'], 'invoiceNumber' | 'orderUrl'>
+): string[] {
+	const parts: string[] = [];
+	if (data.invoiceNumber) {
+		parts.push('', `Factura ${data.invoiceNumber} este atașată acestui email.`);
+	}
+	if (data.orderUrl) {
+		parts.push('', `Poți reveni oricând la comanda ta: ${data.orderUrl}`);
+	}
+	return parts;
+}
+
 function renderOrderConfirmation(data: TemplateData['order-confirmation']): RenderedEmail {
 	const subject = `Comanda ta la ${data.siteName} a fost înregistrată`;
 	const rows = data.items
@@ -134,7 +175,8 @@ ${rows}
 <td style="padding:8px 0 0;border-top:1px solid #e5e7eb;text-align:right;"><strong>${escapeHtml(formatCents(data.totalCents, data.currency))}</strong></td>
 </tr>
 </table>
-<p style="margin:24px 0 0;">Te anunțăm când comanda pleacă spre tine.</p>`
+<p style="margin:24px 0 0;">Te anunțăm când comanda pleacă spre tine.</p>
+${invoiceHtmlBlock(data)}`
 	);
 	const text = [
 		'Îți mulțumim pentru comandă!',
@@ -149,6 +191,26 @@ ${rows}
 		`Total: ${formatCents(data.totalCents, data.currency)}`,
 		'',
 		'Te anunțăm când comanda pleacă spre tine.',
+		...invoiceTextBlock(data),
+		'',
+		data.siteName
+	].join('\n');
+	return { subject, html, text };
+}
+
+function renderInvoiceEmail(data: TemplateData['invoice-email']): RenderedEmail {
+	const subject = `Factura ta ${data.invoiceNumber} de la ${data.siteName}`;
+	const html = htmlShell(
+		data.siteName,
+		`<h1 style="font-size:20px;margin:0 0 16px;">Factura ta</h1>
+<p style="margin:0 0 8px;">Găsești atașată factura <strong>${escapeHtml(data.invoiceNumber)}</strong> pentru comanda ta la ${escapeHtml(data.siteName)}.</p>
+${data.orderUrl ? `<p style="margin:16px 0 0;"><a href="${escapeHtml(data.orderUrl)}" style="color:#4c4b9e;">Vezi comanda și factura online</a></p>` : ''}`
+	);
+	const text = [
+		'Factura ta',
+		'',
+		`Găsești atașată factura ${data.invoiceNumber} pentru comanda ta la ${data.siteName}.`,
+		...(data.orderUrl ? ['', `Vezi comanda și factura online: ${data.orderUrl}`] : []),
 		'',
 		data.siteName
 	].join('\n');
@@ -166,6 +228,8 @@ export function renderEmailTemplate<K extends TemplateKey>(
 			return renderNewsletterConfirm(data as TemplateData['newsletter-confirm']);
 		case 'order-confirmation':
 			return renderOrderConfirmation(data as TemplateData['order-confirmation']);
+		case 'invoice-email':
+			return renderInvoiceEmail(data as TemplateData['invoice-email']);
 		default:
 			throw new Error(`Unknown email template "${template}"`);
 	}

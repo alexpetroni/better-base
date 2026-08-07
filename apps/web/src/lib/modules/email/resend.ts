@@ -32,7 +32,13 @@ export function createResendTransport(
 					reply_to: message.replyTo,
 					subject: message.subject,
 					html: message.html,
-					text: message.text
+					text: message.text,
+					// Resend takes attachment bytes base64-encoded in the JSON body.
+					attachments: message.attachments?.map((attachment) => ({
+						filename: attachment.filename,
+						content_type: attachment.contentType,
+						content: Buffer.from(attachment.content).toString('base64')
+					}))
 				}),
 				signal: AbortSignal.timeout(timeoutMs)
 			});
