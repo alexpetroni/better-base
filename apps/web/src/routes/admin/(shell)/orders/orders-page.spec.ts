@@ -13,7 +13,12 @@ import {
 import type { FulfillmentStatus } from '../../../../lib/modules/shop/fulfillment.ts';
 import { invoices } from '../../../../lib/modules/invoice/schema.ts';
 import { siteSettings } from '../../../../lib/modules/settings/schema.ts';
-import { orderEvents, orders, type OrderRow } from '../../../../lib/modules/shop/schema.ts';
+import {
+	orderEvents,
+	orders,
+	shipments,
+	type OrderRow
+} from '../../../../lib/modules/shop/schema.ts';
 import { listOrders } from '../../../../lib/modules/shop/webhook.ts';
 
 // Route-level integration: the REAL /admin/orders work queue and the REAL
@@ -58,6 +63,7 @@ let transitionAction: (event: {
 	locals: App.Locals;
 }) => Promise<unknown>;
 let issueInvoiceAction: (event: { params: { id: string }; locals: App.Locals }) => Promise<unknown>;
+let generateAwbAction: (event: { params: { id: string }; locals: App.Locals }) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
 	return { user, settings: createSettingsLoader(() => db) };
@@ -136,6 +142,7 @@ beforeAll(async () => {
 	detailLoad = detailPage.load;
 	transitionAction = detailPage.actions.transition as unknown as typeof transitionAction;
 	issueInvoiceAction = detailPage.actions.issueInvoice as unknown as typeof issueInvoiceAction;
+	generateAwbAction = detailPage.actions.generateAwb as unknown as typeof generateAwbAction;
 });
 
 afterAll(async () => {
@@ -390,5 +397,55 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 		expect(data.invoices).toHaveLength(1);
 		expect(data.invoices[0]).toMatchObject({ kind: 'invoice', displayNumber: 'QUE-0001' });
 		expect(data.events.some((e) => e.kind === 'invoice-issued')).toBe(true);
+	});
+});
+
+describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page', () => {
+	it('editor: 403 before anything is written', async () => {
+		const order = await insertOrder({});
+		try {
+			await generateAwbAction({ params: { id: order.id }, locals: locals(EDITOR) });
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(403);
+		}
+		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.fulfillmentStatus).toBe('unfulfilled');
+	});
+
+	it('admin: registers the AWB via the (mock) courier, ships the order, and a re-click is a no-op', async () => {
+		const order = await insertOrder({});
+		const result = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(result).toEqual({ awbGenerated: true, awbExisting: false });
+
+		const data = (await detailLoad({
+			params: { id: order.id }
+		} as Parameters<DetailPage['load']>[0])) as {
+			order: OrderRow;
+			shipment: { awb: string; trackingUrl: string; status: string } | null;
+			events: Array<Record<string, unknown>>;
+		};
+		expect(data.order.fulfillmentStatus).toBe('shipped');
+		expect(data.shipment).not.toBeNull();
+		expect(data.shipment!.awb).toMatch(/^MOCKAWB/);
+		expect(data.shipment!.trackingUrl).toContain(data.shipment!.awb);
+		expect(data.events.some((e) => e.kind === 'awb-generated')).toBe(true);
+
+		const again = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(again).toEqual({ awbGenerated: true, awbExisting: true });
+		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toHaveLength(
+			1
+		);
+	});
+
+	it('an unpaid order is a 400, not a shipment', async () => {
+		const order = await insertOrder({ status: 'pending' });
+		const result = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		expect(result.data).toMatchObject({ awbError: 'order-not-paid' });
+		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
 	});
 });

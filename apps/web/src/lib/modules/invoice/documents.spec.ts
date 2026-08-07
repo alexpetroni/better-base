@@ -298,8 +298,11 @@ describe('serverless constraint', () => {
 		const runtimeDirs = [
 			'lib/modules/invoice',
 			'lib/modules/email',
+			'lib/modules/shop',
 			'routes/api/invoices',
+			'routes/api/shipments',
 			'routes/api/stripe',
+			'routes/api/cron',
 			'routes/admin/(shell)/orders'
 		];
 		const offenders: string[] = [];

@@ -3,9 +3,11 @@ import { eq } from 'drizzle-orm';
 import Stripe from 'stripe';
 import { createDb } from '../src/lib/db/client.ts';
 import { emailLog } from '../src/lib/modules/email/schema.ts';
+import { invoiceLines, invoices } from '../src/lib/modules/invoice/schema.ts';
 import { buildCartMetadata } from '../src/lib/modules/shop/checkout.ts';
-import { orders } from '../src/lib/modules/shop/schema.ts';
+import { orders, shipments } from '../src/lib/modules/shop/schema.ts';
 import { DEMO_PRODUCTS } from '../src/lib/modules/shop/seed-products.ts';
+import { buildShippingMetadata } from '../src/lib/modules/shop/shipping.ts';
 import { E2E_ADMIN, E2E_STRIPE_WEBHOOK_SECRET, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
 import { login } from './helpers.ts';
 
@@ -237,6 +239,168 @@ test('a purchase yields a downloadable invoice; access is owner-or-admin only', 
 		expect(exportResponse.status()).toBe(200);
 		expect(exportResponse.headers()['content-type']).toBe('application/zip');
 		expect((await exportResponse.body()).subarray(0, 2).toString()).toBe('PK');
+	} finally {
+		await db.$client.end();
+	}
+});
+
+// NEXT-8. In THIS file for the same reason as the invoice flow above: it
+// configures shipping through the real settings UI (shared site_settings) and
+// relies on the issuer config the previous test saved. Shipping settings →
+// cart offers the options → a purchase with the express option selected →
+// the order carries the shipping amount, the invoice reconciles to the
+// charged total → the admin generates the AWB → shipped, tracking link,
+// label download, one shipping email.
+test('shipping is priced from settings, charged, invoiced and shipped with an AWB', async ({
+	page
+}, testInfo) => {
+	const siteId = testInfo.project.name as keyof typeof SITE_DB_NAMES;
+	const db = createDb(siteDatabaseUrl(siteId));
+	const stripeSigner = new Stripe('sk_test_offline_signing_only');
+	const [, CEAI] = DEMO_PRODUCTS;
+	const EXPRESS_PRICE = 3490;
+
+	try {
+		// --- Configure delivery pricing in /admin/settings (data, not code).
+		await login(page, E2E_ADMIN);
+		await page.goto('/admin/settings');
+		await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+		await page.getByTestId('settings-field-shop.shippingStandardPriceBani').fill('19,90');
+		await page.getByTestId('settings-field-shop.shippingExpressName').fill('Curier rapid');
+		await page.getByTestId('settings-field-shop.shippingExpressPriceBani').fill('34,90');
+		await page.getByTestId('settings-field-shop.shippingExpressEta').fill('24h');
+		await page.getByTestId('settings-save-shop').click();
+		await expect(page.getByTestId('settings-saved')).toBeVisible();
+
+		// --- The cart offers both options at the configured prices.
+		await page.goto(`/magazin/${CEAI.slug}`);
+		await page.getByTestId('product-add-to-cart').click();
+		await expect(page).toHaveURL(/\/cos$/);
+		await expect(page.locator('[data-testid="cart-shipping-option"]')).toHaveCount(2);
+		await expect(
+			page.locator('[data-testid="cart-shipping-price"][data-option="standard"]')
+		).toHaveText('19,90 lei');
+		await expect(
+			page.locator('[data-testid="cart-shipping-price"][data-option="express"]')
+		).toHaveText('34,90 lei');
+		await page.locator('[data-testid="cart-shipping-option"][data-option="express"]').check();
+
+		// --- Checkout with the express option (form post; the browser must not
+		// navigate to the external mock-Stripe URL).
+		const checkout = await page.context().request.post('/cos?/checkout', {
+			headers: { origin: testInfo.project.use.baseURL!, accept: 'text/html' },
+			form: { shippingOption: 'express' },
+			maxRedirects: 0
+		});
+		expect(checkout.status()).toBe(303);
+		const sessionId = checkout.headers()['location'].split('/').pop()!;
+
+		// --- The signed webhook creates the order with the shipping amount.
+		const payload = JSON.stringify({
+			id: `evt_e2e_shipping_${siteId}`,
+			object: 'event',
+			type: 'checkout.session.completed',
+			data: {
+				object: {
+					id: sessionId,
+					object: 'checkout.session',
+					amount_total: CEAI.priceCents + EXPRESS_PRICE,
+					shipping_cost: { amount_total: EXPRESS_PRICE },
+					currency: 'ron',
+					payment_intent: `pi_e2e_shipping_${siteId}`,
+					payment_status: 'paid',
+					customer_details: { email: 'livrare-client@example.com', name: 'Ana Pop' },
+					collected_information: {
+						shipping_details: {
+							name: 'Ana Pop',
+							address: {
+								line1: 'Str. Somnului 10',
+								city: 'Cluj-Napoca',
+								postal_code: '400001',
+								country: 'RO'
+							}
+						}
+					},
+					metadata: {
+						cart: buildCartMetadata([{ productId: CEAI.id, qty: 1, priceCents: CEAI.priceCents }]),
+						ship: buildShippingMetadata({
+							id: 'express',
+							name: 'Curier rapid',
+							priceCents: EXPRESS_PRICE,
+							etaText: '24h',
+							freeOverThreshold: false
+						})
+					}
+				}
+			}
+		});
+		const webhook = await page.context().request.post('/api/stripe/webhook', {
+			headers: {
+				'content-type': 'application/json',
+				'stripe-signature': stripeSigner.webhooks.generateTestHeaderString({
+					payload,
+					secret: E2E_STRIPE_WEBHOOK_SECRET
+				})
+			},
+			data: payload
+		});
+		expect(await webhook.json()).toEqual({ received: true, outcome: 'order-created' });
+
+		const [order] = await db.select().from(orders).where(eq(orders.stripeSessionId, sessionId));
+		expect(order.shippingCents).toBe(EXPRESS_PRICE);
+		expect(order.shippingName).toBe('Curier rapid');
+		expect(order.amountTotalCents).toBe(CEAI.priceCents + EXPRESS_PRICE);
+
+		// The invoice reconciles to the charged total, shipping as its own line.
+		const [invoice] = await db.select().from(invoices).where(eq(invoices.orderId, order.id));
+		expect(invoice.grossTotalCents).toBe(order.amountTotalCents);
+		const lines = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, invoice.id));
+		const transport = lines.find((l) => l.description === 'Transport — Curier rapid');
+		expect(transport?.grossCents).toBe(EXPRESS_PRICE);
+
+		// --- Admin generates the AWB from the order detail.
+		await page.goto('/admin/orders?f=all');
+		await page
+			.locator(`[data-testid="order-row"][data-session="${sessionId}"]`)
+			.locator('a')
+			.click();
+		await expect(page.getByTestId('order-detail-shipping-cost')).toHaveText('34,90 lei');
+		await page.getByTestId('order-shipment-generate').click();
+
+		// Shipped, with the shipment box replacing the generate button.
+		await expect(page.getByTestId('order-detail-fulfillment')).toHaveText('expediată');
+		const shipmentBox = page.getByTestId('order-shipment');
+		await expect(shipmentBox).toBeVisible();
+		const awb = (await page.getByTestId('order-shipment-awb').textContent())!.trim();
+		expect(awb).toMatch(/^MOCKAWB/);
+		await expect(page.getByTestId('order-shipment-tracking')).toHaveAttribute(
+			'href',
+			new RegExp(`${awb}$`)
+		);
+		await expect(
+			page.locator('[data-testid="order-event"][data-kind="awb-generated"]')
+		).toHaveCount(1);
+
+		// The label downloads through the authenticated route.
+		const label = await page.request.get(
+			(await page.getByTestId('order-shipment-label').getAttribute('href'))!
+		);
+		expect(label.status()).toBe(200);
+		expect(label.headers()['content-type']).toBe('application/pdf');
+		expect((await label.body()).subarray(0, 5).toString()).toBe('%PDF-');
+
+		// Exactly one shipping notification, keyed on the AWB, dry-run captured.
+		const [shipmentRow] = await db.select().from(shipments).where(eq(shipments.orderId, order.id));
+		const notifications = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.idempotencyKey, `shipping-notification:${shipmentRow.awb}`));
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0].status).toBe('dryrun');
+		expect(notifications[0].toEmail).toBe('livrare-client@example.com');
 	} finally {
 		await db.$client.end();
 	}
