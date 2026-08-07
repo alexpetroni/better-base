@@ -27,15 +27,25 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] Terms & conditions reviewed likewise (`/pagini/termeni-si-conditii`),
       especially: 14-day withdrawal right (OUG 34/2014), pricing/VAT wording,
       the not-medical-advice disclaimers.
+- [ ] Cookie policy prose reviewed likewise (`/pagini/politica-de-cookie-uri`).
+      Only the PROSE needs review: the cookie table below it is rendered from
+      code (`modules/gdpr/cookies.ts`) and always matches what the app
+      actually sets — do not paste a cookie list into the markdown.
 - [ ] Company identification (legal name, CUI, Reg. Com., registered address,
       contact email/phone — legally required in RO) filled in at
       `/admin/settings` → "Identificarea companiei". The seed leaves
       `PLACEHOLDER — …` values and `pnpm launch:check` refuses to pass while
-      any stand. (Rendering this block in the footer/legal pages is the next
-      code phase; the data entry is this box.)
+      any stand. Once saved, the block renders automatically in the footer of
+      every page and on the legal pages — nothing else to do.
 - [ ] ANPC SAL / SOL (online dispute resolution) URLs — required for RO
       e-commerce — filled in at `/admin/settings` → "Linkuri legale"
-      (enforced by `pnpm launch:check` the same way).
+      (enforced by `pnpm launch:check` the same way). They render as footer
+      links automatically once saved.
+- [ ] Analytics decision: leave `PUBLIC_ANALYTICS_*` unset (no script ships)
+      or set the trio for a Plausible/Umami instance (DEPLOYMENT.md §2). The
+      script loads only after the visitor consents, and consent can be
+      revoked on the cookie-policy page — both enforced by tests, nothing to
+      configure beyond the env vars.
 - [ ] Decision recorded: who answers GDPR requests, and the process for
       `pnpm subscriber:delete -- --email …` (who runs it, response deadline
       30 days).
@@ -127,7 +137,11 @@ in the split boxes.
 ## Final smoke (on production, after everything above)
 
 - [ ] DEPLOYMENT.md §11 walked end-to-end on the live site.
-- [ ] Cookie banner appears on first visit; accepting/refusing sticks.
+- [ ] Cookie banner appears on first visit; accepting/refusing sticks;
+      "Retrage acordul" on `/pagini/politica-de-cookie-uri` revokes it (and,
+      if analytics is enabled, the script stops loading after revocation).
+- [ ] Footer shows the company identification + working ANPC SAL/SOL links
+      on the live site (they come from `/admin/settings`, not the deploy).
 - [ ] Chat answers in Romanian and declines medical questions
       (live Anthropic provider, not canned mock replies).
 - [ ] Lighthouse spot-check on `/`, an article and a product page (a11y ≥ 90,

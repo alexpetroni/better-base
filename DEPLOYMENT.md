@@ -61,6 +61,7 @@ Shared (may be identical on both sites):
 | `DB_DRIVER` | unset (`pg`) | `neon` selects the serverless WebSocket driver (§12). An unknown value refuses to boot. |
 | `DIRECT_DATABASE_URL` | unset | Migrations only: an unpooled connection for DDL (§12). Falls back to `DATABASE_URL`. |
 | `CRON_SECRET` | unset | Required only where the retention job runs over HTTP instead of cron (§12). |
+| `PUBLIC_ANALYTICS_PROVIDER` | unset | Optional. `plausible` or `umami`; unset = NO analytics script ships. When set, `PUBLIC_ANALYTICS_HOST` (service origin) and `PUBLIC_ANALYTICS_SITE_ID` (Plausible `data-domain` / Umami website id) are required — `launch:check` and the seam itself refuse a half-set trio. The script loads client-side ONLY after the visitor grants cookie consent, never on `/admin`. |
 
 The server validates the whole matrix at boot and **refuses to start** with a
 message listing every missing variable (plus `RESEND_API_KEY` when

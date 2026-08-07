@@ -1,4 +1,73 @@
-# STATE — after site settings (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after RO legal surface + analytics (2026-08-07, branch `feat/vercel-neon`)
+
+## RO legal surface + consent-gated analytics (2026-08-07, NEXT-4)
+
+The NEXT-3 settings now RENDER, and analytics exist behind the consent gate
+that was left for them. No schema changes; three new OPTIONAL env vars
+(`PUBLIC_ANALYTICS_*`, documented in `.env.example` + DEPLOYMENT.md §2).
+
+- **Trader identification renders from settings** — `modules/settings/legal.ts`
+  (`legalIdentity()`: pure display model; unset/blank/`PLACEHOLDER — …` values
+  become `null`, `displayCui()` RO-prefixes exactly when
+  `company.vatRegistered`) + `LegalIdentity.svelte`, rendered by the (public)
+  layout footer on EVERY public page and, boxed as `legal-page-identity`, on
+  the legal pages by `/pagini/[slug]` (slugs in `LEGAL_PAGE_SLUGS`). ANPC
+  SAL/SOL links come from `legal.anpc*Url` settings with
+  `target=_blank rel=noopener`. `legal.spec.ts` SSR-renders the component
+  (this repo's first `svelte/server` render specs — the pattern works in the
+  node vitest project) and scans components/routes/site-configs asserting no
+  hardcoded Reg. Com./CUI/anpc.ro/ec.europa.eu literal ever appears.
+- **Cookie policy is derived from code** — `modules/gdpr/cookies.ts` is THE
+  inventory (auth session, `cart`, `cookie_consent`, `chat_session`,
+  `PARAGLIDE_LOCALE`); `CookieTable.svelte` renders the policy table from it.
+  `cookies.spec.ts` closes the loop: it greps src for `cookies.set/delete`
+  and `document.cookie` writes — a NEW cookie fails the suite until it gets
+  an inventory entry (server-only names are literals in the inventory, pinned
+  to the real constants by the spec). New seeded page
+  `/pagini/politica-de-cookie-uri` (`COOKIE_PAGE_SLUG`, `ensurePage` — the
+  lawyer-editable prose must NOT duplicate the table). Linked from the
+  consent banner ("Află mai multe" now points here, not at privacy) and both
+  sites' `footerLinks`.
+- **Analytics seam** — `modules/analytics/`: `selectAnalyticsProvider(env)`
+  returns `null` (no-op, the default — nothing ships) or a serializable
+  script config for `plausible`/`umami` when the full
+  `PUBLIC_ANALYTICS_{PROVIDER,HOST,SITE_ID}` trio is present; half-set or
+  unknown throws (chat-provider pattern), and `launch:check` reports it
+  (a half-set trio would 500 every public page). `server.ts` is the node-safe
+  barrel (no `.svelte`) for scripts/`$lib/server`. Both providers run
+  cookieless — `cookieNames` exists for revocation + the inventory spec, so a
+  future cookie-setting provider fails tests until the policy knows it.
+- **Consent gating end-to-end** — the (public) layout load ships
+  `data.analytics`; `AnalyticsLoader.svelte` (mounted ONLY there — admin/api
+  are structurally untracked, plus `isTrackablePath()` as defense) injects
+  the script in an `$effect` gated on `shouldLoadAnalytics(config, decision,
+  path)` and removes it on cleanup. The live decision is
+  `localDecision ?? data.cookieConsent`, fed by the banner's new `onchange`
+  prop — accepting tracks immediately, no reload. `track()` (`events.ts`)
+  sanitizes custom-event props (PII-named keys, email/phone-shaped values
+  dropped); nothing sends custom events yet.
+- **Revocation** — `ConsentManager.svelte` on the cookie-policy page:
+  re-reads `document.cookie` on mount (`consentFromCookieHeader`), buttons
+  accept/revoke; revoke rewrites the consent cookie, drops provider-declared
+  analytics cookies and `location.reload()`s (removing the tag would leave an
+  executed script's listeners alive — reload is the honest stop).
+- **e2e** — `analytics-consent.e2e.ts`: playwright config points
+  `PUBLIC_ANALYTICS_HOST` at each preview server's OWN origin (nothing leaves
+  localhost; other specs just 404 the script URL harmlessly), the spec
+  intercepts the script route with a stub that phones a same-origin endpoint:
+  refuse ⇒ zero requests, accept ⇒ exactly one tag + one request (and
+  persists across reload), revoke on the policy page ⇒ tag gone, counters
+  frozen, cookie `denied`; admin never loads it even when granted.
+  `settings.e2e.ts` gained the legal-surface test (in that file ON PURPOSE —
+  it depends on the company data saved by its first test, and parallel spec
+  files would race the shared `site_settings`): footer identity + ANPC hrefs
+  + `rel=noopener`, identity block on both legal pages, cookie table lists
+  the real cookie names.
+- Docs: LAUNCH-CHECKLIST Legal section (identification/ANPC boxes are now
+  "fill in `/admin/settings`, renders automatically"; lawyer review of the
+  three seeded pages incl. the new cookie policy stays human; analytics
+  decision box added), final-smoke boxes for revocation + footer;
+  DEPLOYMENT.md §2 env row. Verified: gate green, full e2e green both sites.
 
 ## Site settings: the operator-editable data layer (2026-08-07, NEXT-3)
 
@@ -1325,9 +1394,6 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - **Invoicing & shipping**: orders have no invoices (RO legal requirement for
   the business) and no shipping-provider integration (AWB, tracking emails) —
   the most likely next phase, see LAUNCH-CHECKLIST note.
-- **Analytics**: nothing ships; wire a privacy-friendly script behind
-  `analyticsAllowed()` in `CookieConsent.svelte` + add the cookie-policy
-  copy when it lands.
 - **Nurture sequences**: only transactional + double-opt-in emails exist; no
   scheduled newsletter/drip sending (needs a queue/cron design decision).
 - **Chat history restore**: the widget's conversation is client-local (the
