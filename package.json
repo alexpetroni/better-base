@@ -11,6 +11,7 @@
 		"lint": "pnpm -r --if-present lint",
 		"check": "pnpm -r --if-present check",
 		"test:unit": "pnpm -r --if-present test:unit",
+		"test:neon": "pnpm --filter web test:neon",
 		"test:e2e": "pnpm --filter web test:e2e",
 		"db:migrate": "pnpm --filter web db:migrate",
 		"db:seed": "pnpm --filter web db:seed",

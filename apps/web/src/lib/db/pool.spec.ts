@@ -54,14 +54,22 @@ describe('poolConfigFromEnv', () => {
 });
 
 describe('createDb pool limits', () => {
+	// These three assert node-postgres pool internals (pg.Pool options, the
+	// raw TCP handshake), so they pin driver 'pg' explicitly — under
+	// `pnpm test:neon` the env default would otherwise swap the driver out
+	// from under them. The neon equivalents live in driver-parity.spec.ts.
 	it('constructs the pg pool with the configured limits', async () => {
 		// Never queried — nothing connects to this address.
-		const db = createDb('postgres://better:better@127.0.0.1:9/never-connected', {
-			max: 3,
-			connectionTimeoutMillis: 123,
-			idleTimeoutMillis: 456,
-			statementTimeoutMillis: 789
-		});
+		const db = createDb(
+			'postgres://better:better@127.0.0.1:9/never-connected',
+			{
+				max: 3,
+				connectionTimeoutMillis: 123,
+				idleTimeoutMillis: 456,
+				statementTimeoutMillis: 789
+			},
+			'pg'
+		);
 		try {
 			expect(db.$client.options.max).toBe(3);
 			expect(db.$client.options.connectionTimeoutMillis).toBe(123);
@@ -73,7 +81,7 @@ describe('createDb pool limits', () => {
 	});
 
 	it('applies the env-derived defaults when no explicit config is passed', async () => {
-		const db = createDb('postgres://better:better@127.0.0.1:9/never-connected');
+		const db = createDb('postgres://better:better@127.0.0.1:9/never-connected', undefined, 'pg');
 		try {
 			expect(db.$client.options.max).toBe(DB_POOL_DEFAULTS.max);
 			expect(db.$client.options.connectionTimeoutMillis).toBe(
@@ -91,10 +99,14 @@ describe('createDb pool limits', () => {
 		const server = net.createServer(() => {});
 		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 		const { port } = server.address() as net.AddressInfo;
-		const db = createDb(`postgres://better:better@127.0.0.1:${port}/x`, {
-			...DB_POOL_DEFAULTS,
-			connectionTimeoutMillis: 300
-		});
+		const db = createDb(
+			`postgres://better:better@127.0.0.1:${port}/x`,
+			{
+				...DB_POOL_DEFAULTS,
+				connectionTimeoutMillis: 300
+			},
+			'pg'
+		);
 		try {
 			expect(await rejectionText(db.execute(sql`select 1`))).toMatch(/timeout/i);
 		} finally {
