@@ -1,0 +1,45 @@
+# imgproxy on Fly.io — the one always-on piece of the Vercel + Neon deployment
+# (DEPLOYMENT.md §12: Vercel cannot host imgproxy, and every image on every
+# page is a signed imgproxy URL).
+#
+# Deploy with `fly deploy --config deploy/imgproxy/fly.toml` after setting the
+# secrets listed in README.md next to this file. The app name is generic on
+# purpose: one instance can serve every site's bucket (the signed URL names
+# the bucket), so nothing brand-specific belongs in the repo — pass
+# `--app <name>` to override per deployment.
+app = 'better-imgproxy'
+primary_region = 'otp' # Bucharest — RO visitors, RO market
+
+[build]
+image = 'ghcr.io/imgproxy/imgproxy:v3'
+
+# Same hardening as docker-compose.yml / DEPLOYMENT.md §6. The signing pair
+# and the R2 credentials are NOT here — they are Fly secrets (see README.md).
+[env]
+IMGPROXY_SANITIZE_SVG = 'true'
+IMGPROXY_MAX_SRC_FILE_SIZE = '15728640' # 15 MiB = the app's upload cap
+IMGPROXY_MAX_SRC_RESOLUTION = '50' # megapixels; decompression-bomb guard
+IMGPROXY_USE_S3 = 'true'
+AWS_REGION = 'auto' # R2
+
+[http_service]
+internal_port = 8080
+force_https = true
+# Always on: an auto-stopped machine would add a cold start to the first
+# image of every quiet hour, and the whole point of this box is that images
+# always resolve. At shared-cpu-1x prices this costs a few $/month.
+auto_stop_machines = 'off'
+auto_start_machines = true
+min_machines_running = 1
+
+# imgproxy's built-in health endpoint (same one compose polls).
+[[http_service.checks]]
+interval = '15s'
+timeout = '3s'
+grace_period = '10s'
+method = 'GET'
+path = '/health'
+
+[[vm]]
+size = 'shared-cpu-1x'
+memory = '512mb' # transforms are memory-bound; 256mb OOMs on large sources
