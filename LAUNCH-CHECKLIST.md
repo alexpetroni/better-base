@@ -161,8 +161,9 @@ in the split boxes.
       run green once by hand (Actions → migrate → Run workflow) — its log
       prints the applied migration list (§12 "CI migrations").
 - [ ] First-deploy setup ran from a checkout with the prod env:
-      `pnpm db:seed`, `pnpm content:init`, `pnpm user:create` (§12 "Deploy
-      order"; §4 for adapter-node).
+      `pnpm db:seed`, `pnpm content:init`, `pnpm media:blurhash` (image
+      placeholders for imported media; idempotent), `pnpm user:create`
+      (§12 "Deploy order"; §4 for adapter-node).
 - [ ] Retention job, per target:
       - adapter-node: machine cron runs `pnpm chat:prune` daily (§9).
       - Vercel: `CRON_SECRET` set in the project env — `vercel.json` already
@@ -192,6 +193,10 @@ in the split boxes.
 
 ## Final smoke (on production, after everything above)
 
+The §11 walk was rehearsed against the local stack with the full feature set
+on 2026-08-08 — `docs/LAUNCH-DRY-RUN.md` records every command and result, so
+this section is executing a proven script, not exploring.
+
 - [ ] DEPLOYMENT.md §11 walked end-to-end on the live site.
 - [ ] Cookie banner appears on first visit; accepting/refusing sticks;
       "Retrage acordul" on `/pagini/politica-de-cookie-uri` revokes it (and,
@@ -199,6 +204,8 @@ in the split boxes.
 - [ ] Footer shows the company identification + working ANPC SAL/SOL links
       on the live site (they come from `/admin/settings`, not the deploy).
 - [ ] Chat answers in Romanian and declines medical questions
-      (live Anthropic provider, not canned mock replies).
+      (live Anthropic provider, not canned mock replies); reloading the page
+      restores the conversation (server-side history behind the session
+      cookie).
 - [ ] Lighthouse spot-check on `/`, an article and a product page (a11y ≥ 90,
       no layout shifts).

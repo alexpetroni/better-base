@@ -1,4 +1,75 @@
-# STATE — after nurture sequences (2026-08-07, branch `feat/vercel-neon`)
+# STATE — after launch polish (2026-08-08, branch `feat/vercel-neon`)
+
+## Launch polish: chat history restore, blurhash, launch dry run (2026-08-08, NEXT-10)
+
+The last phase of the launch batch — closes the two remaining named gaps and
+rehearses the launch procedure. No schema changes; two new pure-JS deps
+(`blurhash`, `pngjs` + `@types/pngjs`); one new script.
+
+- **Chat history restore** (`GET /api/chat`): `getChatHistory` in
+  `modules/chat/service.ts` mirrors the POST path's rules — the signed cookie
+  token is the ONLY authorization (malformed/foreign-secret/re-pointed tokens
+  → 403; the anonymous-token equality check runs even for existing sessions),
+  a pruned or unknown session yields `{messages: []}` (retention wins, no new
+  session is created), and the result is bounded to the newest
+  `HISTORY_RESTORE_LIMIT = 50` messages returned in chronological order
+  (`ORDER BY … DESC LIMIT n` then reversed). The same sliding-window limiter
+  applies via the shared core on SEPARATE keys (`history:session:` /
+  `history:ip:` — `historySessionRateKey`/`historyIpRateKey`), so page
+  reloads never consume the send budget; the sweep prunes those counter rows
+  like any other. `ChatPanel.svelte` fetches once on mount (best-effort,
+  silent on failure) and applies the snapshot ONLY while no local messages
+  exist — if the visitor sent something before the fetch resolved, the
+  snapshot may contain that very message, so it is discarded rather than
+  merged (duplication is impossible by construction). A cookie-less visitor
+  costs one pure-CPU check, no DB touch. Tests: 6 new integration cases in
+  `chat.spec.ts` (order, bound incl. `limit` override, token matrix,
+  restore-vs-send budget isolation, post-prune emptiness) and an e2e
+  reload-restore test (two reloads, exact message counts).
+- **Blurhash** (`media.blurhash` was always null since Phase 2):
+  - `modules/media/blurhash.ts` (pure, offline-testable): `blurhashFromPng`
+    (pngjs decode → `blurhash` encode at 4×3 components, guarded to refuse
+    anything over 64×64 so a pipeline bug can never burn serverless CPU) and
+    `blurhashPlaceholder` (hash → ≤32px data-URI PNG, aspect from the row's
+    natural dimensions, 4:3 fallback; invalid hash → null, never a throw).
+  - `computeBlurhash(imgproxy, key)` (service.ts): fetches a ≤32px PNG
+    render of the stored original FROM IMGPROXY — the same pipeline every
+    page view uses, so every stored raster format (jpg/png/webp/avif/gif) is
+    covered by one tiny PNG decode; ~1 KB fetch + tiny encode ≈ serverless-
+    cheap. `confirmUpload` computes it when the new OPTIONAL `imgproxy`
+    field is in `MediaDeps` (the admin upload route passes
+    `getImgproxyConfig()`); failures are non-fatal (row confirms with null),
+    SVGs are skipped (served unrasterized).
+  - **`pnpm media:blurhash`** (root + web script, `scripts/media-blurhash.ts`
+    → `backfillBlurhashes`): fills legacy null rows; idempotent + resumable
+    (null-only selection, per-row commit, failures logged + skipped, exit 1
+    while any row stays unfilled). Excludes SVGs.
+  - **`ImageSources.placeholder`** (string | null, REQUIRED field — object
+    literals elsewhere must include it): `imageSources()` decodes the row's
+    blurhash into an inline data-URI; `imgSources`/`imageSources` accept an
+    optional `blurhash` on the source row (full `MediaRow` callers get it
+    for free). `<Img>` paints it as the `<img>` background (SSR ships it —
+    visible pre-hydration) and clears it `onload` (+`complete` check at
+    hydration) so transparent images are not permanently backed by the blur.
+    No blurhash → no `style` attribute → byte-identical old markup.
+  - Tests: `blurhash.spec.ts` (deterministic encode on a generated fixture,
+    corrupt/oversized refusal, placeholder dimensions incl. portrait + 4:3
+    fallback, invalid-hash null), `img-component.spec.ts` (SSR render with/
+    without placeholder), media.spec additions (confirm populates the hash;
+    corrupt upload still confirms with null; backfill fills legacy rows,
+    reports corrupt ones, re-run is a no-op).
+- **Launch dry run executed** (2026-08-08): fresh DBs for BOTH sites →
+  migrate/seed/user:create/launch:check --dev → adapter-node build → §11
+  walked with curls + the admin upload API → all three cron routes curled
+  (authorized 200 JSON / unauthorized 401) → full e2e (81 passed, both
+  sites) → vercel build + neon suite. The record with every command and
+  output is **`docs/LAUNCH-DRY-RUN.md`**; the walk found §11 predated
+  invoices/shipping/analytics/cron (now steps 5–11), `media:blurhash`
+  documented nowhere (now §9, §11, §12, checklist Ops), and the chat smoke
+  item predating history restore (checklist updated).
+- Verified: gate green (lint + check + 715 unit/integration), `pnpm
+  test:neon` green, e2e 81 green across both sites, `DEPLOY_TARGET=vercel
+  pnpm build` green, `pnpm db:migrate` clean on fresh DBs for both sites.
 
 ## Nurture sequences: DB-backed email queue on the cron seam (2026-08-07, NEXT-9)
 
@@ -1861,18 +1932,11 @@ Not run in CI/agent runs — do this by hand when you have keys:
 
 ## Known gaps / suggested next phases
 
-- **Invoicing & shipping**: orders have no invoices (RO legal requirement for
-  the business) and no shipping-provider integration (AWB, tracking emails) —
-  the most likely next phase, see LAUNCH-CHECKLIST note. The groundwork
-  landed in NEXT-5: the `processed_events` ledger gives their webhooks/crons
-  exactly-once semantics, and `order_events` is the trail they append to.
-- **Chat history restore**: the widget's conversation is client-local (the
-  cookie only carries provider context) — a GET /api/chat could restore it.
-- **Media blurhash** column exists but is never populated (needs pixel
-  decoding at upload/confirm time).
-- **better-life content**: the platform boots as life, but pillar landing
-  copy/quizzes/products beyond `somn` are seed-level only; content export/
-  import is the mechanism for sharing what already exists.
+Every CODE gap this batch set out to close is closed: invoicing + shipping
+landed in NEXT-6/7/8, nurture in NEXT-9, chat history restore and media
+blurhash in NEXT-10. What remains is the honest gap list at the very END of
+this file ("What this batch did NOT do") — human-only launch steps and
+deliberate deferrals, each with its reason.
 
 ## Key commands (all from repo root)
 
@@ -1893,6 +1957,10 @@ Not run in CI/agent runs — do this by hand when you have keys:
   a staff user in the `DATABASE_URL` database.
 - `pnpm chat:prune` — delete chat sessions older than 30 days from the
   `DATABASE_URL` database (wire into cron at deploy time).
+- `pnpm media:blurhash` — backfill `media.blurhash` for image rows still at
+  null (content imports, pre-NEXT-10 uploads). Idempotent + resumable; skips
+  SVGs; exits non-zero while any row stays unfilled. Needs `IMGPROXY_*` +
+  `S3_BUCKET` (the tiny source renders come from imgproxy).
 - `pnpm content export --type article|quiz|product --slug X [--out f.json]` /
   `pnpm content import f.json [--allow-untagged]` — cross-site content sharing
   (bundle carries media bytes; import is idempotent by slug and targets the
@@ -2180,10 +2248,11 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - New admin-only sections must be added to `ADMIN_ONLY_SECTIONS` in
   `modules/auth/guards.ts`; everything else under /admin is editor-accessible by
   default.
-- Chat has no history-restore endpoint: the widget's message list is
-  client-local; the cookie only carries session identity for provider
-  context. If a later phase needs it, add a GET to `/api/chat` that returns
-  the session's stored messages after `verifySessionToken`.
+- Chat history restore exists (NEXT-10): `GET /api/chat` returns the
+  session's stored messages (bounded, ordered) after `verifySessionToken`;
+  the widget restores on mount. Rate limits ride the shared table on
+  `history:` keys — a new read-path endpoint should follow that pattern
+  rather than consuming the write budget.
 - `locals.user` is available in all /admin server code (never null inside the
   shell). Add module schemas to the barrel as before — auth did:
   `export * from '../../modules/auth/schema.ts';`.
@@ -2193,3 +2262,57 @@ Not run in CI/agent runs — do this by hand when you have keys:
 - formcomp warns about `import.meta.env` usage during packaging (harmless under Vite,
   noted for a future minimal fix if it bites).
 - `pnpm build` output: `apps/web/build/` (node server); previews use `vite preview`.
+
+## What this batch did NOT do (final gap list, 2026-08-08)
+
+The honest remainder for whoever picks this up. Nothing here was blocked —
+each line is either human-only by nature or a recorded, deliberate deferral.
+Nothing else is known to stand between this build and a better-sleep launch.
+
+**Human-only launch steps** (the LAUNCH-CHECKLIST boxes; the code side is
+done and rehearsed — `docs/LAUNCH-DRY-RUN.md`):
+
+- Lawyer review of the three legal pages — the seeded texts are working
+  skeletons, not legal advice.
+- Accounts + contracts: registrar/Cloudflare (DNS, R2), Stripe live
+  activation, Resend domain verification, Anthropic billing, the Sameday
+  business contract, a deploy target (Vercel+Neon or VPS), Fly.io for
+  imgproxy.
+- DNS + TLS for the site and imgproxy hostnames.
+- Live keys/secrets in the prod env + `pnpm launch:check` (non-`--dev`)
+  green against it — locally it can only be rehearsed as `--dev` (its job is
+  to refuse dev values).
+- Company identification, ANPC/SOL links, invoice series and shipping
+  prices saved in `/admin/settings` (placeholders refuse launch:check).
+- One real LIVE card purchase + refund; one real Sameday AWB generated and
+  cancelled — the adapter follows the public API but is unverified against
+  a live account until then.
+- ANAF: SPV enrollment + qualified certificate; until the `EFacturaSubmitter`
+  adapter is implemented against real OAuth credentials, e-Factura XML is
+  produced but uploaded to SPV manually.
+- One run of migrate + suite against a real (free-tier) Neon project —
+  the local wsproxy proves the transport, not Neon's own pooler/TLS
+  (DEPLOYMENT §12 "Residual risk").
+
+**Deliberate deferrals** (would be code, consciously not built):
+
+- Automated e-Factura submission — blocked on the human ANAF steps above;
+  the seam (`efactura-submitter.ts`) and the hard-fail flag exist. Includes
+  the known XML gap: `CountrySubentity` (ISO 3166-2:RO county) is omitted
+  because the fiscal snapshot stores flattened address strings — extend the
+  snapshot when the adapter lands (`modules/invoice/README.md`).
+- A second courier adapter (Cargus etc.) — the `CourierProvider` interface
+  is the seam; Sameday is the one implemented.
+- better-life real content — the platform boots as life (9 pillars, own
+  sequences) but everything beyond `somn` is seed-level; content
+  export/import + `content/life/` is the mechanism, filling it is editorial
+  work.
+- Vercel Image Optimization as an imgproxy replacement — rejected in NEXT-2
+  (it would refactor `imageSources()`, which every page renders through);
+  imgproxy on Fly stays the one always-on box on the serverless target.
+- Prod split of `S3_ENDPOINT`/`IMGPROXY_URL` into internal + public pairs —
+  not needed while both roles resolve to one reachable host; would need two
+  new env vars if a private S3 endpoint ever appears.
+- Automated Lighthouse in CI — perf/a11y assertions run in e2e
+  (`perf.e2e.ts`, `a11y.e2e.ts`); the checklist keeps a manual Lighthouse
+  spot-check at launch.

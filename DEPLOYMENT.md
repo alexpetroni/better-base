@@ -348,8 +348,11 @@ Vercel all three routes are scheduled by `apps/web/vercel.json`.
 
 On-demand (not cron): `pnpm subscriber:delete -- --email x@y.ro` for GDPR
 erasure requests (deletes the subscriber, unlinks quiz results, anonymizes
-orders + email log), and `pnpm content export/import` to copy an article,
-quiz or product between sites:
+orders + email log); `pnpm media:blurhash` to backfill image placeholders for
+media rows that predate confirm-time encoding (content imports, upgrades —
+idempotent and resumable: only null rows are touched, failures are reported
+and retried on the next run); and `pnpm content export/import` to copy an
+article, quiz or product between sites:
 
 ```bash
 # on/with site A's env:
@@ -368,15 +371,39 @@ Content shared between sites travels via `pnpm content export/import` (§9).
 
 ## 11. Post-deploy verification
 
+Rehearsed end-to-end against the local stack on 2026-08-08 — the executed
+walk, with commands and outputs, is `docs/LAUNCH-DRY-RUN.md`.
+
 1. `curl https://<site>/api/health` → `200 {"status":"ok",…}`.
 2. Open `/` — pillars render, cookie banner appears, footer links to the
-   legal pages work.
+   legal pages work and (once `/admin/settings` is filled) the footer shows
+   the company identification + ANPC SAL/SOL links.
 3. `/admin/login` with the created admin; upload an image in /admin/media and
-   confirm the thumbnail renders (proves R2 + imgproxy + signatures).
+   confirm the thumbnail renders (proves R2 + imgproxy + signatures). The new
+   row also gets a `blurhash` — visible as a blurred placeholder while images
+   load on slow connections.
 4. Complete the quiz, leave an email → check `email_log` (or the inbox once
    dry-run is off).
-5. Test-mode purchase → order appears in /admin/orders as `plătită`.
-6. `robots.txt`, `sitemap.xml` reachable; `/nu-exista` renders the 404 page.
+5. Test-mode purchase → order appears in /admin/orders as `plătită` with its
+   invoice issued automatically: numbered in the declared series, PDF + XML
+   downloadable from the order page and the success page, and the
+   confirmation email (in `email_log`, or the inbox) carries the PDF.
+6. Generate the AWB from the order's detail page — with
+   `COURIER_PROVIDER=sameday` this doubles as the live verification of §7
+   "Shipping" step 4; with `mock` it proves the flow with a clearly-fake AWB.
+   The shipping email with the tracking link lands in `email_log`.
+7. The three scheduled routes answer the authorized curls from §12
+   ("Scheduled jobs") with 200 JSON on BOTH targets — adapter-node machine
+   cron uses the same curls (§9) — and answer 401 without the Bearer.
+8. If `PUBLIC_ANALYTICS_*` is set: the analytics script loads ONLY after
+   accepting the cookie banner, and stops loading after "Retrage acordul" on
+   the cookie-policy page.
+9. Chat: send a message, reload the page — the conversation is restored from
+   the server (history restore rides the session cookie).
+10. `robots.txt`, `sitemap.xml` reachable; `/nu-exista` renders the 404 page.
+11. If media rows predate this deploy (a content import, or an upgrade from a
+    build without blurhash): `pnpm media:blurhash` once — a re-run printing
+    `filled 0` confirms nothing is left.
 
 ## 12. Serverless: Vercel + Neon
 
@@ -474,6 +501,7 @@ keeps the schema current):
 DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
 DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm db:seed        # first deploy only
 DATABASE_URL="…-pooler…" pnpm content:init                             # initial content, idempotent
+DATABASE_URL="…-pooler…" pnpm media:blurhash                           # placeholders for imported media
 DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin --password '…'
 ```
 
