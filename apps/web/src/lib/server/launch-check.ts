@@ -3,7 +3,8 @@
  * run against a TARGET environment's variables before a deploy, it reports
  * every way that env would embarrass production — missing variables, committed
  * dev defaults, an http origin, target/secret mismatches — plus a live probe
- * that proves the app's imgproxy key/salt agree with the imgproxy instance.
+ * of the selected image provider (DEPLOYMENT.md §6), which proves that real
+ * visitors will actually see images.
  *
  * Framework-free like boot.ts (the env record is passed in) so the rules are
  * unit-testable offline; the variable list comes from `env-matrix.ts`, the
@@ -13,7 +14,14 @@
  */
 import { resolveSiteConfig } from '../config/index.ts';
 import { selectAnalyticsProvider } from '../modules/analytics/server.ts';
-import { imgproxyConfigFromEnv, storageConfigFromEnv } from '../modules/media/env.ts';
+import { buildCloudflareImageUrl, cloudflareOriginUrl } from '../modules/media/cloudflare.ts';
+import {
+	cloudflareConfigFromEnv,
+	imageProviderFromEnv,
+	imageProviderNameFromEnv,
+	imgproxyConfigFromEnv,
+	storageConfigFromEnv
+} from '../modules/media/env.ts';
 import { buildImgUrl, imgproxyPath } from '../modules/media/imgproxy.ts';
 import { createStorage } from '../modules/media/storage.ts';
 import { bootEnvProblems, REQUIRED_BOOT_ENV } from './boot.ts';
@@ -95,6 +103,64 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 		}
 	}
 
+	problems.push(...imageProviderProblems(env));
+
+	// EMAIL_DRYRUN=false is the "this env is live" signal: real emails go out,
+	// so a test-mode Stripe key is a mistake, not a stage.
+	if (env.STRIPE_SECRET_KEY?.startsWith('sk_test_') && env.EMAIL_DRYRUN === 'false') {
+		problems.push(
+			'STRIPE_SECRET_KEY is a TEST key (sk_test_…) in a live env (EMAIL_DRYRUN=false) — set the live key, or keep EMAIL_DRYRUN=true until launch'
+		);
+	}
+
+	return problems;
+}
+
+/**
+ * Production-only image-delivery rules. Which ones apply depends on
+ * IMAGE_PROVIDER, so they live together here rather than as unconditional
+ * lines in `launchCheckProblems`.
+ */
+export function imageProviderProblems(env: Env): string[] {
+	const problems: string[] = [];
+	let provider: ReturnType<typeof imageProviderNameFromEnv>;
+	try {
+		provider = imageProviderNameFromEnv(env);
+	} catch {
+		// An unknown IMAGE_PROVIDER is already reported by the boot check.
+		return problems;
+	}
+
+	// `direct` hands visitors the untouched original — a 4 MB phone photo on a
+	// 3G connection. It exists for local dev, and shipping it is always a
+	// misconfiguration, never a choice.
+	if (provider === 'direct') {
+		problems.push(
+			'IMAGE_PROVIDER=direct serves unresized originals — set cloudflare (Vercel) or imgproxy (VPS); see DEPLOYMENT.md §6'
+		);
+	}
+
+	// Both public image origins are rendered into every page: on http they
+	// would be mixed content and the browser would block them outright.
+	for (const name of ['MEDIA_PUBLIC_BASE_URL', 'CF_IMAGE_BASE_URL'] as const) {
+		const value = env[name];
+		if (!value) continue;
+		let parsed: URL;
+		try {
+			parsed = new URL(value);
+		} catch {
+			problems.push(`${name} is not a valid URL: "${value}"`);
+			continue;
+		}
+		if (parsed.protocol !== 'https:') {
+			problems.push(
+				`${name} must be https in production (got ${value}) — images would be mixed content`
+			);
+		}
+	}
+
+	if (provider !== 'imgproxy') return problems;
+
 	// The imgproxy pair has no committed default to grep for — a dev-shaped
 	// value is one that openssl rand -hex 32 could not have produced.
 	for (const name of ['IMGPROXY_KEY', 'IMGPROXY_SALT'] as const) {
@@ -108,68 +174,91 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 	if (env.IMGPROXY_KEY && env.IMGPROXY_KEY === env.IMGPROXY_SALT) {
 		problems.push('IMGPROXY_SALT must differ from IMGPROXY_KEY — generate a separate value');
 	}
-
-	// EMAIL_DRYRUN=false is the "this env is live" signal: real emails go out,
-	// so a test-mode Stripe key is a mistake, not a stage.
-	if (env.STRIPE_SECRET_KEY?.startsWith('sk_test_') && env.EMAIL_DRYRUN === 'false') {
-		problems.push(
-			'STRIPE_SECRET_KEY is a TEST key (sk_test_…) in a live env (EMAIL_DRYRUN=false) — set the live key, or keep EMAIL_DRYRUN=true until launch'
-		);
-	}
-
 	return problems;
 }
 
-/** Can the probe run at all with this env? (Missing vars are reported elsewhere.) */
-export function canProbeImgproxy(env: Env): boolean {
-	const imgproxy = imgproxyConfigFromEnv(env);
+/**
+ * Why the image probe cannot run with this env, or null when it can. Missing
+ * variables are reported by the env rules, so this only decides whether the
+ * network round trip is worth attempting.
+ */
+export function imageProbeBlocker(env: Env): string | null {
 	const storage = storageConfigFromEnv(env);
-	return Boolean(
-		imgproxy.baseUrl &&
-		imgproxy.key &&
-		imgproxy.salt &&
-		storage.endpoint &&
-		storage.accessKey &&
-		storage.secretKey &&
-		storage.bucket
-	);
+	if (!storage.endpoint || !storage.accessKey || !storage.secretKey || !storage.bucket) {
+		return 'S3_* incomplete';
+	}
+	try {
+		const provider = imageProviderFromEnv(env);
+		// `direct` has nothing to prove: it hands back the stored original, and
+		// the env rules already refuse it on a production target.
+		if (!provider.transforms) return `IMAGE_PROVIDER=${provider.name} has no transforms to probe`;
+	} catch (cause) {
+		return cause instanceof Error ? cause.message : String(cause);
+	}
+	return null;
 }
 
 /** Where the probe object lives while the probe runs; deleted afterwards. */
-export const IMGPROXY_PROBE_KEY = 'launch-check/probe.png';
+export const IMAGE_PROBE_KEY = 'launch-check/probe.png';
 
-/** A 1×1 transparent PNG — the smallest source imgproxy will happily transform. */
+/** A 1×1 transparent PNG — the smallest source a transformer will happily accept. */
 const PROBE_PNG = Buffer.from(
 	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 	'base64'
 );
 
 /**
- * Live imgproxy probe: upload a tiny object with the app's S3 credentials,
- * then require the SIGNED imgproxy URL for it to answer 200 and an UNSIGNED
- * one to answer 403. That single round trip proves `IMGPROXY_URL` is
- * reachable, imgproxy can read the bucket with its own credentials, the
- * key/salt pair matches between app and imgproxy (the most likely silent prod
- * breakage — every image 403s), and signature enforcement is actually on.
- * The probe object is deleted afterwards; a failed cleanup is reported, not
- * fatal.
+ * Live image-delivery probe: upload a tiny object with the app's S3
+ * credentials, ask the selected provider for a derivative of it, then delete
+ * it. Dispatches on IMAGE_PROVIDER — the two providers can break in completely
+ * different ways, so they get completely different assertions. A failed
+ * cleanup is reported, not fatal.
  */
-export async function probeImgproxy(env: Env): Promise<string[]> {
-	const imgproxy = imgproxyConfigFromEnv(env);
+export async function probeImages(env: Env): Promise<string[]> {
 	const storage = createStorage(storageConfigFromEnv(env));
 	const problems: string[] = [];
 
 	try {
-		await storage.putObject(IMGPROXY_PROBE_KEY, PROBE_PNG, 'image/png');
+		await storage.putObject(IMAGE_PROBE_KEY, PROBE_PNG, 'image/png');
 	} catch (err) {
 		return [
-			`imgproxy probe: could not upload s3://${storage.bucket}/${IMGPROXY_PROBE_KEY} — S3 endpoint/credentials/bucket broken? (${err instanceof Error ? err.message : err})`
+			`image probe: could not upload s3://${storage.bucket}/${IMAGE_PROBE_KEY} — S3 endpoint/credentials/bucket broken? (${err instanceof Error ? err.message : err})`
 		];
 	}
 
 	try {
-		const signed = buildImgUrl(imgproxy, IMGPROXY_PROBE_KEY, { w: 16, format: 'png' });
-		const unsigned = `${imgproxy.baseUrl.replace(/\/$/, '')}/unsigned${imgproxyPath(imgproxy, IMGPROXY_PROBE_KEY, { w: 16, format: 'png' })}`;
+		const provider = imageProviderNameFromEnv(env);
+		problems.push(
+			...(provider === 'imgproxy' ? await probeImgproxyUrls(env) : await probeCloudflareUrls(env))
+		);
+	} catch (err) {
+		problems.push(`image probe: ${err instanceof Error ? err.message : err}`);
+	} finally {
+		try {
+			await storage.deleteObject(IMAGE_PROBE_KEY);
+		} catch {
+			problems.push(
+				`image probe: cleanup failed — delete s3://${storage.bucket}/${IMAGE_PROBE_KEY} by hand`
+			);
+		}
+	}
+
+	return problems;
+}
+
+/**
+ * imgproxy: the SIGNED URL must answer 200 and an UNSIGNED one 403. That
+ * single round trip proves `IMGPROXY_URL` is reachable, imgproxy can read the
+ * bucket with its own credentials, the key/salt pair matches between app and
+ * imgproxy (the most likely silent prod breakage — every image 403s), and
+ * signature enforcement is actually on.
+ */
+async function probeImgproxyUrls(env: Env): Promise<string[]> {
+	const imgproxy = imgproxyConfigFromEnv(env);
+	const problems: string[] = [];
+	try {
+		const signed = buildImgUrl(imgproxy, IMAGE_PROBE_KEY, { w: 16, format: 'png' });
+		const unsigned = `${imgproxy.baseUrl.replace(/\/$/, '')}/unsigned${imgproxyPath(imgproxy, IMAGE_PROBE_KEY, { w: 16, format: 'png' })}`;
 
 		const ok = await fetch(signed);
 		if (ok.status !== 200) {
@@ -190,15 +279,61 @@ export async function probeImgproxy(env: Env): Promise<string[]> {
 		problems.push(
 			`imgproxy probe: ${imgproxy.baseUrl} is not reachable from here (${err instanceof Error ? (err.cause instanceof Error ? err.cause.message : err.message) : err})`
 		);
-	} finally {
-		try {
-			await storage.deleteObject(IMGPROXY_PROBE_KEY);
-		} catch {
+	}
+	return problems;
+}
+
+/**
+ * Cloudflare: two round trips, because there are two independent ways this
+ * breaks and one message must not hide the other.
+ *
+ *   1. the ORIGIN URL — proves the R2 bucket really is published at
+ *      MEDIA_PUBLIC_BASE_URL (a missing custom-domain binding 404s here);
+ *   2. the /cdn-cgi/image URL — proves transformations are enabled on the
+ *      zone. When they are NOT, Cloudflare quietly passes the source through
+ *      untouched, so a 200 alone proves nothing: we ask for `format=webp` and
+ *      require the response to actually BE webp. A PNG coming back means the
+ *      site would serve full-size originals to every visitor while looking
+ *      perfectly healthy.
+ */
+async function probeCloudflareUrls(env: Env): Promise<string[]> {
+	const cfg = cloudflareConfigFromEnv(env);
+	const problems: string[] = [];
+
+	const origin = cloudflareOriginUrl(cfg, IMAGE_PROBE_KEY);
+	try {
+		const res = await fetch(origin);
+		if (res.status !== 200) {
 			problems.push(
-				`imgproxy probe: cleanup failed — delete s3://${storage.bucket}/${IMGPROXY_PROBE_KEY} by hand`
+				`cloudflare probe: origin ${origin} answered ${res.status}, expected 200 — is the R2 bucket bound to MEDIA_PUBLIC_BASE_URL as a public custom domain? (DEPLOYMENT.md §6)`
 			);
 		}
+	} catch (err) {
+		problems.push(
+			`cloudflare probe: origin ${cfg.originBaseUrl} is not reachable from here (${err instanceof Error ? (err.cause instanceof Error ? err.cause.message : err.message) : err})`
+		);
+		return problems;
 	}
 
+	const transformed = buildCloudflareImageUrl(cfg, IMAGE_PROBE_KEY, { w: 16, format: 'webp' });
+	try {
+		const res = await fetch(transformed);
+		if (res.status !== 200) {
+			problems.push(
+				`cloudflare probe: ${transformed} answered ${res.status}, expected 200 — is ${cfg.baseUrl} a Cloudflare-proxied zone?`
+			);
+			return problems;
+		}
+		const type = res.headers.get('content-type') ?? '(none)';
+		if (!type.includes('image/webp')) {
+			problems.push(
+				`cloudflare probe: asked for format=webp and got "${type}" — Image Transformations are OFF for this zone, so /cdn-cgi/image passes originals through unresized (enable them: Cloudflare dashboard → Images → Transformations)`
+			);
+		}
+	} catch (err) {
+		problems.push(
+			`cloudflare probe: ${cfg.baseUrl} is not reachable from here (${err instanceof Error ? (err.cause instanceof Error ? err.cause.message : err.message) : err})`
+		);
+	}
 	return problems;
 }

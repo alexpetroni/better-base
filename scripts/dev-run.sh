@@ -29,7 +29,6 @@ SITE_ID="${SITE_ID:-sleep}"
 PORT="${PORT:-4173}"
 DB_PORT="${DB_PORT:-5433}"
 MINIO_PORT="${MINIO_PORT:-9000}"
-IMGPROXY_PORT="${IMGPROXY_PORT:-8888}"
 DB_NAME="better_sleep"; [ "$SITE_ID" = "life" ] && DB_NAME="better_life"
 
 say() { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
@@ -41,8 +40,6 @@ if [ ! -f .env ]; then
   cp .env.example .env
   gen() { openssl rand -hex 32; }
   # fill the secrets that no longer have fallbacks
-  sed -i "s|^IMGPROXY_KEY=.*|IMGPROXY_KEY=$(gen)|" .env
-  sed -i "s|^IMGPROXY_SALT=.*|IMGPROXY_SALT=$(gen)|" .env
   sed -i "s|^TOKEN_SECRET=.*|TOKEN_SECRET=$(gen)|" .env
   sed -i "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$(gen)|" .env
 fi
@@ -53,10 +50,13 @@ export SITE_ID PORT
 export DATABASE_URL="postgres://better:better@localhost:${DB_PORT}/${DB_NAME}"
 export TEST_DATABASE_URL="postgres://better:better@localhost:${DB_PORT}/better_test"
 export S3_ENDPOINT="http://localhost:${MINIO_PORT}"
-export IMGPROXY_URL="http://localhost:${IMGPROXY_PORT}"
 export PUBLIC_SITE_URL="http://localhost:${PORT}"
 export ORIGIN="http://localhost:${PORT}"
-[ -n "${IMGPROXY_KEY:-}" ] && [ -n "${TOKEN_SECRET:-}" ] || die "IMGPROXY_KEY/TOKEN_SECRET missing from .env"
+# Local images come straight off MinIO (IMAGE_PROVIDER=direct, the default) —
+# no transformer container, no signing key. See DEPLOYMENT.md §6.
+export IMAGE_PROVIDER="${IMAGE_PROVIDER:-direct}"
+export MEDIA_PUBLIC_BASE_URL="http://localhost:${MINIO_PORT}/${S3_BUCKET}"
+[ -n "${TOKEN_SECRET:-}" ] || die "TOKEN_SECRET missing from .env"
 
 # --- port check ---
 if (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q ":${PORT} "; then
@@ -64,8 +64,8 @@ if (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q ":${PORT} "; then
 fi
 
 # --- 1. services ---
-say "Starting compose services (db, minio, imgproxy)"
-docker compose up -d db minio imgproxy
+say "Starting compose services (db, minio)"
+docker compose up -d db minio
 say "Waiting for Postgres to accept connections"
 for _ in $(seq 1 30); do
   docker compose exec -T db pg_isready -U better >/dev/null 2>&1 && break; sleep 1
@@ -74,7 +74,7 @@ docker compose exec -T db pg_isready -U better >/dev/null 2>&1 || die "Postgres 
 
 # --- 2. schema + storage + seed ---
 say "Applying migrations"; pnpm db:migrate
-say "Ensuring media bucket";  pnpm storage:init
+say "Ensuring media bucket (+ public read for the direct provider)"; pnpm storage:init
 say "Seeding demo content for SITE_ID=${SITE_ID}"; pnpm db:seed
 
 # --- 3. optional admin user (idempotent) ---

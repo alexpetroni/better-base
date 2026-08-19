@@ -28,8 +28,9 @@ which sleep is one). Romanian market, Romanian as base language.
 - **Admin is part of the app** at `/admin`, role-gated (`admin`/`editor` staff
   users via better-auth). No external CMS.
 - **Media**: originals in an S3-compatible bucket (dev: MinIO via docker compose;
-  prod: Cloudflare R2), transformed on the fly by **imgproxy** (dev: docker compose
-  container) using signed URLs. The app never serves image bytes itself.
+  prod: Cloudflare R2), sized by the selected **image provider** — Cloudflare
+  `/cdn-cgi/image` in production, nothing at all locally (originals are served
+  as-is), or a self-hosted signed imgproxy. The app never serves image bytes.
 
 ## Stack (fixed)
 
@@ -50,12 +51,12 @@ docker daemon (docker-out-of-docker). Consequences:
 
 - Containers you start with `docker compose up` are SIBLINGS. Their published
   ports live on the host: reach them at **`host.docker.internal:PORT`**, never
-  `127.0.0.1`. This applies to Postgres, MinIO, imgproxy, and any preview server
+  `127.0.0.1`. This applies to Postgres, MinIO, and any preview server
   you curl from a separate shell.
 - Therefore all connection strings must come from env vars — never hardcode a
   host. You do NOT need to edit `.env` for this: `loadRootEnv()`
   (`apps/web/scripts/env.ts`) rewrites `DATABASE_URL`, `TEST_DATABASE_URL`,
-  `S3_ENDPOINT` and `IMGPROXY_URL` to `host.docker.internal` when the process
+  `S3_ENDPOINT` and `MEDIA_PUBLIC_BASE_URL` to `host.docker.internal` when the process
   runs in a container and to `localhost` when it runs on the host, so one
   committed file serves both. Load env through it rather than calling dotenv
   directly.
@@ -75,8 +76,9 @@ Never call paid or external services from tests:
 - **Stripe**: real SDK in test mode only for manual verification; automated tests
   mock the Stripe client and construct signed webhook payloads with the SDK's
   signing helper against a test webhook secret.
-- **Storage/imgproxy**: tests run against the local MinIO + imgproxy containers
-  (they are free) or pure functions (URL signing is unit-testable offline).
+- **Storage**: tests run against the local MinIO container (it is free) or as
+  pure functions (every provider's URL building is unit-testable offline, with
+  no account, zone or domain).
 
 ## Quality bar & test policy
 

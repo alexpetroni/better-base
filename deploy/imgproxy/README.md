@@ -1,10 +1,17 @@
-# imgproxy on Fly.io
+# imgproxy on Fly.io — the OPTIONAL self-hosted image provider
 
-The app never serves image bytes: every `<img>` on every page is a signed URL
-pointing at one imgproxy instance, which reads originals from the private R2
-bucket. Vercel cannot host imgproxy (long-lived container, not a function), so
-it runs on Fly.io — `fly.toml` in this directory is the committed config.
-The decision, cost and rejected alternatives are recorded in DEPLOYMENT.md §12.
+> **Not the default any more.** Image URLs are built by a provider seam
+> (`IMAGE_PROVIDER`, DEPLOYMENT.md §6) and deploys default to `cloudflare`,
+> which needs no always-on box. Everything here applies only if you
+> deliberately set `IMAGE_PROVIDER=imgproxy` — for full control of the
+> transform pipeline, or because you already run a VPS.
+
+With that provider selected, the app never serves image bytes: every `<img>`
+on every page is a signed URL pointing at one imgproxy instance, which reads
+originals from the private R2 bucket. Vercel cannot host imgproxy (long-lived
+container, not a function), so it runs on Fly.io — `fly.toml` in this
+directory is the committed config. The decision, its cost and the rejected
+alternatives are recorded in DEPLOYMENT.md §12.
 
 One instance serves both sites (the signed URL names the bucket), which is why
 the app name here is generic. Run one per site only if you want separate

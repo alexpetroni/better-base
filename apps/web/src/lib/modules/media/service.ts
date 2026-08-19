@@ -3,9 +3,10 @@ import { imageSize } from 'image-size';
 import type { Db } from '../../db/client.ts';
 import type { Result as ResultOf } from '../../util/result.ts';
 import { blurhashFromPng, BLURHASH_SOURCE_PX } from './blurhash.ts';
-import { buildImgUrl, type ImgproxyConfig } from './imgproxy.ts';
+import type { ImageProvider } from './image.ts';
 import { media, type MediaRow, type VideoProvider } from './schema.ts';
 import type { Storage } from './storage.ts';
+import { looksLikeSvg, sanitizeSvg } from './svg.ts';
 import { isAllowedImageMime, mediaKeyFor, validateUpload } from './validation.ts';
 
 /**
@@ -17,11 +18,12 @@ export interface MediaDeps {
 	db: Db;
 	storage: Storage;
 	/**
-	 * When present, `confirmUpload` also computes a blurhash from a tiny
-	 * imgproxy render. Optional so storage-only callers keep working; a row
-	 * confirmed without it stays `blurhash: null` until `pnpm media:blurhash`.
+	 * When present AND able to transform, `confirmUpload` also computes a
+	 * blurhash from a tiny render. Optional so storage-only callers keep
+	 * working; a row confirmed without it stays `blurhash: null` until
+	 * `pnpm media:blurhash` runs against a transforming provider.
 	 */
-	imgproxy?: ImgproxyConfig;
+	images?: ImageProvider;
 }
 
 export type MediaError = 'invalid-mime' | 'invalid-size' | 'not-found' | 'referenced';
@@ -101,10 +103,32 @@ export async function confirmUpload(
 		// Undetectable dimensions (e.g. an SVG without width/viewBox) are not fatal.
 	}
 
-	let blurhash: string | null = null;
-	if (deps.imgproxy && stat.mime !== 'image/svg+xml') {
+	// SVGs are active content and no provider rasterizes them, so they are
+	// neutralized here — ONCE, at rest — rather than on every serve (audit M1).
+	// imgproxy used to do both halves on the way out; Cloudflare and direct
+	// hand the stored object to the browser untouched, so the stored object is
+	// what has to be safe:
+	//   1. scripts/handlers/remote refs stripped, and the clean bytes written
+	//      back over the original — the dangerous version stops existing;
+	//   2. `Content-Disposition: attachment`, so even a sanitizer miss
+	//      downloads instead of executing on the media origin.
+	if (stat.mime === 'image/svg+xml') {
 		try {
-			blurhash = await computeBlurhash(deps.imgproxy, input.key);
+			const source = new TextDecoder().decode(await deps.storage.getObjectBytes(input.key));
+			const clean = looksLikeSvg(source) ? sanitizeSvg(source) : '';
+			if (clean) await deps.storage.putObject(input.key, clean, stat.mime);
+			await deps.storage.setContentDisposition(input.key, 'attachment');
+		} catch {
+			// Non-fatal for the row, but the object may still be dangerous — the
+			// attachment header is the layer that holds either way, and a failed
+			// re-upload leaves the original in place rather than a corrupt one.
+		}
+	}
+
+	let blurhash: string | null = null;
+	if (deps.images?.transforms && stat.mime !== 'image/svg+xml') {
+		try {
+			blurhash = await computeBlurhash(deps.images, input.key);
 		} catch {
 			// Non-fatal: a corrupt or undecodable upload still confirms (the row
 			// just has no placeholder) and `pnpm media:blurhash` can retry later.
@@ -131,26 +155,35 @@ export async function confirmUpload(
 }
 
 /**
- * Blurhash for a stored image: imgproxy renders the original at ≤32px PNG
- * (the same resize pipeline every page view uses, so every stored format is
- * covered), and the tiny result is encoded pure-JS. Cheap enough for a
- * serverless confirm: one ~1 KB fetch plus a ≤32×32 encode. Throws on any
+ * Blurhash for a stored image: the image provider renders the original at
+ * ≤32px PNG (the same resize pipeline every page view uses, so every stored
+ * format is covered), and the tiny result is encoded pure-JS. Cheap enough for
+ * a serverless confirm: one ~1 KB fetch plus a ≤32×32 encode. Throws on any
  * failure — callers decide whether that is fatal.
+ *
+ * Refuses a non-transforming provider outright: `direct` would hand back the
+ * full-size original, and `blurhashFromPng` would either reject the megapixel
+ * buffer or, worse, spend real CPU on it.
  */
 export async function computeBlurhash(
-	imgproxy: ImgproxyConfig,
+	images: ImageProvider,
 	key: string,
 	opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}
 ): Promise<string> {
+	if (!images.transforms) {
+		throw new Error(
+			`image provider "${images.name}" cannot render the tiny source a blurhash needs`
+		);
+	}
 	const fetchImpl = opts.fetchImpl ?? fetch;
-	const url = buildImgUrl(imgproxy, key, {
+	const url = images.url(key, {
 		w: BLURHASH_SOURCE_PX,
 		h: BLURHASH_SOURCE_PX,
 		fit: 'fit',
 		format: 'png'
 	});
 	const res = await fetchImpl(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000) });
-	if (!res.ok) throw new Error(`imgproxy answered ${res.status} for ${key}`);
+	if (!res.ok) throw new Error(`${images.name} answered ${res.status} for ${key}`);
 	return blurhashFromPng(new Uint8Array(await res.arrayBuffer()));
 }
 
@@ -162,7 +195,7 @@ export async function computeBlurhash(
  * excluded (they are served unrasterized, so no placeholder applies).
  */
 export async function backfillBlurhashes(
-	deps: { db: Db; imgproxy: ImgproxyConfig },
+	deps: { db: Db; images: ImageProvider },
 	opts: { log?: (line: string) => void; fetchImpl?: typeof fetch } = {}
 ): Promise<{ filled: number; failed: number }> {
 	const log = opts.log ?? (() => {});
@@ -177,7 +210,7 @@ export async function backfillBlurhashes(
 	for (const row of rows) {
 		if (!row.key) continue; // unreachable for kind=image (schema check), belt-and-braces
 		try {
-			const blurhash = await computeBlurhash(deps.imgproxy, row.key, {
+			const blurhash = await computeBlurhash(deps.images, row.key, {
 				fetchImpl: opts.fetchImpl
 			});
 			await deps.db.update(media).set({ blurhash }).where(eq(media.id, row.id));

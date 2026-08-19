@@ -8,7 +8,7 @@ import { createDb, type Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
 import { seedPillars } from '../../db/seed.ts';
 import { users } from '../auth/schema.ts';
-import type { ImgproxyConfig } from '../media/imgproxy.ts';
+import { createImgproxyProvider } from '../media/imgproxy.ts';
 import { media } from '../media/schema.ts';
 import { articlesMediaReferenceCheck } from './media-ref.ts';
 import { renderArticleHtml } from './render.ts';
@@ -207,12 +207,12 @@ describe('admin listing and sitemap', () => {
 });
 
 describe('media integration', () => {
-	const cfg: ImgproxyConfig = {
+	const cfg = createImgproxyProvider({
 		baseUrl: 'http://img.test',
 		key: 'aa',
 		salt: 'bb',
 		bucket: 'bkt'
-	};
+	});
 
 	async function insertImage(id: string, key: string) {
 		await db.insert(media).values({

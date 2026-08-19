@@ -24,8 +24,11 @@ export default async function globalSetup() {
 	if (!secret) throw new Error('BETTER_AUTH_SECRET is not set — configure the root .env');
 
 	// A fresh compose stack has no bucket yet (same bootstrap as `pnpm storage:init`).
+	// The public-read policy matters: the suite runs on IMAGE_PROVIDER=direct, so
+	// the browser fetches originals off MinIO with no credentials at all.
 	const storage = createStorage(storageConfigFromEnv(process.env));
 	await storage.ensureBucket();
+	await storage.allowPublicRead();
 
 	for (const siteId of Object.keys(SITE_DB_NAMES) as Array<keyof typeof SITE_DB_NAMES>) {
 		const db = createDb(siteDatabaseUrl(siteId));

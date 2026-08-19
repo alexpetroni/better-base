@@ -2,7 +2,7 @@ import { error, redirect } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { renderArticleHtml } from '$lib/modules/blog/server';
 import type { ImageSources } from '$lib/modules/media';
-import { getImgproxyConfig, imgSources } from '$lib/modules/media/server';
+import { getImageProvider, imgSources } from '$lib/modules/media/server';
 import { addToCart } from '$lib/modules/shop';
 import { getProductBySlug, isOutOfStock } from '$lib/modules/shop/server';
 import { canonicalUrl } from '$lib/seo';
@@ -36,7 +36,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		// Same sanitized markdown pipeline as articles (supports media: refs).
 		descriptionHtml: await renderArticleHtml(
 			{ db: getDb() },
-			getImgproxyConfig(),
+			getImageProvider(),
 			product.descriptionMd
 		),
 		canonical: canonicalUrl(`/magazin/${product.slug}`)

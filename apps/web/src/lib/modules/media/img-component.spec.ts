@@ -1,6 +1,6 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
-import type { ImageSources } from './imgproxy.ts';
+import type { ImageSources } from './image.ts';
 import Img from './Img.svelte';
 
 // SSR contract for the blurhash placeholder: with one, the <img> paints it as

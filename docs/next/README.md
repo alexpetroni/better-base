@@ -12,7 +12,7 @@ The runner does not start phase N+1 until phase N is recorded done.
 | # | Phase | Closes | Depends on |
 |---|---|---|---|
 | 1 | `NEXT-1-NEON-PROOF.md` | The `neon` driver has never opened a connection | — |
-| 2 | `NEXT-2-DEPLOY-PIPELINE.md` | CI migrations, `pnpm launch:check`, imgproxy host | 1 |
+| 2 | `NEXT-2-DEPLOY-PIPELINE.md` | CI migrations, `pnpm launch:check`, image host | 1 |
 | 3 | `NEXT-3-SETTINGS.md` | The last admin stub; operator-editable data layer | — |
 | 4 | `NEXT-4-LEGAL-ANALYTICS.md` | RO company identification, ANPC/SOL, consent-gated analytics | 3 |
 | 5 | `NEXT-5-ORDER-LIFECYCLE.md` | Audit L6 event ledger; fulfillment states; work queue | — |
@@ -36,7 +36,7 @@ bash run.sh /home/alex/work/better-base/docs/next/runner.env            # build
 bash run.sh review /home/alex/work/better-base/docs/next/runner.env     # → state/REVIEW.md
 ```
 
-Phases 1, 5–9 need the local stack up (`docker compose up -d`, imgproxy included) for their
+Phases 1, 5–9 need the local stack up (`docker compose up -d`) for their
 integration tests.
 
 ## What this batch deliberately does not do

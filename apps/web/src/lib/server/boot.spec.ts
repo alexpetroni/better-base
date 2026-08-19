@@ -13,9 +13,10 @@ function validEnv(): Record<string, string | undefined> {
 		S3_ACCESS_KEY: 'ak',
 		S3_SECRET_KEY: 'sk',
 		S3_BUCKET: 'bucket',
-		IMGPROXY_URL: 'http://localhost:8888',
-		IMGPROXY_KEY: 'aa',
-		IMGPROXY_SALT: 'bb',
+		// Image delivery is provider-selected: no IMAGE_PROVIDER means `direct`,
+		// and the origin is stated explicitly so knocking out an S3_* variable
+		// tests exactly one rule instead of cascading into the provider check.
+		MEDIA_PUBLIC_BASE_URL: 'http://localhost:9000/bucket',
 		EMAIL_DRYRUN: 'true'
 	};
 }
@@ -34,8 +35,55 @@ describe('boot env validation (audit resilience #10)', () => {
 	});
 
 	it('treats empty strings as unset', () => {
-		const env = { ...validEnv(), IMGPROXY_KEY: '' };
-		expect(bootEnvProblems(env)).toEqual(['IMGPROXY_KEY is not set']);
+		const env = { ...validEnv(), S3_ACCESS_KEY: '' };
+		expect(bootEnvProblems(env)).toEqual(['S3_ACCESS_KEY is not set']);
+	});
+
+	// Every page renders images, so a provider that cannot be built is a dead
+	// site. Which variables that needs depends on IMAGE_PROVIDER, which is why
+	// the check builds the provider instead of consulting a fixed list.
+	describe('image provider', () => {
+		it('accepts the default (direct) derived from the S3 endpoint alone', () => {
+			const env = validEnv();
+			delete env.MEDIA_PUBLIC_BASE_URL;
+			expect(bootEnvProblems(env)).toEqual([]);
+		});
+
+		it('refuses an unknown provider name', () => {
+			expect(bootEnvProblems({ ...validEnv(), IMAGE_PROVIDER: 'imgix' })).toEqual([
+				'IMAGE_PROVIDER=imgix is not one of cloudflare, imgproxy, direct — see DEPLOYMENT.md §6'
+			]);
+		});
+
+		it('names what cloudflare is missing', () => {
+			const env: Record<string, string | undefined> = {
+				...validEnv(),
+				IMAGE_PROVIDER: 'cloudflare'
+			};
+			delete env.MEDIA_PUBLIC_BASE_URL;
+			expect(bootEnvProblems(env)).toEqual([
+				'IMAGE_PROVIDER=cloudflare needs: MEDIA_PUBLIC_BASE_URL'
+			]);
+		});
+
+		it('accepts a complete cloudflare config', () => {
+			expect(
+				bootEnvProblems({
+					...validEnv(),
+					IMAGE_PROVIDER: 'cloudflare',
+					MEDIA_PUBLIC_BASE_URL: 'https://media.example.test'
+				})
+			).toEqual([]);
+		});
+
+		// The imgproxy pair is only required when imgproxy is the one selected —
+		// demanding it from a Cloudflare deploy was the old, wrong behaviour.
+		it('requires the imgproxy pair only under IMAGE_PROVIDER=imgproxy', () => {
+			expect(bootEnvProblems({ ...validEnv(), IMGPROXY_URL: undefined })).toEqual([]);
+			expect(
+				bootEnvProblems({ ...validEnv(), IMAGE_PROVIDER: 'imgproxy', IMGPROXY_URL: 'http://x' })
+			).toEqual(['IMAGE_PROVIDER=imgproxy needs: IMGPROXY_KEY, IMGPROXY_SALT']);
+		});
 	});
 
 	it('requires RESEND_API_KEY at boot when EMAIL_DRYRUN=false — not at first send', () => {

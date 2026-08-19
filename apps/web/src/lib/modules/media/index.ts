@@ -2,7 +2,14 @@
 // Everything that signs URLs or touches storage/db lives behind
 // `$lib/modules/media/server` (the server barrel) instead.
 export { default as Img } from './Img.svelte';
-export type { ImageSources, ImgFit, ImgFormat, ImgOptions, ImgproxyConfig } from './imgproxy.ts';
+export type {
+	ImageProvider,
+	ImageProviderName,
+	ImageSources,
+	ImgFit,
+	ImgFormat,
+	ImgOptions
+} from './image.ts';
 export type { MediaKind, MediaRow, VideoProvider } from './schema.ts';
 export {
 	ALLOWED_IMAGE_MIMES,

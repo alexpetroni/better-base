@@ -16,8 +16,8 @@ test('admin uploads an image, sees its thumbnail, edits alt text, deletes it', a
 	await expect(item).toBeVisible();
 	await expect(page.getByTestId('media-upload-error')).toHaveCount(0);
 
-	// The thumbnail really renders — i.e. the browser fetched a signed imgproxy
-	// URL and got image bytes back (naturalWidth is 0 on a broken image).
+	// The thumbnail really renders — i.e. the browser fetched the image
+	// provider's URL and got image bytes back (naturalWidth is 0 on a broken image).
 	const img = item.locator('img');
 	await expect(img).toBeVisible();
 	await expect

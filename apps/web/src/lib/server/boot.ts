@@ -8,6 +8,7 @@
  * The variable list itself lives in `env-matrix.ts`, shared with the
  * `pnpm launch:check` preflight — add a variable there and both see it.
  */
+import { imageProviderFromEnv } from '../modules/media/env.ts';
 import { ENV_MATRIX } from './env-matrix.ts';
 
 export const REQUIRED_BOOT_ENV = ENV_MATRIX.filter((spec) => spec.boot).map((spec) => spec.name);
@@ -17,6 +18,16 @@ export function bootEnvProblems(env: Record<string, string | undefined>): string
 	const problems = REQUIRED_BOOT_ENV.filter((name) => !env[name]).map(
 		(name) => `${name} is not set`
 	);
+
+	// Image delivery: which variables are required depends on IMAGE_PROVIDER,
+	// so the check is "can the selected provider actually be built?" rather
+	// than a fixed list. Every page renders images, so a provider that cannot
+	// be built is a dead site — fail here, not on the first request.
+	try {
+		imageProviderFromEnv(env);
+	} catch (cause) {
+		problems.push(cause instanceof Error ? cause.message : String(cause));
+	}
 
 	// Real email delivery must fail at boot, not at the first send.
 	if (env.EMAIL_DRYRUN === 'false' && !env.RESEND_API_KEY) {

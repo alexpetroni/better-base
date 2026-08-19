@@ -40,7 +40,11 @@
       "Bash(pnpm check *)",
       "Bash(pnpm lint *)",
       "Bash(pnpm test:unit)",
-      "Bash(bash run.sh /home/alex/work/better-base/docs/next/runner.env)"
+      "Bash(bash run.sh /home/alex/work/better-base/docs/next/runner.env)",
+      "Bash(pnpm exec *)",
+      "Bash(pnpm launch:check --dev)",
+      "Bash(pnpm run *)",
+      "Bash(DEPLOY_TARGET=vercel pnpm build)"
     ]
   }
 }

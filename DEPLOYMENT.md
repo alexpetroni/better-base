@@ -6,7 +6,8 @@ database and media bucket. Nothing else differs between sites — no code
 changes, no per-site branches.
 
 This document assumes a Linux host (or PaaS) that can run a Node 24+ process,
-plus Postgres 16, an S3-compatible object store and one imgproxy instance.
+plus Postgres 16, an S3-compatible object store and an image provider (§6 —
+Cloudflare by default, so usually nothing extra to run).
 **§12 covers the serverless alternative: Vercel + Neon**, which uses the same
 codebase and the same env matrix with three variables changed.
 
@@ -16,20 +17,22 @@ codebase and the same env matrix with three variables changed.
                     ┌─────────────────────────────┐
    bettersleep.ro ─▶│ node build/  (SITE_ID=sleep)│──▶ Postgres db: better_sleep
                     └─────────────────────────────┘        │
-                                 │ presigned PUTs / reads  │
+                                 │ presigned PUTs          │
                                  ▼                         │
                     R2 bucket: bettersleep-media ◀─────────┘ (media rows hold keys)
-                                 ▲
-                    ┌────────────┴────────────┐
-   img.example.com ─▶  imgproxy (shared OK)   │  signed URLs, reads s3://<bucket>/<key>
-                    └─────────────────────────┘
+                                 │ public custom domain
+                                 ▼
+              media.bettersleep.ro ──▶ bettersleep.ro/cdn-cgi/image/<opts>/<src>
+                                          Cloudflare transforms + caches at the edge
    betterlife.ro  ─▶ second deployment: SITE_ID=life, db better_life, bucket betterlife-media
 ```
 
-- The app itself **never serves image bytes** — HTML embeds signed imgproxy
-  URLs; the browser PUTs uploads straight to storage via presigned URLs.
-- One imgproxy instance may serve both sites (it just reads whatever
-  `s3://bucket/key` the signed URL names), or run one per site — either works.
+- The app itself **never serves image bytes** — HTML embeds URLs the selected
+  image provider answers; the browser PUTs uploads straight to storage via
+  presigned URLs.
+- On the default (Cloudflare) provider there is **nothing of ours to keep
+  running** for images: R2 stores, Cloudflare transforms. That is what makes
+  the Vercel target Vercel + Neon + Cloudflare and nothing else (§6, §12).
 
 ## 2. Environment matrix
 
@@ -52,8 +55,11 @@ Shared (may be identical on both sites):
 | Variable | Value | Notes |
 | --- | --- | --- |
 | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` | from R2 (§5) | The endpoint must be reachable by **both** the server and browsers (uploads PUT directly to presigned URLs). R2's public S3 endpoint satisfies this. |
-| `IMGPROXY_URL` | e.g. `https://img.bettersleep.ro` | Browser-reachable base URL embedded in `<img>` tags. |
-| `IMGPROXY_KEY`, `IMGPROXY_SALT` | `openssl rand -hex 32` (twice) | MUST match the imgproxy process's own `IMGPROXY_KEY`/`IMGPROXY_SALT`. |
+| `IMAGE_PROVIDER` | `cloudflare` (deploys), unset = `direct` (dev) | Who builds image URLs (§6). `launch:check` refuses `direct` on a real deploy. |
+| `MEDIA_PUBLIC_BASE_URL` | e.g. `https://media.bettersleep.ro` | Public origin serving the stored originals — the R2 bucket's custom domain (§5). Required by `cloudflare`; in dev it is derived from `S3_ENDPOINT` + `S3_BUCKET`. Must be https in prod. |
+| `CF_IMAGE_BASE_URL` | unset | Zone serving `/cdn-cgi/image`. Defaults to `PUBLIC_SITE_URL`; set only when the media bucket is on a different zone than the site. |
+| `IMGPROXY_URL` | e.g. `https://img.bettersleep.ro` | `IMAGE_PROVIDER=imgproxy` only. Browser-reachable base URL embedded in `<img>` tags. |
+| `IMGPROXY_KEY`, `IMGPROXY_SALT` | `openssl rand -hex 32` (twice) | `IMAGE_PROVIDER=imgproxy` only. MUST match the imgproxy process's own `IMGPROXY_KEY`/`IMGPROXY_SALT`. |
 | `CHAT_PROVIDER` | `anthropic` (prod) | With `anthropic` the server **refuses to boot** without `ANTHROPIC_API_KEY` — no silent mock fallback. Keep `mock` if the assistant should not use the live API yet. |
 | `ANTHROPIC_API_KEY` | from Anthropic console | Only read when `CHAT_PROVIDER=anthropic`. |
 | `COURIER_PROVIDER` | `sameday` (prod) | With `sameday` the server **refuses to boot** without the three `SAMEDAY_*` values below — no silent mock fallback. Keep `mock` (the default) until the courier account exists; AWB generation then produces deterministic fake AWBs, clearly not real shipments. |
@@ -66,7 +72,8 @@ Shared (may be identical on both sites):
 | `PUBLIC_ANALYTICS_PROVIDER` | unset | Optional. `plausible` or `umami`; unset = NO analytics script ships. When set, `PUBLIC_ANALYTICS_HOST` (service origin) and `PUBLIC_ANALYTICS_SITE_ID` (Plausible `data-domain` / Umami website id) are required — `launch:check` and the seam itself refuse a half-set trio. The script loads client-side ONLY after the visitor grants cookie consent, never on `/admin`. |
 
 The server validates the whole matrix at boot and **refuses to start** with a
-message listing every missing variable (plus `RESEND_API_KEY` when
+message listing every missing variable (plus whatever the selected
+`IMAGE_PROVIDER` needs, `RESEND_API_KEY` when
 `EMAIL_DRYRUN=false`, and `STRIPE_WEBHOOK_SECRET` when a real Stripe key is
 set) — a bad deploy fails at startup, never as 500s on first use.
 
@@ -79,9 +86,14 @@ no committed dev default anywhere (secrets, MinIO/compose credentials,
 Stripe webhook dev value), `PUBLIC_SITE_URL` https and matching the
 `SITE_ID`'s domain, live-mode implications (`EMAIL_DRYRUN=false` ⇒
 `RESEND_API_KEY`, no `sk_test_…` key), the Vercel extras
-(`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live imgproxy probe: it uploads
-a 1×1 PNG with the app's S3 credentials and requires the signed imgproxy URL
-to answer 200 and an unsigned one 403 — proving key/salt agree between app
+(`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live image probe: it uploads a
+1×1 PNG with the app's S3 credentials and then asks the selected provider for
+a derivative of it. Under `cloudflare` that means the public origin must
+answer 200 (proving the R2 custom domain is bound) and the `/cdn-cgi/image`
+URL must come back as real webp (proving transformations are actually enabled
+— a zone with them off returns the untouched source with a 200, which is the
+one failure that otherwise looks healthy). Under `imgproxy` the signed URL
+must answer 200 and an unsigned one 403, proving key/salt agree between app
 and imgproxy and that imgproxy can read the bucket. It also reads the target
 database's `site_settings` and fails while any launch-required setting
 (company identification, ANPC/SOL links, invoice series/VAT rate — see
@@ -90,7 +102,7 @@ database's `site_settings` and fails while any launch-required setting
 Non-zero exit with a numbered report on any problem. Flags: `--dev` (local
 dev acknowledgement: dev defaults, http and placeholder settings are fine,
 everything else still checked), `--no-probe` (env-only: skips both the
-imgproxy probe and the site-settings database read, e.g. for CI),
+image probe and the site-settings database read, e.g. for CI),
 `--target=node|vercel` (default: `vercel` when `VERCEL`/`DEPLOY_TARGET=vercel`
 is set, else `node`).
 
@@ -185,10 +197,75 @@ Notes:
 No code changes vs MinIO: the storage layer is plain S3 API with path-style
 addressing. `pnpm storage:init` (idempotent bucket creation) is optional on
 R2 — the bucket is created in the dashboard; the token then does not need
-bucket-creation rights. The bucket stays **private**: nothing serves originals
-publicly; imgproxy reads them with its own credentials.
+bucket-creation rights.
 
-## 6. imgproxy (image transforms)
+**Public read access** depends on the image provider (§6). Under `cloudflare`
+(the default) the bucket must be reachable at a public custom domain, because
+that is the source URL Cloudflare fetches — bind one in the R2 dashboard
+(Settings → Public access → Custom domain), e.g. `media.bettersleep.ro`, and
+set it as `MEDIA_PUBLIC_BASE_URL`. Keep the domain on the SAME Cloudflare zone
+as the site, so the transform endpoint is allowed to fetch from it and no one
+else can point their zone at your bucket. Under `imgproxy` the bucket stays
+fully private and imgproxy reads it with its own credentials.
+
+What is public is the *original bytes at an unguessable key* (`uploads/<year>/
+<month>/<slug>-<8 hex>.<ext>`), never a listing: grant `s3:GetObject` only.
+Uploaded SVGs are sanitized at confirm time and stored with
+`Content-Disposition: attachment`, so a crafted SVG cannot execute on the
+media origin.
+
+## 6. Image delivery (`IMAGE_PROVIDER`)
+
+Every `<img>` on the site is built by one of three providers, chosen with
+`IMAGE_PROVIDER`. The rendered contract (`ImageSources`: src, webp/avif
+srcsets, width/height, blurhash placeholder) is identical either way — pages
+and components never know which one is configured.
+
+| `IMAGE_PROVIDER` | Who resizes | Needs | Use for |
+| --- | --- | --- | --- |
+| `cloudflare` (default for deploys) | Cloudflare, at the edge | `MEDIA_PUBLIC_BASE_URL`, a Cloudflare zone | Vercel target — nothing always-on |
+| `imgproxy` | your own container | `IMGPROXY_URL/KEY/SALT` | VPS target, or full control of the pipeline |
+| `direct` | nobody — originals as-is | `S3_*` only | local dev + the test suite ONLY |
+
+`pnpm launch:check` refuses `direct` on a real deploy and probes whichever of
+the other two is selected end-to-end (§ below).
+
+### `cloudflare` — the default
+
+URLs look like:
+
+```
+https://bettersleep.ro/cdn-cgi/image/width=768,fit=scale-down,format=webp,metadata=none/https://media.bettersleep.ro/uploads/2026/08/coperta-1a2b3c4d.jpg
+```
+
+Setup, once:
+
+1. Bind the R2 bucket to a public custom domain on your zone (§5) and set
+   `MEDIA_PUBLIC_BASE_URL=https://media.bettersleep.ro`.
+2. Enable **Image Transformations** for the zone: Cloudflare dashboard →
+   Images → Transformations → enable for `bettersleep.ro`. Check the current
+   pricing and free allowance for your plan; billing is per *unique*
+   transformation per month, and cached repeats are free — our URL options are
+   emitted in a fixed order precisely so the same derivative is never billed
+   twice under two spellings.
+3. Leave `CF_IMAGE_BASE_URL` unset (it defaults to `PUBLIC_SITE_URL`) unless
+   the media bucket lives on a different zone than the site.
+
+There is no signing key. Cloudflare only transforms sources it is allowed to
+fetch, and ours is our own R2 origin on our own zone — so the exposure is
+"anyone who knows a storage key can request other sizes of that image",
+not imgproxy's "anyone can transform anything". Do not add other hosts to the
+zone's allowed origins unless you want them proxied.
+
+**What breaks silently:** with transformations *off*, `/cdn-cgi/image/…`
+answers 200 and passes the source through untouched — the site looks fine and
+serves full-size originals to every visitor. `launch:check` catches exactly
+this by requesting `format=webp` and asserting the response really is webp.
+
+**Caching** is automatic: transformed responses are edge-cached by URL, and
+the URLs are immutable (options + key; re-uploads get new keys).
+
+### `imgproxy` — the self-hosted alternative
 
 Run the container `ghcr.io/imgproxy/imgproxy:v3` (any host that can reach R2),
 env:
@@ -196,7 +273,7 @@ env:
 ```
 IMGPROXY_KEY=<hex from openssl rand -hex 32>        # same values the app gets
 IMGPROXY_SALT=<hex from openssl rand -hex 32>
-IMGPROXY_SANITIZE_SVG=true                          # strip scripts from served SVGs
+IMGPROXY_SANITIZE_SVG=true                          # defense in depth; see below
 IMGPROXY_MAX_SRC_FILE_SIZE=15728640                 # 15 MiB, = the app's upload cap
 IMGPROXY_MAX_SRC_RESOLUTION=50                      # megapixels; decompression-bomb guard
 IMGPROXY_USE_S3=true
@@ -206,12 +283,11 @@ AWS_SECRET_ACCESS_KEY=<R2 token secret>
 AWS_REGION=auto
 ```
 
-Expose it at a public hostname (e.g. `img.bettersleep.ro`) and set that as
-`IMGPROXY_URL` for the app. Signature enforcement is on by default when
-key/salt are set — unsigned or tampered URLs get 403. A ready-made host
-config for exactly this container lives in `deploy/imgproxy/` (Fly.io, the
-committed choice for the Vercel target — §12); a VPS that already runs the
-app works just as well with the same env block.
+Expose it at a public hostname (e.g. `img.bettersleep.ro`), set that as
+`IMGPROXY_URL` and set `IMAGE_PROVIDER=imgproxy`. Signature enforcement is on
+by default when key/salt are set — unsigned or tampered URLs get 403. A
+ready-made host config lives in `deploy/imgproxy/` (Fly.io). Locally the
+container is behind a compose profile: `docker compose --profile imgproxy up -d`.
 
 **Key/salt hygiene & rotation.** There are NO committed defaults anywhere
 (docker-compose refuses to start without a pair in `.env`; the app's boot
@@ -220,17 +296,31 @@ the pair from another deploy. To rotate: generate a new pair, update the
 imgproxy process AND the app env together, restart both. Pages sign URLs per
 request, so newly rendered pages work immediately; already-CDN-cached image
 responses keep serving until their edge TTL expires (fine — the cache key is
-the old URL), while uncached old URLs start returning 403. SVGs are always
-served with `Content-Disposition: attachment` (the app signs `att:1` into
-their URLs) so a stored SVG can never render as a page in the imgproxy
-origin; keep `IMGPROXY_SANITIZE_SVG=true` as defense in depth.
+the old URL), while uncached old URLs start returning 403.
 
 **Cloudflare cache note:** imgproxy re-transforms on every request. Put the
 imgproxy hostname behind Cloudflare (orange cloud) with a cache rule
-"Cache Everything" + long edge TTL (transformed URLs are immutable: the
-signature encodes the exact transform + source key, and re-uploads get new
-keys). This gives CDN-cached images without any app changes. One shared
-imgproxy instance can serve both sites' buckets.
+"Cache Everything" + long edge TTL. One shared imgproxy instance can serve
+both sites' buckets.
+
+### SVGs
+
+An SVG is active content and nothing rasterizes it. It is neutralized **at
+upload**, once, rather than on every serve: `confirmUpload` strips scripts,
+event handlers and remote references, writes the clean bytes back over the
+original, and sets `Content-Disposition: attachment` on the object. Both
+layers matter — the sanitizer removes the payload, the header means even a
+sanitizer miss downloads instead of executing on the media origin. imgproxy's
+`IMGPROXY_SANITIZE_SVG` stays on as a third layer on that target.
+
+### `direct` — local only
+
+Serves the stored original untouched. This is why `docker compose up -d`
+brings up Postgres and MinIO only, and why the test suite needs no transformer:
+there is nothing to run. srcsets come back empty and blurhashes are skipped
+rather than faked, so what you see locally is honest about what it is.
+`pnpm storage:init` grants the bucket anonymous read so the browser can fetch
+originals; `pnpm media:blurhash` refuses to run on this provider.
 
 ## 7. Stripe (shop)
 
@@ -255,8 +345,8 @@ deterministic in-memory mock — never leave it empty in prod.
 
 Every issued invoice renders deterministically to a PDF and a UBL 2.1
 (CIUS-RO) XML, stored write-once in the S3/R2 bucket under the private
-`invoices/` prefix (same bucket as media, different prefix — imgproxy never
-serves it). Nothing to deploy: rendering is pure JS inside the app (works on
+`invoices/` prefix (same bucket as media, different prefix — never reachable
+through the image provider). Nothing to deploy: rendering is pure JS inside the app (works on
 Vercel), the confirmation email attaches the PDF, customers reach their
 documents through signed links on the order success page, and
 `/admin/orders/export?month=YYYY-MM` gives the accountant a monthly zip
@@ -379,7 +469,7 @@ walk, with commands and outputs, is `docs/LAUNCH-DRY-RUN.md`.
    legal pages work and (once `/admin/settings` is filled) the footer shows
    the company identification + ANPC SAL/SOL links.
 3. `/admin/login` with the created admin; upload an image in /admin/media and
-   confirm the thumbnail renders (proves R2 + imgproxy + signatures). The new
+   confirm the thumbnail renders (proves R2 + the image provider). The new
    row also gets a `blurhash` — visible as a blurred placeholder while images
    load on slow connections.
 4. Complete the quiz, leave an email → check `email_log` (or the inbox once
@@ -413,29 +503,35 @@ builds and runs exactly as §1–§11 describe.
 
 ```
    bettersleep.ro ─▶ Vercel functions (nodejs22.x, SITE_ID=sleep) ─▶ Neon (pooled endpoint)
-                              │ presigned PUTs / reads
+                              │ presigned PUTs
                               ▼
                      R2 bucket: bettersleep-media
-                              ▲
-                     imgproxy (Fly / Railway / a small VPS) ◀── signed URLs from the app
+                              │ public custom domain
+                              ▼
+              media.bettersleep.ro ──▶ /cdn-cgi/image/… (Cloudflare edge)
 ```
 
-**imgproxy runs on Fly.io — decided.** Vercel cannot host it, and the app
-signs imgproxy URLs for every image, so this is the one piece of always-on
-infrastructure the setup needs. The committed config is
-`deploy/imgproxy/fly.toml` (+ README with the exact `fly secrets set` lines):
-the upstream `ghcr.io/imgproxy/imgproxy:v3` image, region `otp` (Bucharest —
-the RO market next door), always-on `shared-cpu-1x`/512 MB, the `/health`
-check wired, same key/salt as the app and a **read-only** R2 token of its
-own, public hostname behind Cloudflare "Cache Everything" (§6). Cost: a few
-dollars a month (Fly's smallest always-on machine; 256 MB was rejected
-because large sources OOM the transformer). Alternatives considered:
-Railway (~$5/mo minimum for the same container, no closer region), a small
-VPS (similar price but reintroduces a machine to patch — sensible only if
-one already exists for an adapter-node deploy, per §6), and Vercel Image
-Optimization (rejected: it means refactoring `imageSources()` in
-`src/lib/modules/media/imgproxy.ts`, which every page renders through — the
-only option here with real regression risk).
+**Images run on Cloudflare — decided (revised).** The Vercel target now needs
+**no always-on infrastructure of its own**: R2 stores the originals, the
+zone's Image Transformations endpoint resizes and caches them, and both are
+Cloudflare products we already depend on for DNS and storage. Set
+`IMAGE_PROVIDER=cloudflare` and `MEDIA_PUBLIC_BASE_URL`; §6 has the two
+dashboard steps. Cost is per unique transformation per month against the
+zone's plan allowance, rather than a fixed monthly machine.
+
+This replaces the earlier decision to run **imgproxy on Fly.io**, which stood
+while `imageSources()` could only build signed imgproxy URLs. That coupling is
+gone: image URL building is now a provider seam
+(`src/lib/modules/media/image.ts` + one file per provider), so switching costs
+one environment variable instead of a refactor of the code every page renders
+through. The Fly config stays committed at `deploy/imgproxy/fly.toml` and
+`IMAGE_PROVIDER=imgproxy` still works — choose it if you want the transform
+pipeline entirely under your own control, or if you are already running a VPS
+for an adapter-node deploy (§6). Its cost was a few dollars a month for Fly's
+smallest always-on `shared-cpu-1x`/512 MB machine in region `otp`.
+
+Vercel Image Optimization remains rejected: it would bind image delivery to
+one host, which is exactly the coupling this seam removed.
 
 ### What changes
 
@@ -447,8 +543,8 @@ only option here with real regression risk).
 | `CRON_SECRET` | `openssl rand -hex 32` | Guards the retention route below. Vercel Cron sends it as `Authorization: Bearer …` automatically. |
 | `ADDRESS_HEADER`, `XFF_DEPTH` | **leave unset** | Vercel resolves the client IP itself. Setting them here would let a caller spoof `getClientAddress()` and defeat every rate limit. |
 
-Everything else — `SITE_ID`, `PUBLIC_SITE_URL`, the S3/R2 block, the imgproxy
-block, Stripe, Resend, chat — is identical to §2. Boot validation is unchanged,
+Everything else — `SITE_ID`, `PUBLIC_SITE_URL`, the S3/R2 block, the image
+provider block, Stripe, Resend, chat — is identical to §2. Boot validation is unchanged,
 so a missing variable still refuses the deploy with one message listing all of
 them.
 
@@ -545,7 +641,7 @@ image is not anonymously pullable) — behind a compose **profile**, so a plain
 `docker compose up -d` never builds or starts it.
 
 ```bash
-docker compose --profile neon up -d --build   # db + minio + imgproxy + neon-proxy
+docker compose --profile neon up -d --build   # db + minio + neon-proxy
 pnpm test:neon                                # the FULL suite with DB_DRIVER=neon over ws://
 ```
 
@@ -574,11 +670,10 @@ driver-level assertions live in `src/lib/db/driver-parity.spec.ts`.
 - **Cold starts** hit the first request after idle: a fresh function opens a
   new Neon connection. The pooled endpoint keeps this in the tens of
   milliseconds; it is not zero.
-- **One always-on box remains** for imgproxy — decided and committed: Fly.io,
-  `deploy/imgproxy/` (see "imgproxy runs on Fly.io" above). Removing it means
-  teaching the media layer a second transform provider (e.g. Vercel Image
-  Optimization) — deliberately out of scope, since it would touch every
-  page's rendering.
+- **No always-on box of our own.** Images go through Cloudflare Image
+  Transformations (`IMAGE_PROVIDER=cloudflare`), so the deploy is Vercel +
+  Neon + Cloudflare. The former imgproxy-on-Fly requirement is now an option,
+  not a dependency — see the revised decision above.
 - **Residual risk — Neon's own pooler and TLS path are NOT covered by the local
   stack.** The local proxy proves the WebSocket transport and this codebase's
   driver seam; it cannot prove Neon's PgBouncer configuration (its startup-

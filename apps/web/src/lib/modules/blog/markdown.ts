@@ -1,12 +1,12 @@
 import { Marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import { MEDIA_REF_PREFIX } from '../../util/media-refs.ts';
-import type { ImageSources } from '../media/imgproxy.ts';
+import type { ImageSources } from '../media/image.ts';
 
 /**
  * Markdown → sanitized HTML, pure and unit-testable offline. Media lookups
  * are injected: the caller (see render.ts) resolves `media:` references to
- * signed imgproxy sources or video embeds before rendering.
+ * provider-built image sources or video embeds before rendering.
  *
  * Security: the OUTPUT is always passed through sanitize-html with a strict
  * allowlist — scripts, event handlers, `javascript:` URLs and iframes to

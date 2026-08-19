@@ -8,7 +8,7 @@ import {
 	updateArticle,
 	type ArticlePatch
 } from '$lib/modules/blog/server';
-import { getImgproxyConfig, imgSources } from '$lib/modules/media/server';
+import { getImageProvider, imgSources } from '$lib/modules/media/server';
 import { failResult, formStr, formStrAll } from '$lib/server/forms';
 import { loadLibraryImages } from '$lib/server/media-library';
 import { resolveSitePillars } from '$lib/server/site';
@@ -74,7 +74,7 @@ export const actions: Actions = {
 	preview: async ({ request }) => {
 		const form = await request.formData();
 		const bodyMd = formStr(form, 'bodyMd');
-		const html = await renderArticleHtml({ db: getDb() }, getImgproxyConfig(), bodyMd);
+		const html = await renderArticleHtml({ db: getDb() }, getImageProvider(), bodyMd);
 		return { preview: html };
 	}
 };

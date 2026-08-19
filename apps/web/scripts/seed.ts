@@ -38,6 +38,9 @@ console.log(`Seeded demo quiz "/quiz/${quizSlug}"`);
 // Product placeholder images land in storage — needs the compose MinIO up.
 const storage = createStorage(storageConfigFromEnv(process.env));
 await storage.ensureBucket();
+// Seeded covers are fetched by the browser straight from storage under the
+// `direct` provider, so the bucket has to be anonymously readable.
+await storage.allowPublicRead();
 const productCount = await seedDemoProducts(db, storage);
 console.log(`Seeded ${productCount} demo product(s)`);
 const pageCount = await seedDefaultPages(db);

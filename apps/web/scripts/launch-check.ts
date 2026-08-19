@@ -4,7 +4,7 @@
 // over the root .env, which is loaded for the local-dev case). It prints a
 // numbered report of everything that would embarrass production — missing
 // variables, committed dev defaults, http origin, target/secret mismatches —
-// probes the live imgproxy for signature agreement, and reads the target
+// probes the selected image provider end-to-end, and reads the target
 // database's site_settings to enforce that every launch-required setting is
 // saved and no longer a seeded placeholder. Exit codes: 0 clean, 1 problems
 // found, 2 usage error.
@@ -12,7 +12,7 @@
 // Flags:
 //   --dev       local-dev acknowledgement: dev defaults / http origin /
 //               placeholder site settings are fine
-//   --no-probe  skip the network checks (imgproxy probe AND the site-settings
+//   --no-probe  skip the network checks (image probe AND the site-settings
 //               database read) for an env-only check, e.g. from CI
 //   --target=…  override the deploy target (default: vercel when VERCEL or
 //               DEPLOY_TARGET=vercel is set, node otherwise)
@@ -24,9 +24,9 @@ import { loadRootEnv } from './env.ts';
 import { createDb } from '../src/lib/db/client.ts';
 import { settingsLaunchProblems } from '../src/lib/modules/settings/server.ts';
 import {
-	canProbeImgproxy,
+	imageProbeBlocker,
 	launchCheckProblems,
-	probeImgproxy
+	probeImages
 } from '../src/lib/server/launch-check.ts';
 import type { DeployTarget } from '../src/lib/server/env-matrix.ts';
 
@@ -59,13 +59,13 @@ const resolvedTarget: DeployTarget =
 const problems = launchCheckProblems(env, { target: resolvedTarget, dev });
 
 const notes: string[] = [];
-if (noProbe) {
-	notes.push('imgproxy probe skipped: --no-probe');
-} else if (!canProbeImgproxy(env)) {
-	// The vars the probe needs are missing — already reported above.
-	notes.push('imgproxy probe skipped: IMGPROXY_*/S3_* incomplete');
+const probeBlocker = noProbe ? '--no-probe' : imageProbeBlocker(env);
+if (probeBlocker) {
+	// Whatever blocks the probe (missing vars, an unbuildable provider) is
+	// already reported by the env rules above — this is a note, not a problem.
+	notes.push(`image probe skipped: ${probeBlocker}`);
 } else {
-	problems.push(...(await probeImgproxy(env)));
+	problems.push(...(await probeImages(env)));
 }
 
 // Site-settings preflight: launch-required settings must be explicitly saved

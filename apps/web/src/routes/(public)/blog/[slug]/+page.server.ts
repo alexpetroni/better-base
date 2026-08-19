@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { getBySlug, renderArticleHtml } from '$lib/modules/blog/server';
-import { getImgproxyConfig, imgSources, imgUrl } from '$lib/modules/media/server';
+import { getImageProvider, imgSources, imgUrl } from '$lib/modules/media/server';
 import { canonicalUrl } from '$lib/seo';
 import { getSite } from '$lib/server/site';
 import type { PageServerLoad } from './$types';
@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	if (!found) error(404);
 
 	const { article, cover } = found;
-	const html = await renderArticleHtml({ db: getDb() }, getImgproxyConfig(), article.bodyMd);
+	const html = await renderArticleHtml({ db: getDb() }, getImageProvider(), article.bodyMd);
 	const canonical = canonicalUrl(`/blog/${article.slug}`);
 	const description = article.seoDescription || article.excerpt;
 	// Fixed-size social card through imgproxy (og:image wants 1200×630).

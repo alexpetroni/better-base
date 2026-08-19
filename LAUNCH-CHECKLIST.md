@@ -7,7 +7,9 @@ list applies later to better-life (with its own domain/accounts).
 ## Accounts & access
 
 - [ ] Registrar access for `bettersleep.ro` confirmed (renewal date noted).
-- [ ] Cloudflare account (DNS + R2 + imgproxy cache) with 2FA; team members invited.
+- [ ] Cloudflare account (DNS + R2 + Image Transformations) with 2FA; team
+      members invited. Transformations must be ENABLED for the zone —
+      dashboard → Images → Transformations (DEPLOYMENT.md §6).
 - [ ] Stripe account for the business entity, activated for live payments in RON
       (business verification takes days — start early).
 - [ ] Resend account; billing configured.
@@ -19,9 +21,10 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] Deploy target decided and provisioned: a VPS/PaaS + Postgres 16
       (adapter-node, DEPLOYMENT.md §3–§4) or Vercel + Neon (§12); automated
       database backups enabled and restore tested once.
-- [ ] Fly.io account for imgproxy on the Vercel target
-      (`deploy/imgproxy/README.md`; an adapter-node VPS can host imgproxy
-      itself instead — §6).
+- [ ] Image provider decided: `IMAGE_PROVIDER=cloudflare` needs no extra
+      account or box (the default — §6). Only if you deliberately choose
+      `imgproxy` instead: a Fly.io account, or the adapter-node VPS hosting it
+      (`deploy/imgproxy/README.md`).
 
 ## Legal (lawyer required)
 
@@ -88,19 +91,26 @@ list applies later to better-life (with its own domain/accounts).
 ## DNS & TLS
 
 - [ ] `bettersleep.ro` → app host (A/CNAME); `www` redirect decided.
-- [ ] `img.bettersleep.ro` → imgproxy, proxied through Cloudflare with
-      "Cache Everything" rule (see DEPLOYMENT.md §6; on the Vercel target
-      imgproxy itself deploys per `deploy/imgproxy/README.md`).
+- [ ] `media.bettersleep.ro` → the R2 bucket, bound as a public custom domain
+      in the R2 dashboard, on the SAME zone as the site; set as
+      `MEDIA_PUBLIC_BASE_URL` (DEPLOYMENT.md §5/§6).
+      Only on `IMAGE_PROVIDER=imgproxy`: `img.bettersleep.ro` → imgproxy
+      instead, proxied through Cloudflare with a "Cache Everything" rule.
 - [ ] TLS live on both hostnames; `PUBLIC_SITE_URL=https://bettersleep.ro`.
 
 ## Environment & secrets (prod values, never the dev defaults)
 
 - [ ] `BETTER_AUTH_SECRET` generated fresh (`openssl rand -base64 32`) and
       stored in the team secret manager.
-- [ ] `IMGPROXY_KEY`/`IMGPROXY_SALT` generated fresh (`openssl rand -hex 32`
-      twice), set identically on imgproxy and the app.
-- [ ] R2 bucket `bettersleep-media` created; scoped API tokens issued (app:
-      read+write; imgproxy: read-only).
+- [ ] `IMAGE_PROVIDER=cloudflare` + `MEDIA_PUBLIC_BASE_URL` set.
+      `launch:check` REFUSES the `direct` dev default — it would serve
+      unresized originals to every visitor.
+      Only on `IMAGE_PROVIDER=imgproxy`: `IMGPROXY_KEY`/`IMGPROXY_SALT`
+      generated fresh (`openssl rand -hex 32` twice), set identically on
+      imgproxy and the app.
+- [ ] R2 bucket `bettersleep-media` created; scoped API token issued for the
+      app (read+write). Only on the imgproxy provider: a second, read-only
+      token for imgproxy.
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock).
 - [ ] `COURIER_PROVIDER=sameday` + `SAMEDAY_USERNAME`/`SAMEDAY_PASSWORD`/
@@ -114,7 +124,9 @@ list applies later to better-life (with its own domain/accounts).
       cart and are charged by Stripe automatically once saved.
 - [ ] `pnpm launch:check` exits 0 with the prod env exported — it knows every
       committed dev default, checks https + domain + per-target secrets,
-      probes imgproxy signature agreement, and reads the database to refuse
+      probes the image provider end-to-end (including that Cloudflare really
+      transforms rather than passing originals through), and reads the
+      database to refuse
       unset/placeholder launch-required site settings (DEPLOYMENT.md §2
       "Preflight").
 

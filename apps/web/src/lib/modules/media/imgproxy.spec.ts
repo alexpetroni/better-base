@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buildImgUrl,
-	buildSrcset,
-	imageSources,
+	createImgproxyProvider,
 	imgproxyPath,
 	signImgproxyPath,
-	srcsetWidths,
 	type ImgproxyConfig
 } from './imgproxy.ts';
 
@@ -74,90 +72,18 @@ describe('buildImgUrl', () => {
 	});
 });
 
-describe('srcsetWidths', () => {
-	it('spans layout width to 2× (retina) plus ladder steps in between', () => {
-		expect(srcsetWidths(768)).toEqual([480, 640, 768, 960, 1200, 1536]);
+describe('createImgproxyProvider', () => {
+	const provider = createImgproxyProvider(CFG);
+
+	it('declares itself as a transforming provider', () => {
+		expect(provider.name).toBe('imgproxy');
+		expect(provider.transforms).toBe(true);
 	});
 
-	it('always includes the layout width and its double, deduped and sorted', () => {
-		expect(srcsetWidths(320)).toEqual([320, 480, 640]);
-		expect(srcsetWidths(160)).toEqual([160, 320]);
-	});
-});
-
-describe('buildSrcset', () => {
-	// Regression (audit frontend #5): the old srcset was DPR-only (`1x, 2x`),
-	// which made the `sizes` attribute dead and over-fetched ~2× on retina.
-	it('emits width descriptors, not DPR descriptors', () => {
-		const srcset = buildSrcset(CFG, 'a/b.png', { w: 480, format: 'webp' });
-		const parts = srcset.split(', ');
-		expect(parts.length).toBeGreaterThan(2);
-		for (const part of parts) expect(part).toMatch(/ \d+w$/);
-		expect(srcset).not.toMatch(/ \dx\b/);
-		expect(parts[0]).toMatch(
-			/\/rs:fit:320:0\/plain\/s3:\/\/better-base-media\/a\/b\.png@webp 320w$/
+	it('builds the same signed URL as buildImgUrl', () => {
+		const opts = { w: 100, h: 100, format: 'webp' } as const;
+		expect(provider.url('hand-test/test-image.png', opts)).toBe(
+			buildImgUrl(CFG, 'hand-test/test-image.png', opts)
 		);
-		expect(parts.at(-1)).toMatch(/\/rs:fit:960:0\/.* 960w$/);
-	});
-
-	it('scales a fixed height proportionally per candidate (fill crops keep their aspect)', () => {
-		const srcset = buildSrcset(CFG, 'a/b.png', { w: 480, h: 360, fit: 'fill', format: 'webp' });
-		expect(srcset).toContain('/rs:fill:480:360/');
-		expect(srcset).toContain('/rs:fill:960:720/');
-		expect(srcset).toContain('/rs:fill:640:480/');
-	});
-});
-
-describe('imageSources', () => {
-	const row = { key: 'a/photo.jpg', width: 1600, height: 900, alt: 'O poză' };
-
-	it('derives display height from the natural aspect ratio', () => {
-		const sources = imageSources(CFG, row, { w: 320 });
-		expect(sources.width).toBe(320);
-		expect(sources.height).toBe(180);
-		expect(sources.alt).toBe('O poză');
-		expect(sources.srcsetWebp).toContain('@webp');
-		expect(sources.srcsetAvif).toContain('@avif');
-	});
-
-	it('accepts a bare storage key and falls back to a 4:3 placeholder height (no CLS)', () => {
-		const sources = imageSources(CFG, 'x/y.png', { w: 100 });
-		expect(sources.src).toContain('s3://better-base-media/x/y.png@webp');
-		// Regression (audit frontend #14): dimensionless media used to ship no
-		// height at all, so the <img> reserved zero space and shifted layout.
-		expect(sources.height).toBe(75);
-		expect(sources.alt).toBe('');
-	});
-
-	it('gives dimensionless SVGs a placeholder height too', () => {
-		const sources = imageSources(
-			CFG,
-			{ key: 'a/logo.svg', width: null, height: null, alt: 'Logo' },
-			{ w: 320 }
-		);
-		expect(sources.width).toBe(320);
-		expect(sources.height).toBe(240);
-	});
-
-	it('serves SVGs unresized and without format conversion', () => {
-		const sources = imageSources(CFG, { ...row, key: 'a/logo.svg' }, { w: 320 });
-		expect(sources.src).toContain('/plain/s3://better-base-media/a/logo.svg');
-		expect(sources.src).not.toContain('@webp');
-		expect(sources.srcsetWebp).toBe('');
-		expect(sources.srcsetAvif).toBe('');
-	});
-
-	it('serves SVGs as attachments (audit M1: never rendered on direct navigation)', () => {
-		const svg = imageSources(CFG, { ...row, key: 'a/logo.svg' }, { w: 320 });
-		expect(svg.src).toContain('/att:1/');
-		// Raster formats stay inline-viewable.
-		const png = imageSources(CFG, row, { w: 320 });
-		expect(png.src).not.toContain('att:1');
-	});
-
-	it('throws for a row without a storage key', () => {
-		expect(() =>
-			imageSources(CFG, { key: null, width: null, height: null, alt: '' }, { w: 100 })
-		).toThrow(/no storage key/);
 	});
 });

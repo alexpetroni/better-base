@@ -1,9 +1,11 @@
 import {
+	CopyObjectCommand,
 	CreateBucketCommand,
 	DeleteObjectCommand,
 	GetObjectCommand,
 	HeadBucketCommand,
 	HeadObjectCommand,
+	PutBucketPolicyCommand,
 	PutObjectCommand,
 	S3Client
 } from '@aws-sdk/client-s3';
@@ -109,6 +111,57 @@ export function createStorage(cfg: StorageConfig) {
 			const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
 			if (!res.Body) throw new Error(`Object ${key} has no body`);
 			return res.Body.transformToByteArray();
+		},
+
+		/**
+		 * Rewrite an existing object's `Content-Disposition` (a self-copy with
+		 * `MetadataDirective: REPLACE` — S3 has no header-only update).
+		 *
+		 * Used for SVGs: under every provider except imgproxy the browser fetches
+		 * the original straight off the public media origin, so `attachment` on
+		 * the object is the only thing stopping a crafted SVG from rendering as
+		 * active content there (audit M1). The content type is re-stated because
+		 * REPLACE drops anything not restated.
+		 */
+		async setContentDisposition(key: string, disposition: string): Promise<void> {
+			const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+			await client.send(
+				new CopyObjectCommand({
+					Bucket: bucket,
+					Key: key,
+					CopySource: `${bucket}/${key}`,
+					MetadataDirective: 'REPLACE',
+					ContentType: head.ContentType,
+					ContentDisposition: disposition
+				})
+			);
+		},
+
+		/**
+		 * Make the bucket anonymously readable (dev bootstrap only).
+		 *
+		 * The `direct` and `cloudflare` providers serve originals from a public
+		 * origin. In production that is R2's custom-domain binding, done once in
+		 * the Cloudflare dashboard; against MinIO there is no such concept, so
+		 * local setup applies the equivalent bucket policy instead. Idempotent.
+		 */
+		async allowPublicRead(): Promise<void> {
+			await client.send(
+				new PutBucketPolicyCommand({
+					Bucket: bucket,
+					Policy: JSON.stringify({
+						Version: '2012-10-17',
+						Statement: [
+							{
+								Effect: 'Allow',
+								Principal: { AWS: ['*'] },
+								Action: ['s3:GetObject'],
+								Resource: [`arn:aws:s3:::${bucket}/*`]
+							}
+						]
+					})
+				})
+			);
 		},
 
 		async deleteObject(key: string): Promise<void> {

@@ -29,6 +29,9 @@ export const SERVICE_URL_VARS = [
 	'DATABASE_URL',
 	'TEST_DATABASE_URL',
 	'S3_ENDPOINT',
+	// The `direct` provider serves originals straight off MinIO, so its public
+	// base is a compose-service URL like every other entry here.
+	'MEDIA_PUBLIC_BASE_URL',
 	'IMGPROXY_URL',
 	'NEON_WS_PROXY'
 ] as const;

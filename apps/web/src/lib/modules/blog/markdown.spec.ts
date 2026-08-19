@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ImageSources } from '../media/imgproxy.ts';
+import type { ImageSources } from '../media/image.ts';
 import { extractMediaRefs } from '../../util/media-refs.ts';
 import { renderMarkdown, type MediaResolver } from './markdown.ts';
 

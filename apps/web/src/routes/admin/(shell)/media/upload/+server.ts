@@ -3,7 +3,7 @@ import { env } from '$env/dynamic/private';
 import { getDb } from '$lib/db';
 import {
 	confirmUpload,
-	getImgproxyConfig,
+	getImageProvider,
 	getStorage,
 	imgSources,
 	requestUpload,
@@ -33,7 +33,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		error(400, 'Invalid JSON body');
 	}
 	// imgproxy is part of confirm's deps so new uploads get a blurhash placeholder.
-	const deps = { db: getDb(), storage: getStorage(), imgproxy: getImgproxyConfig() };
+	const deps = { db: getDb(), storage: getStorage(), images: getImageProvider() };
 
 	if (body.op === 'presign') {
 		const result = await requestUpload(deps, {

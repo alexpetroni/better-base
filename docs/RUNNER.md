@@ -16,7 +16,7 @@ PROJECT_DIR=/home/alex/work/better-base
 ENTRY_FILE=PROMPT.md
 PHASE_FILES="docs/phases/PHASE-0-PLAN.md docs/phases/PHASE-1-PLAN.md docs/phases/PHASE-2-PLAN.md docs/phases/PHASE-3-PLAN.md docs/phases/PHASE-4-PLAN.md docs/phases/PHASE-5-PLAN.md docs/phases/PHASE-6-PLAN.md docs/phases/PHASE-7-PLAN.md"
 RETRY_SCHEDULE="30 300 3600 10800"
-# Phase 0 installs the workspace and Phase 2 pulls MinIO/imgproxy images —
+# Phase 0 installs the workspace and Phase 2 pulls the MinIO image —
 # both are single silent tool calls; keep the stall timeout generous.
 STALL_TIMEOUT=2400
 # Independent gate — matches the scripts Phase 0 must create.

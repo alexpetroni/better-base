@@ -49,12 +49,21 @@ export const ENV_MATRIX: readonly EnvVarSpec[] = [
 	{ name: 'S3_ACCESS_KEY', boot: true, devDefaults: ['better-media'] },
 	{ name: 'S3_SECRET_KEY', boot: true, devDefaults: ['better-media-secret'] },
 	{ name: 'S3_BUCKET', boot: true },
-	{ name: 'IMGPROXY_URL', boot: true },
+	// Image delivery is provider-selected (DEPLOYMENT.md §6), so none of these
+	// can be a flat boot requirement: a Cloudflare deploy has no imgproxy key
+	// and an imgproxy deploy has no public media origin. `boot.ts` validates
+	// them by BUILDING the selected provider (`imageProviderFromEnv`), which is
+	// the one place that knows what each provider reads. They stay listed here
+	// so the dev-default scan and the docs still cover them.
+	{ name: 'IMAGE_PROVIDER' },
+	{ name: 'MEDIA_PUBLIC_BASE_URL' },
+	{ name: 'CF_IMAGE_BASE_URL' },
+	{ name: 'IMGPROXY_URL' },
 	// The imgproxy pair has NO committed defaults on purpose (compose refuses
 	// to start without one) — weak/reused values are caught by shape checks in
 	// launch-check.ts and by the live signature probe, not by a value list.
-	{ name: 'IMGPROXY_KEY', boot: true },
-	{ name: 'IMGPROXY_SALT', boot: true },
+	{ name: 'IMGPROXY_KEY' },
+	{ name: 'IMGPROXY_SALT' },
 	// Not required at boot (only when STRIPE_SECRET_KEY is set — see boot.ts),
 	// but its committed dev value must still never reach a production env:
 	{ name: 'STRIPE_WEBHOOK_SECRET', devDefaults: ['whsec_dev_only_secret_change_me'] },

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { dev } from '$app/environment';
-	import type { ImageSources } from './imgproxy.ts';
+	import type { ImageSources } from './image.ts';
 
 	interface Props {
 		/** Built server-side with `imgSources()` — signing never happens client-side. */

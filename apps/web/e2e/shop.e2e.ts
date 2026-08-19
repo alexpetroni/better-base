@@ -27,7 +27,7 @@ test('visitor browses, fills the cart, reaches checkout; a signed webhook create
 	const clientEmail = 'e2e-client@example.com';
 
 	try {
-		// --- Catalog: the 3 seeded products render with real imgproxy covers.
+		// --- Catalog: the 3 seeded products render with real cover images.
 		await page.goto('/magazin');
 		await expect(page.locator('[data-testid="product-card"]')).toHaveCount(3);
 		const mascaCard = page.locator(`[data-testid="product-card"][data-slug="${MASCA.slug}"]`);

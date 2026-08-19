@@ -1,21 +1,52 @@
 // Server module barrel: signing, storage, db schema and services. Importing
 // this from client code fails the build ($env/dynamic/private) — by design.
 import { env } from '$env/dynamic/private';
-import { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
+import { imageProviderFromEnv, storageConfigFromEnv } from './env.ts';
 import {
-	buildImgUrl,
 	imageSources,
+	type ImageProvider,
+	type ImageSourceInput,
 	type ImageSources,
-	type ImgOptions,
-	type ImgproxyConfig
-} from './imgproxy.ts';
-import type { MediaRow } from './schema.ts';
+	type ImgOptions
+} from './image.ts';
 import { createStorage, type Storage } from './storage.ts';
 
 export { blurhashFromPng, blurhashPlaceholder } from './blurhash.ts';
-export { imgproxyConfigFromEnv, storageConfigFromEnv } from './env.ts';
-// imageSources is the one imgproxy builder other modules consume (blog render).
-export { imageSources, type ImgproxyConfig } from './imgproxy.ts';
+export {
+	buildCloudflareImageUrl,
+	cloudflareOptions,
+	cloudflareOriginUrl,
+	createCloudflareProvider,
+	type CloudflareImagesConfig
+} from './cloudflare.ts';
+export { createDirectProvider, type DirectImagesConfig } from './direct.ts';
+export {
+	cloudflareConfigFromEnv,
+	directOriginFromEnv,
+	IMAGE_PROVIDERS,
+	imageProviderFromEnv,
+	imageProviderNameFromEnv,
+	imgproxyConfigFromEnv,
+	isImageProviderName,
+	storageConfigFromEnv
+} from './env.ts';
+// imageSources is the one URL builder other modules consume (blog render).
+export {
+	buildSrcset,
+	imageSources,
+	srcsetWidths,
+	type ImageProvider,
+	type ImageProviderName,
+	type ImageSourceInput,
+	type ImageSources
+} from './image.ts';
+export {
+	buildImgUrl,
+	createImgproxyProvider,
+	imgproxyPath,
+	signImgproxyPath,
+	type ImgproxyConfig
+} from './imgproxy.ts';
 export { media } from './schema.ts';
 export {
 	backfillBlurhashes,
@@ -35,6 +66,7 @@ export {
 	type UploadTicket
 } from './service.ts';
 export { createStorage, type Storage, type StorageConfig } from './storage.ts';
+export { looksLikeSvg, sanitizeSvg } from './svg.ts';
 export {
 	signUploadTicket,
 	verifyUploadTicket,
@@ -49,7 +81,7 @@ function requireEnv(names: string[]): void {
 }
 
 let storageInstance: Storage | undefined;
-let imgproxyInstance: ImgproxyConfig | undefined;
+let providerInstance: ImageProvider | undefined;
 
 export function getStorage(): Storage {
 	if (!storageInstance) {
@@ -59,24 +91,25 @@ export function getStorage(): Storage {
 	return storageInstance;
 }
 
-export function getImgproxyConfig(): ImgproxyConfig {
-	if (!imgproxyInstance) {
-		requireEnv(['IMGPROXY_URL', 'IMGPROXY_KEY', 'IMGPROXY_SALT', 'S3_BUCKET']);
-		imgproxyInstance = imgproxyConfigFromEnv(env);
-	}
-	return imgproxyInstance;
+/**
+ * The image provider `IMAGE_PROVIDER` selects (`cloudflare` in production,
+ * `direct` locally). Every caller goes through this rather than assuming a
+ * transformer exists — `provider.transforms` says whether one does.
+ */
+export function getImageProvider(): ImageProvider {
+	if (!providerInstance) providerInstance = imageProviderFromEnv(env);
+	return providerInstance;
 }
 
-/** Signed imgproxy URL for a storage key, using the app's env config. */
+/** Image URL for a storage key, using the app's env config. */
 export function imgUrl(key: string, opts: ImgOptions = {}): string {
-	return buildImgUrl(getImgproxyConfig(), key, opts);
+	return getImageProvider().url(key, opts);
 }
 
 /** `ImageSources` for the <Img> component, using the app's env config. */
 export function imgSources(
-	source:
-		(Pick<MediaRow, 'key' | 'width' | 'height' | 'alt'> & { blurhash?: string | null }) | string,
+	source: ImageSourceInput,
 	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number }
 ): ImageSources {
-	return imageSources(getImgproxyConfig(), source, opts);
+	return imageSources(getImageProvider(), source, opts);
 }

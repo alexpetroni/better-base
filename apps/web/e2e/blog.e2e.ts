@@ -5,7 +5,7 @@ import { login } from './helpers.ts';
 
 // Full blog flow, on BOTH sites: an editor uploads a cover to the media
 // library, writes + publishes an article tagged `somn`, and the public site
-// shows it with imgproxy-served images, correct SEO tags and a sitemap entry.
+// shows it with provider-served images, correct SEO tags and a sitemap entry.
 // (`somn` is active on sleep AND life, so publishing on the life site also
 // proves the DoD case "an article tagged only sleep appears on life".)
 
@@ -85,7 +85,7 @@ test('editor writes and publishes an article; the public site serves it with SEO
 	await expect(page.getByTestId('editor-status')).toHaveText('publicat');
 	await expect(page.getByTestId('editor-view-public')).toBeVisible();
 
-	// Public list: the card is there and its cover really renders via imgproxy.
+	// Public list: the card is there and its cover really renders.
 	await page.goto('/blog');
 	const card = page.locator(`[data-testid="blog-card"][data-slug="${SLUG}"]`);
 	await expect(card).toBeVisible();
@@ -106,7 +106,7 @@ test('editor writes and publishes an article; the public site serves it with SEO
 	await expectRenderedImage(page, page.getByTestId('article-body'));
 
 	// Article page SEO: title/description from the SEO fields, canonical,
-	// OG + twitter card with the imgproxy cover, JSON-LD Article.
+	// OG + twitter card with the cover image, JSON-LD Article.
 	await expect(page).toHaveTitle(SEO_TITLE);
 	await expect(page.locator('meta[name="description"]')).toHaveAttribute(
 		'content',

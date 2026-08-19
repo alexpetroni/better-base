@@ -1,6 +1,6 @@
 ---
 name: run-app
-description: Launch and drive the better-base app locally (start, run, serve, or screenshot the site end-to-end on the host). Brings up Postgres/MinIO/imgproxy, migrates, seeds, builds, and serves in one command, then drives the funnel.
+description: Launch and drive the better-base app locally (start, run, serve, or screenshot the site end-to-end on the host). Brings up Postgres/MinIO, migrates, seeds, builds, and serves in one command, then drives the funnel.
 ---
 
 # Running better-base locally
@@ -11,7 +11,7 @@ One command brings the whole app up on the host:
 bash scripts/dev-run.sh
 ```
 
-It starts the compose stack (Postgres, MinIO, imgproxy), runs migrations + storage
+It starts the compose stack (Postgres, MinIO), runs migrations + storage
 init + seed, builds, launches the adapter-node server, waits for `200`, and prints
 the URL (default **http://localhost:4173**, `SITE_ID=sleep`). Re-runnable; idempotent.
 
@@ -42,7 +42,7 @@ of them, but if you run steps by hand, honor them:
   docker host: `localhost` from the host, `host.docker.internal` from a sibling
   container. `pnpm` tooling handles this itself now (`loadRootEnv()` in
   `apps/web/scripts/env.ts` rewrites `DATABASE_URL`/`TEST_DATABASE_URL`/
-  `S3_ENDPOINT`/`IMGPROXY_URL` per environment), so vitest/seed/migrate run from
+  `S3_ENDPOINT`/`MEDIA_PUBLIC_BASE_URL` per environment), so vitest/seed/migrate run from
   either place with the committed `.env` untouched. The script still exports
   `localhost` explicitly because the **adapter-node build reads none of that** —
   see the next point. Never edit `.env` to fix a hostname.
@@ -56,11 +56,14 @@ of them, but if you run steps by hand, honor them:
 - **Port 3000 is frequently taken** by other projects on this machine — default is
   4173; the script aborts with a clear message if the chosen port is busy.
 - **Required secrets have no fallbacks** since the security hardening: `TOKEN_SECRET`
-  and explicit `IMGPROXY_KEY`/`IMGPROXY_SALT` must be present. On a fresh clone with no
-  `.env`, the script generates one from `.env.example` with `openssl rand -hex 32`
-  secrets. The imgproxy key the app signs with must match the running imgproxy
-  container's key — using the same `.env` for both (as the script does) keeps them in
-  sync; if you rotate keys, restart compose so the container picks them up.
+  and `BETTER_AUTH_SECRET` must be present. On a fresh clone with no `.env`, the script
+  generates one from `.env.example` with `openssl rand -hex 32` secrets.
+- **Images are served straight from MinIO locally** (`IMAGE_PROVIDER=direct`), so there
+  is no transformer container and no signing key to keep in sync. Originals are
+  unresized and srcsets are empty — that is expected locally, not a bug. `pnpm
+  storage:init` grants the bucket anonymous read; without it every image 403s.
+  To exercise the signed-imgproxy path instead, set `IMAGE_PROVIDER=imgproxy` and start
+  its container: `docker compose --profile imgproxy up -d`.
 - **`pkill -f "node build/index.js"` is a footgun** — with `-f` it matches its own
   wrapper shell and kills it (exit 144). Use the pidfile (`.run/app.pid`) or
   `dev-stop.sh`, not pkill.

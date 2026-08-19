@@ -2201,6 +2201,71 @@ deliberate deferrals, each with its reason.
   everywhere, no third-party requests). Playwright pre-dismisses the cookie
   banner via storageState; specs that audit the banner clear cookies first.
 
+## Image delivery is a provider seam; Cloudflare replaces imgproxy (2026-08-19)
+
+Motivation: the Vercel deploy needed one always-on box purely for imgproxy
+(decided in NEXT-2, `deploy/imgproxy/fly.toml`). Cloudflare Image
+Transformations remove it — R2 already stores the originals and the zone
+already fronts the site, so the whole deploy becomes Vercel + Neon +
+Cloudflare with no container of ours anywhere. No schema change.
+
+- **The seam.** `imageSources()` no longer knows how to build a URL; it takes
+  an `ImageProvider` (`modules/media/image.ts`): `{ name, transforms,
+  url(key, opts) }`. Three implementations —
+  - `cloudflare.ts` — `/cdn-cgi/image/<opts>/<origin>/<key>`, options emitted
+    in a FIXED order (a reordered list is a separate edge-cache entry and a
+    separate billed transformation), `metadata=none` always (EXIF/GPS off our
+    derivatives), imgproxy's fit modes mapped onto Cloudflare's;
+  - `imgproxy.ts` — unchanged signing, now wrapped as a provider;
+  - `direct.ts` — the stored original, `transforms: false`.
+  Selected by `IMAGE_PROVIDER` (`env.ts`), defaulting to `direct`. Pages,
+  components and `ImageSources` are untouched — the swap is one env var.
+- **`transforms: false` is honest, not degraded.** `buildSrcset` returns ''
+  (N identical URLs would make the browser fetch the largest for nothing) and
+  `computeBlurhash` throws rather than downloading a megapixel original.
+- **Boot/preflight validate by BUILDING the provider** (`imageProviderFromEnv`
+  throws naming the missing vars) instead of a static list — a Cloudflare
+  deploy is no longer asked for an imgproxy key. `IMGPROXY_*` therefore left
+  `boot: true` in the env matrix. `launch:check` refuses `direct` on a real
+  deploy, requires https on both public image origins, and its probe is
+  provider-aware: for Cloudflare it asserts the R2 custom domain answers 200
+  AND that `format=webp` really comes back as webp — with transformations off
+  the endpoint returns the untouched source with a 200, the one failure mode
+  that otherwise looks perfectly healthy.
+- **SVG safety moved from serve-time to rest** (audit M1 stays closed).
+  imgproxy sanitized on every serve; the origin-serving providers hand the
+  stored object straight to the browser. So `confirmUpload` now sanitizes the
+  SVG (`svg.ts`, sanitize-html with an SVG allowlist: no script, no `on*`, no
+  `href`/`xlink:href`), writes the clean bytes back, and sets
+  `Content-Disposition: attachment` on the object (`storage.setContentDisposition`,
+  a self-copy with `MetadataDirective: REPLACE`). Strictly better than before:
+  the dangerous bytes stop existing rather than being cleaned on the way out.
+- **Local dev and the whole suite run on `direct`** — imgproxy is behind a
+  compose profile (`docker compose --profile imgproxy up -d`) and `dev-run.sh`
+  no longer starts it or generates a key/salt. `storage:init`, `db:seed` and
+  the e2e global setup call `storage.allowPublicRead()` so MinIO serves
+  originals anonymously, exactly as R2's custom domain will (the call is
+  best-effort: R2 rejects PutBucketPolicy and says so).
+- **Tests.** Provider-agnostic assertions live in `image.spec.ts` (each runs
+  against all three providers); `cloudflare.spec.ts` pins the URL grammar and
+  `env.spec.ts` the selection rules — all pure, so they need no Cloudflare
+  account, zone or domain. `media.spec.ts` no longer needs a transformer: it
+  asserts anonymous origin serving + the SVG sanitize/attachment pair, and
+  blurhashing runs against a stand-in provider that answers `data:` URLs
+  DERIVED from the bytes the test uploaded (a corrupt upload still fails to
+  encode, so the corrupt-row and backfill-resumability cases keep their
+  meaning). `perf.e2e.ts` audits against whichever provider the env selects
+  rather than one hard-coded URL shape.
+- **What only a real deploy can prove:** that Cloudflare answers these URLs at
+  all. That is precisely what `launch:check`'s probe is for — run it against
+  the deployed env.
+
+Docs: DEPLOYMENT.md §1/§2/§5/§6 (§6 rewritten as "Image delivery") and §12
+(the Fly decision revised, "no always-on box" in Known limits);
+LAUNCH-CHECKLIST accounts/DNS/env/preflight boxes; `.env.example`,
+`docker-compose.yml`, PROMPT.md, `deploy/imgproxy/README.md` (now marked
+optional), the media README and the run-app skill.
+
 ## For the next phase
 
 - No admin stubs remain — `StubPage.svelte` is deleted. Articles, quizzes,
@@ -2279,6 +2344,9 @@ done and rehearsed — `docs/LAUNCH-DRY-RUN.md`):
   business contract, a deploy target (Vercel+Neon or VPS), Fly.io for
   imgproxy.
 - DNS + TLS for the site and imgproxy hostnames.
+- Cloudflare zone: Image Transformations enabled, and the R2 bucket bound to
+  a public custom domain on that same zone (`MEDIA_PUBLIC_BASE_URL`). Both are
+  dashboard steps no script can do; `launch:check`'s probe verifies them.
 - Live keys/secrets in the prod env + `pnpm launch:check` (non-`--dev`)
   green against it — locally it can only be rehearsed as `--dev` (its job is
   to refuse dev values).
@@ -2307,9 +2375,11 @@ done and rehearsed — `docs/LAUNCH-DRY-RUN.md`):
   sequences) but everything beyond `somn` is seed-level; content
   export/import + `content/life/` is the mechanism, filling it is editorial
   work.
-- Vercel Image Optimization as an imgproxy replacement — rejected in NEXT-2
-  (it would refactor `imageSources()`, which every page renders through);
-  imgproxy on Fly stays the one always-on box on the serverless target.
+- ~~Vercel Image Optimization as an imgproxy replacement — rejected in NEXT-2;
+  imgproxy on Fly stays the one always-on box.~~ **Superseded 2026-08-19**:
+  `IMAGE_PROVIDER` is a seam and deploys default to Cloudflare Image
+  Transformations, so there is no always-on box. Vercel Image Optimization
+  stays rejected — it would re-bind image delivery to one host.
 - Prod split of `S3_ENDPOINT`/`IMGPROXY_URL` into internal + public pairs —
   not needed while both roles resolve to one reachable host; would need two
   new env vars if a private S3 endpoint ever appears.

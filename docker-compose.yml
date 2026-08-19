@@ -1,8 +1,17 @@
-# Local development services: Postgres, MinIO (S3-compatible storage) and
-# imgproxy (on-the-fly image transforms, signed URLs, reads from MinIO).
+# Local development services: Postgres and MinIO (S3-compatible storage).
 # Postgres/MinIO dev credentials have local-only defaults overridable from the
-# environment / root .env. The imgproxy signing key/salt deliberately have NO
-# defaults — set IMGPROXY_KEY/IMGPROXY_SALT in .env (see .env.example).
+# environment / root .env.
+#
+# imgproxy is NOT started by default. Local dev and the test suite run on
+# IMAGE_PROVIDER=direct — the browser fetches originals straight from MinIO, no
+# transformer needed — and production uses Cloudflare Image Transformations,
+# which have no local equivalent to run (DEPLOYMENT.md §6). The container is
+# kept behind a profile for the self-hosted (IMAGE_PROVIDER=imgproxy) target:
+#
+#   docker compose --profile imgproxy up -d
+#
+# Its signing key/salt deliberately have NO defaults — set IMGPROXY_KEY and
+# IMGPROXY_SALT in .env first (see .env.example).
 services:
   db:
     image: postgres:16
@@ -43,6 +52,7 @@ services:
 
   imgproxy:
     image: ghcr.io/imgproxy/imgproxy:v3
+    profiles: ['imgproxy']
     restart: unless-stopped
     environment:
       # Signature is mandatory: without valid key/salt-signed URLs imgproxy

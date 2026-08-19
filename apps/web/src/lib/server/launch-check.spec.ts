@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bootEnvProblems, REQUIRED_BOOT_ENV } from './boot.ts';
 import { devDefaultProblem, ENV_MATRIX, requiredEnvFor, type DeployTarget } from './env-matrix.ts';
-import { canProbeImgproxy, launchCheckProblems, probeImgproxy } from './launch-check.ts';
+import { imageProbeBlocker, launchCheckProblems, probeImages } from './launch-check.ts';
 
 /** A prod-shaped env every rule passes on; cases knock single values out. */
 function prodEnv(): Record<string, string | undefined> {
@@ -15,10 +15,26 @@ function prodEnv(): Record<string, string | undefined> {
 		S3_ACCESS_KEY: 'r2-access-key-id',
 		S3_SECRET_KEY: 'r2-secret-access-key',
 		S3_BUCKET: 'bettersleep-media',
+		// The Vercel-target default: Cloudflare transforms in front of the public
+		// R2 origin, no transformer box of our own (DEPLOYMENT.md §6).
+		IMAGE_PROVIDER: 'cloudflare',
+		MEDIA_PUBLIC_BASE_URL: 'https://media.bettersleep.ro',
+		CF_IMAGE_BASE_URL: 'https://bettersleep.ro',
+		EMAIL_DRYRUN: 'true'
+	};
+}
+
+/** The same env on the self-hosted target: imgproxy instead of Cloudflare. */
+function imgproxyProdEnv(): Record<string, string | undefined> {
+	const env = prodEnv();
+	delete env.MEDIA_PUBLIC_BASE_URL;
+	delete env.CF_IMAGE_BASE_URL;
+	return {
+		...env,
+		IMAGE_PROVIDER: 'imgproxy',
 		IMGPROXY_URL: 'https://img.bettersleep.ro',
 		IMGPROXY_KEY: '0f'.repeat(32),
-		IMGPROXY_SALT: 'a1'.repeat(32),
-		EMAIL_DRYRUN: 'true'
+		IMGPROXY_SALT: 'a1'.repeat(32)
 	};
 }
 
@@ -42,9 +58,8 @@ function devEnv(): Record<string, string | undefined> {
 		S3_ACCESS_KEY: 'better-media',
 		S3_SECRET_KEY: 'better-media-secret',
 		S3_BUCKET: 'better-base-media',
-		IMGPROXY_URL: 'http://localhost:8888',
-		IMGPROXY_KEY: 'c3'.repeat(32),
-		IMGPROXY_SALT: 'd4'.repeat(32),
+		// No IMAGE_PROVIDER: a stock checkout defaults to `direct`, and the
+		// origin is derived from S3_ENDPOINT + S3_BUCKET.
 		STRIPE_WEBHOOK_SECRET: 'whsec_dev_only_secret_change_me',
 		EMAIL_DRYRUN: 'true',
 		CHAT_PROVIDER: 'mock'
@@ -55,6 +70,8 @@ function devEnv(): Record<string, string | undefined> {
 const CASES: Array<{
 	name: string;
 	target?: DeployTarget;
+	/** Starting env; defaults to the Cloudflare-shaped prod env. */
+	base?: () => Record<string, string | undefined>;
 	mutate: (env: Record<string, string | undefined>) => void;
 	message: RegExp;
 }> = [
@@ -110,13 +127,52 @@ const CASES: Array<{
 	},
 	{
 		name: 'a dev-shaped imgproxy key',
+		base: imgproxyProdEnv,
 		mutate: (env) => (env.IMGPROXY_KEY = 'aa'),
 		message: /IMGPROXY_KEY does not look like a generated secret/
 	},
 	{
 		name: 'an imgproxy salt equal to the key',
+		base: imgproxyProdEnv,
 		mutate: (env) => (env.IMGPROXY_SALT = env.IMGPROXY_KEY),
 		message: /IMGPROXY_SALT must differ from IMGPROXY_KEY/
+	},
+	// Image delivery is provider-selected, so each provider has its own way of
+	// being wrong — and the wrong-provider case is the one that would otherwise
+	// launch quietly and serve multi-megabyte originals to every visitor.
+	{
+		name: 'the direct provider (unresized originals) on a real deploy',
+		mutate: (env) => {
+			env.IMAGE_PROVIDER = 'direct';
+			delete env.CF_IMAGE_BASE_URL;
+		},
+		message: /IMAGE_PROVIDER=direct serves unresized originals/
+	},
+	{
+		name: 'an unknown IMAGE_PROVIDER',
+		mutate: (env) => (env.IMAGE_PROVIDER = 'imgix'),
+		message: /IMAGE_PROVIDER=imgix is not one of/
+	},
+	{
+		name: 'a cloudflare deploy with no public media origin',
+		mutate: (env) => delete env.MEDIA_PUBLIC_BASE_URL,
+		message: /IMAGE_PROVIDER=cloudflare needs: MEDIA_PUBLIC_BASE_URL/
+	},
+	{
+		name: 'an imgproxy deploy missing its signing key',
+		base: imgproxyProdEnv,
+		mutate: (env) => delete env.IMGPROXY_KEY,
+		message: /IMAGE_PROVIDER=imgproxy needs: IMGPROXY_KEY/
+	},
+	{
+		name: 'an http media origin (mixed content)',
+		mutate: (env) => (env.MEDIA_PUBLIC_BASE_URL = 'http://media.bettersleep.ro'),
+		message: /MEDIA_PUBLIC_BASE_URL must be https/
+	},
+	{
+		name: 'an unparseable media origin',
+		mutate: (env) => (env.MEDIA_PUBLIC_BASE_URL = 'media.bettersleep.ro'),
+		message: /MEDIA_PUBLIC_BASE_URL is not a valid URL/
 	},
 	{
 		name: 'a test Stripe key in a live (EMAIL_DRYRUN=false) env',
@@ -161,8 +217,12 @@ describe('launch:check rules', () => {
 		expect(launchCheckProblems(vercelEnv(), { target: 'vercel' })).toEqual([]);
 	});
 
-	it.each(CASES)('flags $name', ({ target, mutate, message }) => {
-		const env = target === 'vercel' ? vercelEnv() : prodEnv();
+	it('passes a complete imgproxy (self-hosted) prod env too', () => {
+		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node' })).toEqual([]);
+	});
+
+	it.each(CASES)('flags $name', ({ target, base, mutate, message }) => {
+		const env = base ? base() : target === 'vercel' ? vercelEnv() : prodEnv();
 		mutate(env);
 		const problems = launchCheckProblems(env, { target: target ?? 'node' });
 		expect(problems.length).toBeGreaterThan(0);
@@ -245,25 +305,63 @@ describe('env matrix single-sourcing', () => {
 	});
 });
 
-// Integration: against the compose stack (MinIO + imgproxy), like media.spec.ts.
-// The probe uploads its own 1×1 PNG, so no fixture or database is needed.
-describe('imgproxy probe (integration)', () => {
-	it('passes against the local imgproxy: signed 200, unsigned 403', async () => {
-		if (!canProbeImgproxy(process.env)) {
-			throw new Error('IMGPROXY_*/S3_* env vars are not set — start `docker compose up -d`');
-		}
-		expect(await probeImgproxy(process.env)).toEqual([]);
+// Integration: against the compose stack (MinIO only — the suite runs without
+// an image transformer). The probe uploads its own 1×1 PNG, so no fixture or
+// database is needed.
+//
+// The Cloudflare half of the probe cannot be exercised against Cloudflare from
+// here, and paying for a zone to run a test would be absurd. What IS testable —
+// and what actually breaks in production — is the probe's own logic: that it
+// reaches the public origin, that it does not mistake "transformations are off"
+// for success, and that an unreachable host is reported rather than thrown. So
+// MinIO plays the origin, and the transform URL deliberately has nowhere to go.
+describe('image probe (integration)', () => {
+	function cloudflareProbeEnv(overrides: Record<string, string | undefined> = {}) {
+		const origin = `${process.env.S3_ENDPOINT?.replace(/\/$/, '')}/${process.env.S3_BUCKET}`;
+		return {
+			...process.env,
+			IMAGE_PROVIDER: 'cloudflare',
+			MEDIA_PUBLIC_BASE_URL: origin,
+			CF_IMAGE_BASE_URL: origin,
+			...overrides
+		};
+	}
+
+	it('reaches the public origin and cleans up after itself', async () => {
+		const problems = await probeImages(cloudflareProbeEnv());
+		// The origin half must be silent: the object uploaded, was fetchable
+		// anonymously, and was deleted (a cleanup failure reports separately).
+		expect(problems.join('\n')).not.toMatch(/origin .* answered/);
+		expect(problems.join('\n')).not.toMatch(/cleanup failed/);
 	}, 20_000);
 
-	it('detects a key/salt mismatch as the signed URL failing', async () => {
-		const wrongKey = { ...process.env, IMGPROXY_KEY: 'deadbeef'.repeat(8) };
-		const problems = await probeImgproxy(wrongKey);
-		expect(problems.join('\n')).toMatch(/signed URL answered 403.*do not match/);
+	// The silent killer: with transformations off, Cloudflare returns the source
+	// untouched with a 200. Asking for webp and checking what came back is the
+	// only way to tell "working" from "passing originals through".
+	it('catches a transform endpoint that answers but does not transform', async () => {
+		const problems = await probeImages(cloudflareProbeEnv());
+		// MinIO answers the /cdn-cgi/image path with an error rather than a
+		// transformed image; a real zone with transformations OFF answers 200
+		// with the untouched source. Both must be reported, neither silently.
+		expect(problems.join('\n')).toMatch(/Image Transformations are OFF|answered \d{3}/);
 	}, 20_000);
 
-	it('reports an unreachable imgproxy instead of throwing', async () => {
-		const unreachable = { ...process.env, IMGPROXY_URL: 'http://localhost:1' };
-		const problems = await probeImgproxy(unreachable);
+	it('reports an unreachable origin instead of throwing', async () => {
+		const problems = await probeImages(
+			cloudflareProbeEnv({ MEDIA_PUBLIC_BASE_URL: 'http://localhost:1' })
+		);
 		expect(problems.join('\n')).toMatch(/is not reachable from here/);
 	}, 20_000);
+
+	// `direct` has no derivative to ask for, so the probe must decline rather
+	// than invent an assertion — the env rules already refuse it for prod.
+	it('declines to probe a non-transforming provider', () => {
+		expect(imageProbeBlocker({ ...process.env, IMAGE_PROVIDER: 'direct' })).toMatch(
+			/no transforms to probe/
+		);
+	});
+
+	it('declines to probe when the storage credentials are incomplete', () => {
+		expect(imageProbeBlocker({ ...process.env, S3_BUCKET: '' })).toMatch(/S3_\* incomplete/);
+	});
 });
