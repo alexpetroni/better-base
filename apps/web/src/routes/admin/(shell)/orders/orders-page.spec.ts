@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { isActionFailure, isHttpError } from '@sveltejs/kit';
 import { createDb, type Db } from '../../../../lib/db/client.ts';
@@ -11,10 +11,11 @@ import {
 	transitionFulfillment
 } from '../../../../lib/modules/shop/fulfillment-service.ts';
 import type { FulfillmentStatus } from '../../../../lib/modules/shop/fulfillment.ts';
-import { invoices } from '../../../../lib/modules/invoice/schema.ts';
+import { invoiceLines, invoices } from '../../../../lib/modules/invoice/schema.ts';
 import { siteSettings } from '../../../../lib/modules/settings/schema.ts';
 import {
 	orderEvents,
+	orderItems,
 	orders,
 	shipments,
 	type OrderRow
@@ -64,6 +65,10 @@ let transitionAction: (event: {
 }) => Promise<unknown>;
 let issueInvoiceAction: (event: { params: { id: string }; locals: App.Locals }) => Promise<unknown>;
 let generateAwbAction: (event: { params: { id: string }; locals: App.Locals }) => Promise<unknown>;
+let stornoPartialAction: (event: {
+	params: { id: string };
+	locals: App.Locals;
+}) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
 	return { user, settings: createSettingsLoader(() => db) };
@@ -91,21 +96,34 @@ async function insertOrder(input: {
 	status?: OrderRow['status'];
 	fulfillment?: FulfillmentStatus;
 	oversold?: boolean;
+	/** Stripe's cumulative refunded amount, as the webhook would have recorded it. */
+	refundedCents?: number;
+	/** Item snapshots (the invoice lines derive from them); none by default. */
+	items?: Array<{ name: string; qty: number; priceCents: number }>;
 }): Promise<OrderRow> {
 	orderSeq += 1;
+	const items = input.items ?? [];
 	const [row] = await db
 		.insert(orders)
 		.values({
 			id: `order-q-${orderSeq}`,
 			email: `client${orderSeq}@example.ro`,
 			stripeSessionId: `cs_queue_${orderSeq}`,
-			amountTotalCents: 4990,
+			amountTotalCents: items.length
+				? items.reduce((sum, item) => sum + item.qty * item.priceCents, 0)
+				: 4990,
 			currency: 'ron',
 			status: input.status ?? 'paid',
 			fulfillmentStatus: input.fulfillment ?? 'unfulfilled',
-			oversold: input.oversold ?? false
+			oversold: input.oversold ?? false,
+			refundedCents: input.refundedCents ?? 0
 		})
 		.returning();
+	if (items.length) {
+		await db
+			.insert(orderItems)
+			.values(items.map((item, i) => ({ id: `${row.id}-item-${i}`, orderId: row.id, ...item })));
+	}
 	return row;
 }
 
@@ -143,6 +161,7 @@ beforeAll(async () => {
 	transitionAction = detailPage.actions.transition as unknown as typeof transitionAction;
 	issueInvoiceAction = detailPage.actions.issueInvoice as unknown as typeof issueInvoiceAction;
 	generateAwbAction = detailPage.actions.generateAwb as unknown as typeof generateAwbAction;
+	stornoPartialAction = detailPage.actions.stornoPartial as unknown as typeof stornoPartialAction;
 });
 
 afterAll(async () => {
@@ -447,5 +466,130 @@ describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page'
 		expect(result.status).toBe(400);
 		expect(result.data).toMatchObject({ awbError: 'order-not-paid' });
 		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
+	});
+});
+
+describe('/admin/orders/[id] ?/stornoPartial — the fiscal side of a partial refund (FIX-10)', () => {
+	beforeAll(async () => {
+		await db
+			.insert(siteSettings)
+			.values(
+				Object.entries({
+					'company.legalName': 'Better Sleep SRL',
+					'company.cui': 'RO12345678',
+					'company.vatRegistered': true,
+					'company.regCom': 'J40/1234/2025',
+					'company.address': 'Str. Somnului 10, București',
+					'invoice.seriesPrefix': 'QUE',
+					'invoice.vatRateBp': 2100
+				}).map(([key, value]) => ({ key, value }))
+			)
+			.onConflictDoNothing();
+	});
+
+	async function docsOf(orderId: string) {
+		return db
+			.select()
+			.from(invoices)
+			.where(eq(invoices.orderId, orderId))
+			.orderBy(asc(invoices.number));
+	}
+
+	it('editor: 403 before anything is written', async () => {
+		const order = await insertOrder({
+			refundedCents: 1500,
+			items: [{ name: 'Pernă', qty: 2, priceCents: 4990 }]
+		});
+		await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		try {
+			await stornoPartialAction({ params: { id: order.id }, locals: locals(EDITOR) });
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(403);
+		}
+		expect((await docsOf(order.id)).map((d) => d.kind)).toEqual(['invoice']);
+	});
+
+	it('admin: reverses exactly the refunded-but-unreversed amount as one line at the original rate; a second click has nothing to storno', async () => {
+		// Stripe refunded 15,00 lei of a 99,80 lei order (the webhook recorded it).
+		const order = await insertOrder({
+			refundedCents: 1500,
+			items: [{ name: 'Pernă', qty: 2, priceCents: 4990 }]
+		});
+		await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) });
+
+		const result = await stornoPartialAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(result).toEqual({ stornoIssued: true });
+
+		const docs = await docsOf(order.id);
+		expect(docs.map((d) => d.kind)).toEqual(['invoice', 'storno']);
+		const [original, storno] = docs;
+		expect(storno.stornoOfInvoiceId).toBe(original.id);
+		// Gross = the refunded amount; VAT extracted at 21%: 1500 → 260 VAT, 1240 net.
+		expect(storno.grossTotalCents).toBe(-1500);
+		expect(storno.vatTotalCents).toBe(-260);
+		expect(storno.netTotalCents).toBe(-1240);
+		const lines = await db.select().from(invoiceLines).where(eq(invoiceLines.invoiceId, storno.id));
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatchObject({
+			qty: -1,
+			unitPriceCents: 1500,
+			vatRateBp: 2100,
+			grossCents: -1500,
+			vatCents: -260,
+			netCents: -1240
+		});
+		expect(lines[0].description).toContain(original.displayNumber);
+		// The original is untouched and the order stays paid.
+		const [after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.status).toBe('paid');
+		expect(after.refundedCents).toBe(1500);
+		const trail = await db.select().from(orderEvents).where(eq(orderEvents.orderId, order.id));
+		expect(trail.some((e) => e.kind === 'storno-issued' && e.actor === ADMIN.email)).toBe(true);
+
+		// Nothing left to reverse: the second click is a typed 400, not a document.
+		const again = await stornoPartialAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(again)) throw new Error('expected an ActionFailure');
+		expect(again.status).toBe(400);
+		expect(again.data).toMatchObject({ stornoError: 'nothing-to-storno' });
+		expect(await docsOf(order.id)).toHaveLength(2);
+
+		// A later, larger cumulative refund reverses only the difference.
+		await db.update(orders).set({ refundedCents: 4000 }).where(eq(orders.id, order.id));
+		expect(await stornoPartialAction({ params: { id: order.id }, locals: locals(ADMIN) })).toEqual({
+			stornoIssued: true
+		});
+		const three = await docsOf(order.id);
+		expect(three.map((d) => d.grossTotalCents)).toEqual([9980, -1500, -2500]);
+	});
+
+	it('an order without a refund or without an invoice is a typed 400', async () => {
+		const noRefund = await insertOrder({ items: [{ name: 'Pernă', qty: 1, priceCents: 4990 }] });
+		await issueInvoiceAction({ params: { id: noRefund.id }, locals: locals(ADMIN) });
+		const a = await stornoPartialAction({ params: { id: noRefund.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(a)) throw new Error('expected an ActionFailure');
+		expect(a.data).toMatchObject({ stornoError: 'nothing-to-storno' });
+
+		const noInvoice = await insertOrder({
+			refundedCents: 1000,
+			items: [{ name: 'Pernă', qty: 1, priceCents: 4990 }]
+		});
+		const b = await stornoPartialAction({ params: { id: noInvoice.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(b)) throw new Error('expected an ActionFailure');
+		expect(b.data).toMatchObject({ stornoError: 'no-invoice-to-reverse' });
+		expect(await docsOf(noInvoice.id)).toEqual([]);
+	});
+
+	it('work queue: a partially refunded order stays in the action view and the row carries the amount', async () => {
+		const order = await insertOrder({
+			refundedCents: 1500,
+			items: [{ name: 'Pernă', qty: 2, priceCents: 4990 }]
+		});
+		const { ids } = await loadIds('http://localhost/admin/orders');
+		expect(ids).toContain(order.id);
+		const row = (await listOrders({ db }, 'action')).find((o) => o.id === order.id);
+		expect(row?.refundedCents).toBe(1500);
+		expect(row?.status).toBe('paid');
 	});
 });

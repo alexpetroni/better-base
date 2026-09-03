@@ -11,6 +11,7 @@ import { subscribers } from '../crm/schema.ts';
 import { emailLog } from '../email/schema.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { invoices } from '../invoice/schema.ts';
+import { ensureInvoicesForOrder, issuePartialStornoForOrder } from '../invoice/service.ts';
 import { nurtureEnrollments, nurtureSequences } from '../nurture/schema.ts';
 import { siteSettings } from '../settings/schema.ts';
 import { buildCartMetadata } from './checkout.ts';
@@ -524,5 +525,107 @@ describe('charge.refunded delivered before checkout.session.completed (audit P0 
 		// way there is never more than one, and never a nurture enrollment
 		// for a refunded order created from a pending refund.
 		expect((await emailsTo(buyer)).length).toBeLessThanOrEqual(1);
+	});
+});
+
+describe('storno arithmetic across partial and full refunds', () => {
+	it('a full refund after a partial storno reverses only the remainder, so Σ stornos = the invoice', async () => {
+		const product = await makeProduct(10);
+		await deliver(
+			sessionEvent({
+				id: 'cs_partial_then_full',
+				paymentIntent: 'pi_partial_then_full',
+				cart: [{ productId: product.id, qty: 2, priceCents: 4990 }],
+				amountTotal: 9980
+			})
+		);
+		const order = await orderBySession('cs_partial_then_full');
+
+		// One unit refunded, then the operator issues the partial storno for it.
+		expect(
+			(
+				await deliver(
+					refundEvent({
+						eventId: 'evt_ptf_partial',
+						chargeId: 'ch_ptf',
+						paymentIntent: 'pi_partial_then_full',
+						amount: 9980,
+						amountRefunded: 4990
+					})
+				)
+			).kind
+		).toBe('refund-partial');
+		const partial = await issuePartialStornoForOrder({ db }, order.id, 'admin@example.ro');
+		expect(partial.ok && partial.value.invoice.grossTotalCents).toBe(-4990);
+
+		// Then the rest is refunded: the automatic storno covers ONLY the rest.
+		expect(
+			(
+				await deliver(
+					refundEvent({
+						eventId: 'evt_ptf_full',
+						chargeId: 'ch_ptf',
+						paymentIntent: 'pi_partial_then_full',
+						amount: 9980,
+						amountRefunded: 9980
+					})
+				)
+			).kind
+		).toBe('refund-marked');
+		const after = await orderBySession('cs_partial_then_full');
+		expect(after.status).toBe('refunded');
+		expect(after.refundedCents).toBe(9980);
+		const docs = await invoicesFor(order.id);
+		expect(docs.map((d) => d.kind)).toEqual(['invoice', 'storno', 'storno']);
+		expect(docs.map((d) => d.grossTotalCents)).toEqual([9980, -4990, -4990]);
+		expect(docs[1].grossTotalCents + docs[2].grossTotalCents).toBe(-docs[0].grossTotalCents);
+
+		// Fully reversed: the one-click retry issues nothing more.
+		const ensured = await ensureInvoicesForOrder({ db }, order.id, 'admin@example.ro');
+		expect(ensured.ok && ensured.value.storno?.id).toBe(docs[2].id);
+		expect(await invoicesFor(order.id)).toHaveLength(3);
+		expect((await eventKinds(order.id)).filter((k) => k === 'storno-issued')).toHaveLength(2);
+	});
+
+	it('the database itself refuses a storno beyond the original, whatever path inserts it', async () => {
+		const product = await makeProduct(10);
+		await deliver(
+			sessionEvent({
+				id: 'cs_storno_bound',
+				paymentIntent: 'pi_storno_bound',
+				cart: [{ productId: product.id, qty: 1, priceCents: 4990 }],
+				amountTotal: 4990
+			})
+		);
+		const order = await orderBySession('cs_storno_bound');
+		await deliver(
+			refundEvent({
+				eventId: 'evt_storno_bound',
+				chargeId: 'ch_bound',
+				paymentIntent: 'pi_storno_bound',
+				amount: 4990,
+				amountRefunded: 4990
+			})
+		);
+		const [original] = await invoicesFor(order.id);
+		// A raw second storno of even one ban past the invoice is rejected —
+		// drizzle wraps the pg error, so the trigger's message sits on `cause`.
+		let caught: unknown;
+		try {
+			await db.execute(sql`
+				insert into invoices (id, kind, series, number, display_number, order_id, storno_of_invoice_id,
+					issued_at, due_at, currency, issuer_name, issuer_cui, issuer_vat_registered, issuer_reg_com,
+					issuer_address, buyer_name, net_total_cents, vat_total_cents, gross_total_cents)
+				select 'raw-storno-over', 'storno', series, 9999, 'RFD-9999', order_id, id,
+					now(), now(), currency, issuer_name, issuer_cui, issuer_vat_registered, issuer_reg_com,
+					issuer_address, buyer_name, -1, 0, -1
+				from invoices where id = ${original.id}`);
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toBeInstanceOf(Error);
+		const error = caught as Error & { cause?: { message?: string } };
+		expect(`${error.message} ${error.cause?.message ?? ''}`).toMatch(/exceeds the original/);
+		expect(await invoicesFor(order.id)).toHaveLength(2);
 	});
 });
