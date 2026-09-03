@@ -1,0 +1,10 @@
+# Remediation batch 2 — docs/AUDIT-2026-09-03.md. Copy to .phase-runner/phases.
+# One plan per line, dependency order; a re-run skips phases in state/phases-done.
+docs/fixes/FIX-9-AUTHZ-HEADERS.md
+docs/fixes/FIX-10-PAYMENTS-REFUNDS.md
+docs/fixes/FIX-11-SHIPPING.md
+docs/fixes/FIX-12-FISCAL-CONTENT.md
+docs/fixes/FIX-13-MAIL-QUEUE.md
+docs/fixes/FIX-14-CHAT.md
+docs/fixes/FIX-15-MEDIA-CONTENT-SEO.md
+docs/fixes/FIX-16-PIPELINE-OPS.md
