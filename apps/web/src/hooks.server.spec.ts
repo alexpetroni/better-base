@@ -200,3 +200,45 @@ describe('handleAdminGuard on plain paths (unchanged behavior)', () => {
 		expect(isHttpError(outcome.thrown, 403)).toBe(false);
 	});
 });
+
+describe('handleSecurityHeaders (audit 2026-09-03: no security headers / CSP anywhere)', () => {
+	it('sets the header set + runtime CSP half on public responses', async () => {
+		const outcome = await runHandle({ rawPath: '/blog', routeId: '/(public)/blog' });
+		expect(outcome.resolved).toBe(true);
+		const headers = outcome.response!.headers;
+
+		expect(headers.get('x-content-type-options')).toBe('nosniff');
+		expect(headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+		expect(headers.get('x-frame-options')).toBe('DENY');
+		expect(headers.get('permissions-policy')).toContain('camera=()');
+		// PUBLIC_SITE_URL is http:// in the test env — no HSTS here (the pure
+		// unit spec covers the https branch).
+		expect(headers.get('strict-transport-security')).toBeNull();
+		// Public pages stay cacheable; only /admin is forced no-store.
+		expect(headers.get('cache-control')).toBeNull();
+
+		const csp = headers.get('content-security-policy') ?? '';
+		expect(csp).toContain("form-action 'self' https://checkout.stripe.com");
+		expect(csp).toContain("frame-ancestors 'none'");
+		expect(csp).toMatch(/img-src [^;]*'self'/);
+		expect(csp).toMatch(/img-src [^;]*data:/);
+		expect(csp).toContain(
+			'frame-src https://www.youtube-nocookie.com https://iframe.mediadelivery.net'
+		);
+		// The bucket endpoint is an ADMIN-only connect target (direct uploads).
+		const s3Origin = new URL(process.env.S3_ENDPOINT!).origin;
+		expect(csp).not.toContain(`connect-src 'self' ${s3Origin}`);
+	});
+
+	it('marks /admin responses no-store and lets the upload page reach the bucket', async () => {
+		const outcome = await runHandle({ rawPath: '/admin/login', routeId: '/admin/login' });
+		expect(outcome.resolved).toBe(true);
+		const headers = outcome.response!.headers;
+
+		expect(headers.get('cache-control')).toBe('private, no-store');
+		const csp = headers.get('content-security-policy') ?? '';
+		const s3Origin = new URL(process.env.S3_ENDPOINT!).origin;
+		expect(csp).toContain(s3Origin);
+		expect(csp).toMatch(/connect-src [^;]*'self'/);
+	});
+});
