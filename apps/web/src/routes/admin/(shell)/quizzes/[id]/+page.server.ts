@@ -3,6 +3,7 @@ import { getDb } from '$lib/db';
 import { EMAIL_TEMPLATE_KEYS } from '$lib/modules/email';
 import {
 	getQuiz,
+	latestResults,
 	latestResultsWithEmail,
 	publishQuiz,
 	unpublishQuiz,
@@ -13,16 +14,27 @@ import { failResult, formStr, requireStaff } from '$lib/server/forms';
 import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
+	const user = requireStaff(locals);
 	const found = await getQuiz({ db: getDb() }, params.id);
 	if (!found) error(404);
+
+	// Subscriber emails are customer PII: only the admin role sees them.
+	// Editors get the same rows with the email column never queried.
+	const results =
+		user.role === 'admin'
+			? await latestResultsWithEmail({ db: getDb() }, params.id)
+			: (await latestResults({ db: getDb() }, params.id)).map((result) => ({
+					result,
+					email: null
+				}));
 
 	return {
 		quiz: found.quiz,
 		pillarSlug: found.pillarSlug,
 		sitePillars: resolveSitePillars(),
 		templateKeys: EMAIL_TEMPLATE_KEYS,
-		results: await latestResultsWithEmail({ db: getDb() }, params.id)
+		results
 	};
 };
 
