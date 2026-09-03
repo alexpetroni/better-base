@@ -5,6 +5,7 @@ import { getEmailSender } from '$lib/modules/email/server';
 import {
 	ensureInvoicesForOrder,
 	invoicePdfAttachmentForOrder,
+	issuePartialStornoForOrder,
 	listInvoicesForOrder
 } from '$lib/modules/invoice/server';
 import { getStorage } from '$lib/modules/media/server';
@@ -25,10 +26,16 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getOrderWithItems({ db: getDb() }, params.id);
 	if (!found) error(404);
+	const invoices = await listInvoicesForOrder({ db: getDb() }, params.id);
 	return {
 		...found,
 		events: await listOrderEvents({ db: getDb() }, params.id),
-		invoices: await listInvoicesForOrder({ db: getDb() }, params.id),
+		invoices,
+		// What the stornos already reverse (positive bani): the partial-storno
+		// button offers exactly refunded_cents − this, and hides at zero.
+		reversedCents: invoices
+			.filter((doc) => doc.kind === 'storno')
+			.reduce((sum, doc) => sum - doc.grossTotalCents, 0),
 		shipment: (await getShipmentForOrder({ db: getDb() }, params.id)) ?? null,
 		// One nonce per rendered page: the re-send form posts it back and the
 		// email idempotency key derives from (invoice id, nonce), so a double
@@ -77,6 +84,24 @@ export const actions: Actions = {
 			return fail(400, { invoiceError: result.error, invoiceDetail: result.detail ?? '' });
 		}
 		return { invoiceIssued: true };
+	},
+
+	/**
+	 * The fiscal side of a PARTIAL refund: issue a storno for exactly what
+	 * Stripe refunded and no earlier storno has reversed (`refunded_cents −
+	 * Σ stornos`). The operator types no amount, so the document cannot
+	 * disagree with the money movement; the service locks the order row
+	 * against a racing webhook. Same defense-in-depth admin check.
+	 */
+	stornoPartial: async ({ params, locals }) => {
+		const user = requireAdmin(locals);
+
+		const result = await issuePartialStornoForOrder({ db: getDb() }, params.id, user.email);
+		if (!result.ok) {
+			if (result.error === 'order-not-found') error(404);
+			return fail(400, { stornoError: result.error, stornoDetail: result.detail ?? '' });
+		}
+		return { stornoIssued: true };
 	},
 
 	/**

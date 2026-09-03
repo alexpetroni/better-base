@@ -35,6 +35,9 @@
 	function eventLabel(event: (typeof data.events)[number]): string {
 		if (event.kind === 'created') return m.admin_order_event_created();
 		if (event.kind === 'refund-marked') return m.admin_order_event_refund_marked();
+		if (event.kind === 'refund-partial') return m.admin_order_event_refund_partial();
+		if (event.kind === 'payment-succeeded') return m.admin_order_event_payment_succeeded();
+		if (event.kind === 'payment-failed') return m.admin_order_event_payment_failed();
 		if (event.kind === 'invoice-issued') return m.admin_order_event_invoice_issued();
 		if (event.kind === 'invoice-failed') return m.admin_order_event_invoice_failed();
 		if (event.kind === 'storno-issued') return m.admin_order_event_storno_issued();
@@ -52,6 +55,17 @@
 		}
 		return event.kind;
 	}
+
+	// Fiscal state: the original's gross, what stornos reverse so far, and
+	// what a partial storno would reverse now (refunded − already reversed).
+	const invoiceGrossCents = $derived(
+		data.invoices.find((doc) => doc.kind === 'invoice')?.grossTotalCents ?? null
+	);
+	const stornoDueCents = $derived(Math.max(0, data.order.refundedCents - data.reversedCents));
+	const fiscalIncomplete = $derived(
+		invoiceGrossCents === null ||
+			(data.order.status === 'refunded' && data.reversedCents < invoiceGrossCents)
+	);
 
 	const shipping = $derived(data.order.shippingAddress);
 	const shippingLines = $derived(
@@ -96,6 +110,14 @@
 	>
 		{fulfillmentLabels[data.order.fulfillmentStatus]()}
 	</span>
+	{#if data.order.status === 'paid' && data.order.refundedCents > 0}
+		<span
+			data-testid="order-detail-refund-partial"
+			class="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+		>
+			{m.admin_order_refund_partial()}
+		</span>
+	{/if}
 	{#if data.order.oversold}
 		<span
 			data-testid="order-detail-oversold"
@@ -144,6 +166,14 @@
 						{formatCents(data.order.amountTotalCents, data.order.currency)}
 					</strong>
 				</li>
+				{#if data.order.refundedCents > 0}
+					<li class="flex items-center justify-between gap-4 px-4 py-3 text-amber-800">
+						<span>{m.admin_order_refunded_amount()}</span>
+						<span class="font-semibold" data-testid="order-detail-refunded">
+							−{formatCents(data.order.refundedCents, data.order.currency)}
+						</span>
+					</li>
+				{/if}
 			</ul>
 		</div>
 
@@ -275,7 +305,33 @@
 					</p>
 				{/if}
 			{/if}
-			{#if (data.order.status === 'paid' || data.order.status === 'refunded') && (data.invoices.length === 0 || (data.order.status === 'refunded' && !data.invoices.some((d) => d.kind === 'storno')))}
+			{#if invoiceGrossCents !== null && stornoDueCents > 0}
+				<form method="POST" action="?/stornoPartial" class="mt-3">
+					<button
+						type="submit"
+						data-testid="order-storno-partial"
+						class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+					>
+						{m.admin_order_storno_partial({
+							amount: formatCents(stornoDueCents, data.order.currency)
+						})}
+					</button>
+				</form>
+			{/if}
+			{#if form?.stornoIssued}
+				<p class="mt-2 text-xs text-green-700" data-testid="order-storno-partial-issued">
+					{m.admin_order_storno_partial_issued()}
+				</p>
+			{/if}
+			{#if form?.stornoError}
+				<p class="mt-2 text-xs text-red-700" data-testid="order-storno-partial-error">
+					{m.admin_order_storno_partial_error()}
+					{form.stornoDetail
+						? ` (${form.stornoError}: ${form.stornoDetail})`
+						: ` (${form.stornoError})`}
+				</p>
+			{/if}
+			{#if (data.order.status === 'paid' || data.order.status === 'refunded') && fiscalIncomplete}
 				<form method="POST" action="?/issueInvoice" class="mt-3">
 					<button
 						type="submit"

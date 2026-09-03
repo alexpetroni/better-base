@@ -59,6 +59,7 @@ const MANIFEST: Record<string, ManifestRow> = {
 		actions: {
 			transition: 'admin',
 			issueInvoice: 'admin',
+			stornoPartial: 'admin',
 			generateAwb: 'admin',
 			resendInvoice: 'admin'
 		}

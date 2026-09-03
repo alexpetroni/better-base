@@ -439,5 +439,16 @@
 	"admin_nurture_parked_col_email": "Email",
 	"admin_nurture_parked_col_step": "Pas",
 	"admin_nurture_parked_col_attempts": "Încercări",
-	"admin_nurture_parked_col_error": "Eroare"
+	"admin_nurture_parked_col_error": "Eroare",
+	"admin_order_refund_partial": "rambursare parțială",
+	"admin_order_refunded_amount": "Rambursat (Stripe)",
+	"admin_order_storno_partial": "Emite storno parțial ({amount})",
+	"admin_order_storno_partial_issued": "Storno parțial emis.",
+	"admin_order_storno_partial_error": "Storno-ul parțial nu a putut fi emis.",
+	"admin_order_event_refund_partial": "rambursare parțială înregistrată (Stripe)",
+	"admin_order_event_payment_succeeded": "plată confirmată (Stripe, metodă asincronă)",
+	"admin_order_event_payment_failed": "plată eșuată (Stripe) — comandă anulată",
+	"admin_orders_attention": "Semnale Stripe de verificat",
+	"admin_orders_attention_refund": "Rambursare fără comandă — intent {intent}: {amount} din {total}, primită {date}",
+	"admin_orders_attention_empty_cart": "Sesiune finalizată fără coș — eveniment {eventId}, primit {date} (sesiunea și suma sunt în jurnalul serverului)"
 }

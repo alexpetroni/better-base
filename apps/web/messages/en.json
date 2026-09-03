@@ -439,5 +439,16 @@
 	"admin_nurture_parked_col_email": "Email",
 	"admin_nurture_parked_col_step": "Step",
 	"admin_nurture_parked_col_attempts": "Attempts",
-	"admin_nurture_parked_col_error": "Error"
+	"admin_nurture_parked_col_error": "Error",
+	"admin_order_refund_partial": "partial refund",
+	"admin_order_refunded_amount": "Refunded (Stripe)",
+	"admin_order_storno_partial": "Issue partial storno ({amount})",
+	"admin_order_storno_partial_issued": "Partial storno issued.",
+	"admin_order_storno_partial_error": "The partial storno could not be issued.",
+	"admin_order_event_refund_partial": "partial refund recorded (Stripe)",
+	"admin_order_event_payment_succeeded": "payment confirmed (Stripe, async method)",
+	"admin_order_event_payment_failed": "payment failed (Stripe) — order cancelled",
+	"admin_orders_attention": "Stripe signals to check",
+	"admin_orders_attention_refund": "Refund without an order — intent {intent}: {amount} of {total}, received {date}",
+	"admin_orders_attention_empty_cart": "Completed session without a cart — event {eventId}, received {date} (session id and amount are in the server log)"
 }

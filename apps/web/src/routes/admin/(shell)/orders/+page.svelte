@@ -36,13 +36,6 @@
 		...FULFILLMENT_STATUSES.map((status) => ({ id: status, label: fulfillmentLabels[status]() }))
 	]);
 
-	/** Fiscal record incomplete: no invoice, or refunded without its storno. */
-	function invoiceMissing(order: (typeof data.orders)[number]): boolean {
-		if (order.status === 'paid') return !order.invoiceNumber;
-		if (order.status === 'refunded') return !order.invoiceNumber || !order.stornoNumber;
-		return false;
-	}
-
 	// Default the accountant export to the current month (cosmetic only —
 	// the operator picks the month; the server validates it).
 	const defaultExportMonth = new Date().toISOString().slice(0, 7);
@@ -96,6 +89,35 @@
 	</button>
 </form>
 
+{#if data.unmatchedRefunds.length > 0 || data.emptyCartEvents.length > 0}
+	<section
+		data-testid="orders-attention"
+		class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
+	>
+		<p class="mb-1 font-semibold">{m.admin_orders_attention()}</p>
+		<ul class="space-y-1">
+			{#each data.unmatchedRefunds as refund (refund.paymentIntent)}
+				<li data-testid="orders-attention-refund" data-intent={refund.paymentIntent}>
+					{m.admin_orders_attention_refund({
+						intent: refund.paymentIntent,
+						amount: formatCents(refund.amountRefundedCents),
+						total: formatCents(refund.amountCents),
+						date: formatDate(refund.receivedAt, 'medium-time')
+					})}
+				</li>
+			{/each}
+			{#each data.emptyCartEvents as event (event.eventId)}
+				<li data-testid="orders-attention-empty-cart" data-event={event.eventId}>
+					{m.admin_orders_attention_empty_cart({
+						eventId: event.eventId,
+						date: formatDate(event.receivedAt, 'medium-time')
+					})}
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
 {#if data.orders.length === 0}
 	<p data-testid="orders-empty" class="text-(--color-ink)/70">
 		{data.filter === 'all' ? m.admin_orders_empty() : m.admin_orders_empty_filtered()}
@@ -145,7 +167,15 @@
 								{m.admin_order_oversold()}
 							</span>
 						{/if}
-						{#if invoiceMissing(order)}
+						{#if order.status === 'paid' && order.refundedCents > 0}
+							<span
+								data-testid="order-row-refund-partial"
+								class="ml-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+							>
+								{m.admin_order_refund_partial()}
+							</span>
+						{/if}
+						{#if order.fiscalIncomplete}
 							<span
 								data-testid="order-row-no-invoice"
 								class="ml-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
