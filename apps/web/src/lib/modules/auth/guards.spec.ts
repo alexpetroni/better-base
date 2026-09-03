@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { ADMIN_ONLY_SECTIONS, canAccessSection, guardAdminPath, isStaffRole } from './guards.ts';
+import {
+	ADMIN_ONLY_SECTIONS,
+	canAccessSection,
+	guardAdminPath,
+	isStaffRole,
+	routeIdPathname
+} from './guards.ts';
+
+describe('routeIdPathname', () => {
+	it('strips layout groups from a resolved route id', () => {
+		expect(routeIdPathname('/admin/(shell)/settings')).toBe('/admin/settings');
+		expect(routeIdPathname('/admin/(shell)/subscribers/export.csv')).toBe(
+			'/admin/subscribers/export.csv'
+		);
+		expect(routeIdPathname('/(public)/blog/[slug]')).toBe('/blog/[slug]');
+	});
+
+	it('keeps group-less ids as-is and maps null (404) to the empty string', () => {
+		expect(routeIdPathname('/admin/login')).toBe('/admin/login');
+		expect(routeIdPathname('/api/shipments/[id]/label')).toBe('/api/shipments/[id]/label');
+		expect(routeIdPathname(null)).toBe('');
+	});
+});
 
 describe('guardAdminPath', () => {
 	it('allows non-admin paths for everyone', () => {

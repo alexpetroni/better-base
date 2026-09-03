@@ -18,6 +18,18 @@ export function isStaffRole(value: unknown): value is StaffRole {
 	return value === 'admin' || value === 'editor';
 }
 
+/**
+ * The pathname a resolved route id answers for, with layout groups stripped:
+ * '/admin/(shell)/settings' → '/admin/settings'. Server guards must key on
+ * THIS — SvelteKit matches routes on the percent-DECODED path, so a raw
+ * request to '/%61dmin/…' reaches the /admin route while `url.pathname`
+ * still reads '/%61dmin/…' (audit 2026-09-03 P0 #1). A null route id (no
+ * match → 404) maps to '' and no guard applies.
+ */
+export function routeIdPathname(routeId: string | null): string {
+	return (routeId ?? '').replace(/\/\([^/]+\)/g, '');
+}
+
 /** May this role open /admin/<section>? (Anonymous may not open anything.) */
 export function canAccessSection(role: StaffRole, section: string): boolean {
 	return role === 'admin' || !(ADMIN_ONLY_SECTIONS as readonly string[]).includes(section);

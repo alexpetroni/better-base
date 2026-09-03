@@ -2,10 +2,10 @@ import { error, redirect, type Handle, type HandleServerError } from '@sveltejs/
 import { sequence } from '@sveltejs/kit/hooks';
 import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
-import { deLocalizeUrl, getTextDirection } from '$lib/paraglide/runtime';
+import { getTextDirection } from '$lib/paraglide/runtime';
 import { paraglideMiddleware } from '$lib/paraglide/server';
 import { getDb } from '$lib/db';
-import { getAuth, guardAdminPath, isStaffRole } from '$lib/modules/auth';
+import { getAuth, guardAdminPath, isStaffRole, routeIdPathname } from '$lib/modules/auth';
 import { createSettingsLoader } from '$lib/modules/settings/server';
 import { assertBootEnv } from '$lib/server/boot';
 import { formatServerError } from '$lib/server/log';
@@ -51,7 +51,12 @@ const handleSettings: Handle = ({ event, resolve }) => {
 const handleAdminGuard: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 
-	const pathname = deLocalizeUrl(event.url).pathname;
+	// Guard decisions key on the RESOLVED route id, never on url.pathname:
+	// SvelteKit matches routes on the percent-decoded path, so '/%61dmin/…'
+	// reaches the /admin route while the raw pathname reads '/%61dmin/…'
+	// (audit 2026-09-03 P0 #1). An unmatched path ('' here) needs no guard —
+	// there is no route to protect and the 404 answers it.
+	const pathname = routeIdPathname(event.route.id);
 	const isAdminPath = pathname === '/admin' || pathname.startsWith('/admin/');
 	// /api/shipments serves only staff (AWB labels), so it needs the session too.
 	if (

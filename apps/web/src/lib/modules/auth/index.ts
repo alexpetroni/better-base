@@ -7,6 +7,7 @@ export {
 	canAccessSection,
 	guardAdminPath,
 	isStaffRole,
+	routeIdPathname,
 	type AdminGuardDecision,
 	type StaffRole
 } from './guards.ts';
