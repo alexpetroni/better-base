@@ -134,13 +134,24 @@ list applies later to better-life (with its own domain/accounts).
 
 - [ ] Products re-checked in `/admin/products`: names, prices in lei, stock.
 - [ ] Live keys set (`sk_live_…`); live webhook endpoint
-      `https://bettersleep.ro/api/stripe/webhook` created with events
-      `checkout.session.completed` + `charge.refunded`; its `whsec_…` set.
+      `https://bettersleep.ro/api/stripe/webhook` created with the four
+      events `checkout.session.completed`,
+      `checkout.session.async_payment_succeeded`,
+      `checkout.session.async_payment_failed`, `charge.refunded`
+      (DEPLOYMENT.md §7); its `whsec_…` set.
+- [ ] Payment methods: sessions are card-only by default; only enable
+      "Permite toate metodele de plată" in `/admin/settings` → Magazin if a
+      delayed method (bank debit, voucher) is wanted — then a pending order
+      becomes paid only on `async_payment_succeeded`.
 - [ ] One real LIVE purchase made with a real card and refunded — order
       appears as `plătită`, then `rambursată` in `/admin/orders`; the
       confirmation email arrives WITH the invoice PDF attached; the success
       page offers the invoice download; the refund's storno shows on the
       order page next to the invoice.
+- [ ] One PARTIAL refund from the Stripe dashboard on a second test order:
+      the order stays `plătită` with the "rambursare parțială" badge and the
+      refunded amount, no storno is issued automatically, and "Emite storno
+      parțial (…)" on the order page issues one for exactly that amount.
 - [ ] Stripe receipt/branding settings (logo, statement descriptor) filled.
 
 ## Email (Resend)

@@ -2517,3 +2517,160 @@ driver-parity included) green: 851 passed, 0 skipped.
 
 **New env vars:** none. **New tables:** `admin_audit`. **New migrations:**
 `0020_wonderful_pretty_boy.sql`, `0021_odd_green_goblin.sql`.
+
+## Remediation FIX-10 (audit 2026-09-03 P0 #2 + #3, shop P1/P2 money & stock — batch 2, phase 2)
+
+Money after the first payment. Closes the two refund P0s, the pending-order
+P1, quantity-vs-stock P1 and the three small shop P2s of
+`docs/AUDIT-2026-09-03.md`. Migration `0022_damp_santa_claus` (additive:
+`orders.refunded_cents` backfilled from status, new `pending_refunds`, the
+one-storno-per-invoice unique index replaced by a plain index + a `BEFORE
+INSERT` trigger bounding Σ storno gross ≤ original). No new env vars. One
+new setting key: `shop.allowAllPaymentMethods` (boolean, off, server-only).
+
+**Closed by FIX-10:**
+
+- **P0 #2 partial refund processed as a full one** —
+  `handleChargeRefunded` reads `charge.amount` / `amount_refunded`
+  (cumulative). Partial → `orders.refunded_cents = greatest(current,
+  amount_refunded)`, a `refund-partial` trail event with the amounts, status
+  stays `paid`, NO storno, fulfillment and the AWB untouched (the customer
+  keeps the goods). Full → today's path plus `refunded_cents`; the storno
+  reverses the whole invoice or only the REMAINDER after earlier partial
+  stornos (`issueStornoForOrderInTx` locks the original row, sums what is
+  reversed, and issues a single negative line at the original rate for
+  anything short of the full negation — exact line negation is kept for the
+  full case). Admin `/admin/orders/[id]` `?/stornoPartial` (admin-only, in
+  the authz manifest) reverses `refunded_cents − Σ stornos` via
+  `issuePartialStornoForOrder`; the operator types no amount, so the fiscal
+  document cannot disagree with the money Stripe recorded. Work queue: a
+  partially refunded order stays in `action` with a "rambursare parțială"
+  badge; the detail page shows the refunded amount and the button with the
+  exact amount it will reverse. `listOrders` aggregates stornos in subqueries
+  (several per invoice now) and exposes `reversedCents` + `fiscalIncomplete`
+  — ONE SQL definition shared by the `invoice-missing` filter and the badge
+  (refunded with stornos short of the invoice counts as incomplete).
+  `partialStornoLineAmounts` (vat.ts) is the only computed storno line: VAT
+  extracted from the refunded gross with the same half-up rule, negated,
+  integer bani, `0 - x` so a 0 % rate yields 0 not -0.
+- **P0 #3 refund before its order lost** — an unmatched `charge.refunded`
+  is recorded in `pending_refunds` (PK payment intent; charge id, charge
+  amount, cumulative refunded amount, received/matched at, order id) and
+  acknowledged as `refund-pending` (still exactly-once via the ledger).
+  `createOrderFromSession` consults the row for its intent: a pending FULL
+  refund creates the order `refunded` (invoice + storno, fulfillment
+  `cancelled`, no stock taken, no confirmation email, no nurture); a
+  PARTIAL one creates it `paid` with `refunded_cents` and the event, then
+  proceeds normally. Both handlers take a transaction-scoped advisory lock
+  on the payment intent (`pg_advisory_xact_lock(hashtext(…))`), so the
+  refund and its session converge in either order AND under a concurrent
+  race (`refunds.spec.ts` races them with `Promise.all`). Matched rows are
+  pruned by the retention sweep after the 90-day ledger window
+  (`pruneMatchedPendingRefunds`, `RetentionSweepResult.pendingRefundRows`);
+  UNMATCHED rows are never swept — they surface in an amber "Semnale
+  Stripe" box on `/admin/orders`. A refund with no payment intent at all
+  stays `refund-unmatched` (nothing to key it on). `shop.spec`'s old
+  `refund-unmatched` assertion for a refund with no order was asserting the
+  bug and now expects `refund-pending` (said so in the commit).
+- **P1 pending orders are a dead end** — the confirmation email and the
+  nurture trigger fire ONLY for a `paid` order (a pending one is not paid
+  yet; refunded/failed never will be). New handlers:
+  `checkout.session.async_payment_succeeded` flips `pending → paid` in the
+  `runOnce` shape (invoice, then email + nurture post-commit; `payment-
+  succeeded` event) and, arriving BEFORE `completed`, creates the order paid
+  from the session it carries (the later `completed` is a duplicate
+  session); `checkout.session.async_payment_failed` marks it `failed`,
+  restores the reserved stock (`stock + qty` in SQL, tracked products; NOT
+  for an oversold order — its decrement was clamped so the true reservation
+  is unknown, the trail says so), cancels fulfillment, and arriving first
+  creates the order `failed` with no stock taken. A result for an
+  already-settled order is `payment-already-settled`. Card-only default:
+  sessions are created with `payment_method_types: ['card']` unless
+  `shop.allowAllPaymentMethods` is on (`paymentMethodTypesFor`,
+  `CheckoutSessionInput.paymentMethodTypes`, sent verbatim by the real
+  gateway — captured through the fetch seam in `stripe-gateway.spec`).
+  DEPLOYMENT §7 lists the four subscribed events and the default;
+  LAUNCH-CHECKLIST has the events + a partial-refund rehearsal box.
+- **P1 quantity vs stock** — `CartLine.maxQty` (tracked stock, null =
+  untracked) and `available` now includes `qty ≤ stock`;
+  `createCheckoutFromCart` refuses with `unavailable` and a detail naming
+  the count (`Name (max N)`, language-neutral, rendered verbatim by `/cos`);
+  `?/setQty` and the product page `?/add` clamp the line through the pure
+  `clampLineToStock` (zero stock keeps the line at 1 and flagged, never
+  silently deleted); `/cos` caps the qty input at the stock, shows
+  "(maxim N buc.)" and a "redu cantitatea" line message.
+- **P2 absolute stock write racing the webhook** — `updateProduct` gained
+  `expectedStock` (optimistic `WHERE stock = loaded`; 0 rows →
+  `stock-changed` with the current value, the WHOLE save incl. the retag
+  rolls back) and `stockDelta` (`stock = stock + N` in SQL, tracked only).
+  The product form posts the loaded value as a hidden guard, writes the
+  absolute field only when the operator actually changed it, gains an
+  "adaugă în stoc (relativ)" field, and re-bases its buffer on the saved
+  stock. `stock.spec.ts` races both against a real webhook decrement:
+  the absolute save is refused or lands harmlessly first (final stock is
+  the sold-down value either way, never a phantom unit); the relative
+  restock adds exactly N.
+- **P2 completed session without a cart** — logged at error level with
+  session id, amount, currency and intent; still an `empty-cart` ledger row
+  (logged once, not on redelivery), listed for the admin
+  (`listEmptyCartEvents`) in the same "Semnale Stripe" box.
+- **P2 shipping display name / ETA unbounded** — registry `maxLength`
+  (name 60, ETA 40; new validator code `too-long` + message) on the four
+  shipping text keys; `shippingDisplayName` trims at Stripe's 100 as the
+  last line of defense (60 + 40 + the parentheses would be 103).
+
+**Deferred / noted:**
+
+- The async-payment handlers were written as part of the webhook rewrite
+  in `91596a1` (the P0 #3 fix reshaped `createOrderFromSession` and the
+  post-commit path they share) and their spec (`async-payments.spec.ts`)
+  followed in `d91b0f9`; the card-only registry key, checkout wiring and
+  gateway parameter in that spec were test-first (`8a0d9cc`). The two P0
+  regressions and the admin storno action are strictly test-first.
+- No new e2e (the phase lists none); the audit's P2 "e2e gaps" for partial
+  refund / async payment stay open for a later phase. The existing suite
+  was re-run (see verification).
+- **Migrations note (for FIX-16):** 0022 drops `invoices_storno_of_uq` and
+  creates `invoices_storno_of_idx` + `pending_refunds_matched_at_idx`
+  in-transaction (small tables today); the `refunded_cents` backfill is one
+  `UPDATE … WHERE status = 'refunded'`. Adopt the out-of-transaction index
+  path if `invoices` grows before it lands.
+- Advisory locks are transaction-scoped (`_xact_`), so they are released at
+  commit and safe behind a transaction-mode pooler (Neon's pooled endpoint)
+  — verified under `DB_DRIVER=neon` in the verification run.
+
+**New:** table `pending_refunds`; column `orders.refunded_cents`; setting
+`shop.allowAllPaymentMethods`; order-event kinds `refund-partial`,
+`payment-succeeded`, `payment-failed`; webhook outcomes `refund-partial`,
+`refund-pending`, `payment-succeeded`, `payment-failed`,
+`payment-already-settled` (and `order-created` now carries `status`);
+invoice errors `nothing-to-storno`, `storno-exceeds-original`; services
+`issuePartialStornoForOrder`, `reversedCentsFor`, `partialStornoLineAmounts`,
+`clampLineToStock`, `paymentMethodTypesFor`, `listUnmatchedRefunds`,
+`listEmptyCartEvents`, `pruneMatchedPendingRefunds`; admin action
+`stornoPartial`; product-form fields `stockLoaded` / `stockDelta`; e2e
+reset truncates `pending_refunds` with the order tables.
+
+**Verification (builder run 2026-09-03):** `pnpm lint && pnpm check &&
+pnpm test:unit` green from the repo root (apps/web 98 files, 885 passed,
+4 skipped — the pre-existing `driver-parity` suite that only runs with
+`NEON_WS_PROXY`; +33 new tests across `refunds.spec.ts`,
+`async-payments.spec.ts`, `stock.spec.ts`, `vat.spec.ts`,
+`orders-page.spec.ts`, `stripe-gateway.spec.ts`, `efactura.spec.ts`,
+`retention.spec.ts`); `pnpm test:neon` green (98 files, 890 passed, 0
+skipped — the advisory locks and `tx.execute` run through the WebSocket
+driver); `pnpm db:migrate` + `db:status` clean on a FRESH scratch database
+(23 applied) and on a POPULATED one brought to 0021 via a truncated journal
+copy and seeded with 503 orders (73 refunded) plus an invoice + full storno
+pair before 0022 applied — every refunded order backfilled to its total,
+no non-refunded row touched, `invoices_storno_of_uq` gone,
+`invoices_storno_of_idx` + `invoices_storno_bounded` present, a raw storno
+past the original refused, `pending_refunds` present;
+`DEPLOY_TARGET=vercel pnpm build` green; `pnpm test:e2e` (build + both
+preview sites) green: 89 passed, 5 skipped, 0 failed across the sleep and
+life projects. Test-first order in `git log`: d2c92f9 (P0 #2/#3 specs) →
+91596a1 (fix); 7a7f553 (partial storno amounts) → dad5e28; 2bd9c0b (admin
+storno action) → 281f569; d91b0f9 (card-only, stock, race, caps) → 8a0d9cc.
+
+**New env vars:** none. **New tables:** `pending_refunds`. **New
+migrations:** `0022_damp_santa_claus.sql`.

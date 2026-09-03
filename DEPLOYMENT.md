@@ -329,12 +329,33 @@ brand — a shared account also works):
 
 1. Set `STRIPE_SECRET_KEY` (test key first: `sk_test_…`).
 2. Dashboard → Developers → Webhooks → Add endpoint:
-   `https://<site>/api/stripe/webhook`, events:
-   `checkout.session.completed`, `charge.refunded`.
+   `https://<site>/api/stripe/webhook`, subscribed to exactly these **four**
+   events:
+   - `checkout.session.completed` — creates the order (paid, or `pending`
+     for a delayed payment method);
+   - `checkout.session.async_payment_succeeded` — flips a pending order to
+     paid (invoice, confirmation email, nurture);
+   - `checkout.session.async_payment_failed` — marks it failed, restores the
+     reserved stock, cancels fulfillment;
+   - `charge.refunded` — partial (`amount_refunded < amount`): the order
+     stays paid with the refunded amount recorded and the operator issues
+     the storno from the order page ("storno parțial"); full: status
+     refunded, storno, fulfillment/AWB handled.
+   Stripe does not order deliveries; every handler is exactly-once in either
+   arrival order (a refund before its order is remembered and applied when
+   the order is created; an async result before its `completed` creates the
+   order from the session it carries).
 3. Copy the endpoint's signing secret into `STRIPE_WEBHOOK_SECRET`.
 4. Orders are created **only** by the webhook (idempotent on the session id);
    duplicate deliveries are acknowledged and ignored. Verify with a test-mode
    purchase (card `4242 4242 4242 4242`) before switching to live keys.
+5. **Payment methods are card-only by default.** Sessions are created with
+   `payment_method_types: ['card']` regardless of what the Stripe dashboard
+   enables, so no delayed method (bank debit, voucher…) can put orders on the
+   pending/async path by accident. To offer everything the dashboard enables,
+   turn on `/admin/settings` → Magazin → "Permite toate metodele de plată";
+   the two async events above are handled either way, but the decision is the
+   operator's, not the dashboard's.
 
 The product catalog syncs to Stripe on admin save (product + price objects);
 checkout itself snapshots prices from our database, so an unsynced catalog
