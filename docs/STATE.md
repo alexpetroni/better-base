@@ -2386,3 +2386,132 @@ done and rehearsed — `docs/LAUNCH-DRY-RUN.md`):
 - Automated Lighthouse in CI — perf/a11y assertions run in e2e
   (`perf.e2e.ts`, `a11y.e2e.ts`); the checklist keeps a manual Lighthouse
   spot-check at launch.
+
+## Remediation FIX-9 (audit 2026-09-03 P0 #1 + auth/GDPR/headers — batch 2, phase 1)
+
+Closes the authorization, header and account-hardening findings of
+`docs/AUDIT-2026-09-03.md` (P0 #1 and the "Auth, GDPR & frontend" P1 block).
+Every fix landed test-first — the failing regression precedes its fix in
+`git log` — and the table-driven authz spec makes the admin surface
+closed-by-construction.
+
+**Closed by FIX-9:**
+
+- **P0 #1 encoded-path guard bypass** — `handleAdminGuard` now keys on
+  `routeIdPathname(event.route.id)` (route groups stripped; null route → no
+  guard, the 404 answers), never on the un-decoded `url.pathname`; the
+  session lookup for `/api/invoices/` + `/api/shipments/` moved to the same
+  basis. Hook-level harness in `src/hooks.server.spec.ts` (enters kit's
+  request store via `@sveltejs/kit/internal/server`, runtime-resolved
+  specifier because the entry's published types are not a module) + raw-fetch
+  e2e against the built app (`e2e/security.e2e.ts`).
+- **Defense in depth** — `requireStaff`/`requireAdmin` in `$lib/server/forms`
+  (anonymous → 401, editor on admin-only → 403, narrowed return replaced
+  every `locals.user!`); called FIRST in every admin action and every
+  `+server.ts` under `/admin/**` and `/api/shipments/**`;
+  `createEntityAction` takes `require: 'staff' | 'admin'`.
+  `src/routes/admin-authz.spec.ts` is a MANIFEST the spec cross-checks
+  against `import.meta.glob` both ways — adding an admin route/action
+  without declaring who may call it fails the suite. NOTE: anonymous is now
+  401 (was 403) on orders/export and the shipment label; the two old
+  assertions conflated unauthenticated with under-privileged and were
+  updated deliberately.
+- **Security headers + CSP, enforced** — static half in `kit.csp`
+  (vite.config.ts: `script-src 'self' 'strict-dynamic'`, `style-src 'self'
+  'unsafe-inline'`, `object-src 'none'`, `base-uri 'self'`, mode auto);
+  runtime env-derived half appended per-response by `handleSecurityHeaders`
+  (FIRST in the sequence) from `$lib/server/security-headers.ts`: `img-src`
+  'self' data: + media origin (MEDIA_PUBLIC_BASE_URL or S3-derived) +
+  IMGPROXY_URL/CF_IMAGE_BASE_URL origins, `connect-src` 'self' + analytics
+  host + S3_ENDPOINT origin on ADMIN routes only, `frame-src` the two
+  sanitizer-allowlisted video hosts, `form-action 'self'
+  https://checkout.stripe.com` (Chrome enforces it on the checkout 303),
+  `frame-ancestors 'none'`; plus nosniff, referrer-policy
+  strict-origin-when-cross-origin, x-frame-options DENY, permissions-policy,
+  HSTS when PUBLIC_SITE_URL is https, `cache-control: private, no-store` on
+  /admin. Proven on the preview build by e2e (`e2e/security.e2e.ts` +
+  `armCspGuard`/`assertNoCspViolations` in `e2e/helpers.ts`, wired into
+  chat/media/analytics-consent/shop): form-action enforced in BOTH
+  directions from a real page (a post to a foreign origin is refused
+  pre-flight with a `securitypolicyviolation`; a post to the Stripe checkout
+  origin navigates — the navigation is stubbed with `page.route`, real
+  Stripe is never contacted) while shop.e2e.ts asserts the checkout 303
+  `Location` under the same header; chat streaming; admin upload (presign +
+  PUT to the bucket); consent-gated analytics injection; and a real PNG
+  cover with a blurhash from the app's own encoder rendering its data:-URL
+  placeholder, then dropping it via the JS-attached load listener — all with
+  zero violations. Two things learned the hard way: (a) Playwright routes
+  only the FIRST request of a redirect chain, so a test that lets the
+  browser follow the checkout 303 reaches real checkout.stripe.com — never
+  do that; (b) Svelte 5 server-renders `onload={}`/`onerror={}` on media
+  elements as inline replay attributes (`onload="this.__e=event"`) that
+  `script-src` blocks under the nonce policy — attach such listeners in an
+  `$effect`, never as markup (Img.svelte is the reference). Seeded demo
+  covers are SVGs and SVGs never get a placeholder, so blurhash checks need
+  a raster row. Dev caveat: SvelteKit strips 'strict-dynamic' in dev —
+  validate CSP on `pnpm build && pnpm preview` only.
+- **Editor scoping** — `pages` joined `ADMIN_ONLY_SECTIONS` (the WHOLE
+  section: it is the legal surface — terms/privacy/cookies — so per-slug
+  rules that a new legal page could miss were rejected); quiz editor load
+  branches on role: admins get `latestResultsWithEmail`, editors get
+  `latestResults` with `email: null` (same shape, PII never queried).
+- **Login hardening** — second sliding-window counter keyed `email:<email>`
+  (20/h, `EMAIL_LOGIN_RATE_LIMIT`) consumed atomically next to the 5/15min
+  IP+email counter; either cap → 429; success clears both. Sessions:
+  `expiresIn` 12 h, `updateAge` 1 h (was better-auth's 7 rolling days).
+  Racing spec: 25 parallel attempts, 25 distinct IPs, one email → exactly
+  20 admitted.
+- **admin_audit** (migration 0020) — append-only at the DB level (same
+  reject-triggers as invoices; TRUNCATE deliberately possible for test
+  harnesses), written via `recordAdminAudit` after success in: login,
+  subscriber CSV export, monthly orders/invoices zip export (target =
+  month), media delete, nurture toggle, legal-page save.
+- **Erase completeness** (migration 0021) — webhook lowercases
+  `customer_details.email` at write; the email sender normalizes `to` once
+  (log row + transport agree); `eraseSubscriberData` matches
+  `lower(orders.email)` / `lower(email_log.to_email)` (expression indexes
+  `orders_email_lower_idx`, `email_log_to_email_lower_idx`, declared in the
+  drizzle schemas) and nulls `email_log.error` (SMTP replies can quote the
+  address).
+
+**Not done, validated for the next batch:** TOTP for the `admin` role.
+Validated against better-auth 1.6.23 in `node_modules`: the `twoFactor`
+plugin exists (`better-auth/plugins`, `two-factor/` dist entry) and exposes
+`auth.api.verifyTOTP` (endpoint `/two-factor/verify-totp`) — the intended
+design is the plugin on `createAuth` + server-side `auth.api.verifyTOTP` in
+the login form action (no `/api/auth` mount needed). Needs its own phase:
+schema additions (twoFactor table + user fields), enrollment UI, login-form
+second step.
+
+**Migrations note (for FIX-16):** 0020/0021 create indexes on
+`admin_audit` (new, empty) and `orders`/`email_log` via the normal
+in-transaction path. On today's data sizes that is fine; the
+out-of-transaction `CREATE INDEX CONCURRENTLY` path the pipeline phase
+establishes should adopt `orders_email_lower_idx`/
+`email_log_to_email_lower_idx` as its first candidates if tables grow
+before it lands.
+
+**Known limit (accepted):** a redirect or error thrown by a HOOK (the
+guard's 303 to `/admin/login`, its 403) is materialized by SvelteKit outside
+the `sequence`, so `handleSecurityHeaders` never sees it — the 303 carries
+no security headers at all. Its body is empty and it sets nothing, so there
+is nothing to protect; every RENDERED response (pages, the 404/403 error
+pages, endpoints) goes through the hook. Turning hook-thrown redirects into
+hook-built responses was rejected: kit answers data requests
+(`__data.json`) and JSON action posts with a redirect *payload*, not a 303,
+and a hand-built 303 would break client-side navigation into /admin once
+the 12 h session lapses.
+
+**Verification (builder run 2026-09-03):** `pnpm lint && pnpm check &&
+pnpm test:unit` green (apps/web 847 passed, 4 skipped — the pre-existing
+`driver-parity` suite that only runs with `NEON_WS_PROXY`); `pnpm db:migrate`
++ `db:status` clean on a FRESH database (22 applied) and on a POPULATED one
+brought to 0019 first via a journal copy truncated to 20 entries, seeded
+with `db:seed`, then given 500 mixed-case `orders` + 500 `email_log` rows
+before 0020/0021 applied (expression indexes present, `admin_audit`
+UPDATE/DELETE rejected by the trigger); `DEPLOY_TARGET=vercel pnpm build`
+green; `pnpm test:e2e` (build + both preview sites) green: 89 passed, 0
+failed, 0 flaky across the sleep and life projects.
+
+**New env vars:** none. **New tables:** `admin_audit`. **New migrations:**
+`0020_wonderful_pretty_boy.sql`, `0021_odd_green_goblin.sql`.

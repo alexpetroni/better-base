@@ -161,6 +161,14 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] Product photos uploaded (replace SVG placeholders), alt texts filled.
 - [ ] Admin + editor accounts created with strong passwords
       (`pnpm user:create`); dev/e2e accounts NOT present in the prod db.
+      Since FIX-9: staff sessions expire after ~12 h (re-login is expected),
+      failed logins are capped per IP AND per account, and logins, PII/zip
+      exports, media deletes, nurture toggles and legal-page saves land in
+      the append-only `admin_audit` table — review it (`select * from
+      admin_audit order by at desc`) as part of any incident response.
+      Editors can no longer open `/admin/pages` (legal pages are admin-only)
+      or see subscriber emails in the quiz editor. TOTP for admins is NOT
+      shipped yet — planned next batch (see STATE.md, FIX-9 section).
 
 ## Ops
 

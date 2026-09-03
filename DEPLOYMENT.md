@@ -491,7 +491,20 @@ walk, with commands and outputs, is `docs/LAUNCH-DRY-RUN.md`.
 9. Chat: send a message, reload the page — the conversation is restored from
    the server (history restore rides the session cookie).
 10. `robots.txt`, `sitemap.xml` reachable; `/nu-exista` renders the 404 page.
-11. If media rows predate this deploy (a content import, or an upgrade from a
+11. Security headers (FIX-9): `curl -sI https://<site>/` shows
+    `content-security-policy` (enforced, NOT report-only — includes
+    `strict-dynamic`, `form-action 'self' https://checkout.stripe.com`,
+    `frame-ancestors 'none'`), `strict-transport-security` (https only),
+    `x-content-type-options: nosniff`, `referrer-policy`,
+    `x-frame-options: DENY`, `permissions-policy`; and
+    `curl -sI https://<site>/admin/login` shows
+    `cache-control: private, no-store`. The CSP's img/connect sources are
+    DERIVED from `MEDIA_PUBLIC_BASE_URL`/`S3_ENDPOINT`/`CF_IMAGE_BASE_URL`/
+    `PUBLIC_ANALYTICS_HOST` at runtime — if images or the admin upload break
+    after an env change, re-check those four first. Do not validate CSP on
+    the dev server: SvelteKit strips `strict-dynamic` there; use
+    `pnpm build && pnpm preview`.
+12. If media rows predate this deploy (a content import, or an upgrade from a
     build without blurhash): `pnpm media:blurhash` once — a re-run printing
     `filled 0` confirms nothing is left.
 
