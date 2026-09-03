@@ -58,7 +58,7 @@ export default async function globalSetup() {
 			// event id per site, and a leftover ledger row from a previous run
 			// would turn the first delivery into a duplicate.
 			await db.execute(
-				sql`truncate table invoice_lines, invoices, invoice_series, shipments, order_events, order_items, orders, processed_events`
+				sql`truncate table invoice_lines, invoices, invoice_series, shipments, order_events, order_items, pending_refunds, orders, processed_events`
 			);
 			await db.execute(sql`delete from products`);
 			await db.execute(sql`delete from media`);

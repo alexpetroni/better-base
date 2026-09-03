@@ -109,7 +109,10 @@ function sessionEvent(input: {
 				currency: 'ron',
 				payment_intent: input.paymentIntent,
 				payment_status: 'paid',
-				customer_details: { email: input.email ?? `client-${input.id}@example.ro`, name: 'Ana Pop' },
+				customer_details: {
+					email: input.email ?? `client-${input.id}@example.ro`,
+					name: 'Ana Pop'
+				},
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
@@ -317,18 +320,19 @@ describe('charge.refunded with amount_refunded < amount (audit P0 #2)', () => {
 });
 
 describe('charge.refunded delivered before checkout.session.completed (audit P0 #3)', () => {
-	async function orderPaidSequence() {
-		seq += 1;
+	// ONE active order-paid sequence for the whole block: exactly what a paid
+	// order would enroll a mailable subscriber into (once per sequence).
+	beforeAll(async () => {
 		await db.insert(nurtureSequences).values({
-			id: `rfd-seq-${seq}`,
-			key: `rfd-seq-${seq}`,
+			id: 'rfd-seq-order-paid',
+			key: 'rfd-seq-order-paid',
 			name: 'După comandă',
 			trigger: { kind: 'order-paid' },
 			consentKey: 'newsletter',
 			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'Pas 1', paragraphs: ['Unu.'] }],
 			active: true
 		});
-	}
+	});
 
 	/** A mailable subscriber — exactly who the order-paid trigger would enroll. */
 	async function mailableSubscriber(address: string) {
@@ -354,7 +358,6 @@ describe('charge.refunded delivered before checkout.session.completed (audit P0 
 	}
 
 	it('a full refund before the order: the order is created refunded — invoice + storno, no email, no nurture, no stock taken; both events exactly-once', async () => {
-		await orderPaidSequence();
 		const buyer = 'early-refund@example.ro';
 		const subscriber = await mailableSubscriber(buyer);
 		const product = await makeProduct(10);
@@ -411,7 +414,6 @@ describe('charge.refunded delivered before checkout.session.completed (audit P0 
 	});
 
 	it('a partial refund before the order: created paid with the amount and the trail entry; email and nurture proceed', async () => {
-		await orderPaidSequence();
 		const buyer = 'early-partial@example.ro';
 		const subscriber = await mailableSubscriber(buyer);
 		const product = await makeProduct(10);

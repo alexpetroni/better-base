@@ -82,7 +82,16 @@ export {
 	SHIPPING_METADATA_KEY,
 	type ShippingMetadata
 } from './shipping.ts';
-export { orderEvents, orderItems, orders, productPillars, products, shipments } from './schema.ts';
+export {
+	orderEvents,
+	orderItems,
+	orders,
+	pendingRefunds,
+	productPillars,
+	products,
+	shipments,
+	type PendingRefundRow
+} from './schema.ts';
 export {
 	createProduct,
 	getProduct,
@@ -104,7 +113,9 @@ export {
 	getOrderBySessionId,
 	getOrderWithItems,
 	isOrderListFilter,
+	listEmptyCartEvents,
 	listOrders,
+	listUnmatchedRefunds,
 	ORDER_LIST_FILTERS,
 	processStripeEvent,
 	verifyStripeEvent,
@@ -114,6 +125,7 @@ export {
 	type WebhookDeps,
 	type WebhookOutcome
 } from './webhook.ts';
+export { pruneMatchedPendingRefunds } from './webhook-prune.ts';
 
 let gatewayInstance: StripeGateway | undefined;
 

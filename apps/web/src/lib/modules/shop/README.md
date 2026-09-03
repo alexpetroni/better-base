@@ -23,7 +23,29 @@ Products, cart, Stripe Checkout and orders (Phase 5).
   travels in session metadata (`cart` = `[{i,q,p}]`).
 - **Webhook** (`webhook.ts`): `verifyStripeEvent` (SDK signature check,
   offline) + `processStripeEvent`. Orders are idempotent on the unique
-  session id; `charge.refunded` flips the matching order to `refunded`.
-  Order confirmation email is keyed `order-confirmation:<orderId>`.
+  session id and every handled event is exactly-once via the
+  `processed_events` ledger. Order confirmation email is keyed
+  `order-confirmation:<orderId>` and goes out ONLY for a `paid` order.
+- **Refunds** (FIX-10): `charge.refunded` carries `amount` and the
+  CUMULATIVE `amount_refunded`. Partial (`amount_refunded < amount`) → the
+  order stays `paid`, `orders.refunded_cents` records the amount, a
+  `refund-partial` event lands on the trail, nothing else moves (no storno,
+  fulfillment/AWB untouched — the customer keeps the goods); the operator
+  issues the fiscal reversal with "storno parțial" on the order page. Full →
+  status `refunded`, storno of the whole invoice (or of the remainder after
+  partial stornos), fulfillment/AWB per the NEXT-8 rule. A refund with NO
+  order yet is remembered in `pending_refunds` (keyed by payment intent) and
+  consumed at order creation: full → the order is created `refunded` with
+  invoice + storno and no email/nurture/stock; partial → created `paid` with
+  `refunded_cents` set. Handlers for one payment intent serialize on a
+  transaction-scoped advisory lock, so the two events may arrive in either
+  order or concurrently. Matched pending rows are pruned by the retention
+  sweep after the ledger window; unmatched ones surface in `/admin/orders`.
+- **Async payments**: `checkout.session.async_payment_succeeded` flips a
+  `pending` order to `paid` (invoice, email, nurture — or creates it paid if
+  it arrives first); `checkout.session.async_payment_failed` marks it
+  `failed`, restores the reserved stock (unless the order was oversold — the
+  clamp lost the exact count; the trail says so) and cancels fulfillment.
+  Sessions are created card-only unless `shop.allowAllPaymentMethods` is on.
 - Public visibility rule (like blog/quiz): product is `active` AND tagged to
   a pillar in the active site's config.

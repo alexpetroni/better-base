@@ -9,6 +9,7 @@ import type { Db } from '../db/client.ts';
 import { loginAttempts } from '../modules/auth/schema.ts';
 import { CHAT_RETENTION_DAYS, pruneChatSessions } from '../modules/chat/service.ts';
 import { NURTURE_RETENTION_DAYS, pruneNurtureEnrollments } from '../modules/nurture/service.ts';
+import { pruneMatchedPendingRefunds } from '../modules/shop/webhook-prune.ts';
 import { PROCESSED_EVENTS_RETENTION_DAYS, pruneProcessedEvents } from './event-ledger/core.ts';
 import { pruneStaleRateLimits } from './rate-limit/core.ts';
 import { rateLimits } from './rate-limit/schema.ts';
@@ -22,6 +23,8 @@ export interface RetentionSweepResult {
 	loginRateLimitRows: number;
 	/** Webhook idempotency-ledger rows past the redelivery window. */
 	processedEventRows: number;
+	/** Refund-before-order rows already matched to their order, past the same window. */
+	pendingRefundRows: number;
 	/** Closed nurture enrollments (sends cascade) past their window. */
 	nurtureEnrollmentRows: number;
 	retentionDays: number;
@@ -56,6 +59,10 @@ export async function runRetentionSweep(
 		publicEmailRateLimitRows: await pruneStaleRateLimits(db, rateLimits, cutoff),
 		loginRateLimitRows: await pruneStaleRateLimits(db, loginAttempts, cutoff),
 		processedEventRows: await pruneProcessedEvents(db, ledgerCutoff),
+		// Same window as the ledger: a matched pending refund is only evidence
+		// for the redelivery period; unmatched rows are never swept (they are
+		// the operator's signal that money went back without an order).
+		pendingRefundRows: await pruneMatchedPendingRefunds(db, ledgerCutoff),
 		nurtureEnrollmentRows: await pruneNurtureEnrollments(db, nurtureCutoff),
 		retentionDays: CHAT_RETENTION_DAYS,
 		ledgerRetentionDays: PROCESSED_EVENTS_RETENTION_DAYS,
@@ -70,6 +77,7 @@ export function formatRetentionSweep(r: RetentionSweepResult): string {
 		`${r.chatRateLimitRows} chat / ${r.publicEmailRateLimitRows} public-email / ` +
 		`${r.loginRateLimitRows} login rate-limit row(s), ` +
 		`${r.processedEventRows} processed-event row(s) older than ${r.ledgerRetentionDays} days, ` +
+		`${r.pendingRefundRows} matched pending-refund row(s) past the same window, ` +
 		`${r.nurtureEnrollmentRows} closed nurture enrollment(s) older than ${r.nurtureRetentionDays} days`
 	);
 }

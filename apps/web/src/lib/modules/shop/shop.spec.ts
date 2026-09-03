@@ -852,7 +852,9 @@ describe('webhook: charge.refunded', () => {
 			signedHeader(unmatchedPayload),
 			WEBHOOK_SECRET
 		);
-		expect((await processStripeEvent(webhookDeps, unmatchedEvent)).kind).toBe('refund-unmatched');
+		// FIX-10 (audit P0 #3): a refund with no order is REMEMBERED for the
+		// order that may still arrive, no longer acknowledged and forgotten.
+		expect((await processStripeEvent(webhookDeps, unmatchedEvent)).kind).toBe('refund-pending');
 	});
 
 	it('delivered twice, the refund is applied once and the redelivery reports the ledger hit', async () => {
