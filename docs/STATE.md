@@ -2511,7 +2511,9 @@ with `db:seed`, then given 500 mixed-case `orders` + 500 `email_log` rows
 before 0020/0021 applied (expression indexes present, `admin_audit`
 UPDATE/DELETE rejected by the trigger); `DEPLOY_TARGET=vercel pnpm build`
 green; `pnpm test:e2e` (build + both preview sites) green: 89 passed, 0
-failed, 0 flaky across the sleep and life projects.
+failed, 0 flaky across the sleep and life projects; `pnpm test:neon`
+(the same unit suite under `DB_DRIVER=neon` through the compose proxy,
+driver-parity included) green: 851 passed, 0 skipped.
 
 **New env vars:** none. **New tables:** `admin_audit`. **New migrations:**
 `0020_wonderful_pretty_boy.sql`, `0021_odd_green_goblin.sql`.
