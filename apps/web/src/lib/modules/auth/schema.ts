@@ -99,5 +99,26 @@ export const loginAttempts = pgTable('login_attempts', {
 	windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull()
 });
 
+/**
+ * Append-only staff action log (audit 2026-09-03, login hardening): who
+ * logged in, exported PII, deleted media, toggled nurture, rewrote a legal
+ * page. Append-only is enforced by DB triggers (migration 0020) like the
+ * fiscal tables — an admin session cannot cover its own tracks.
+ */
+export const adminAudit = pgTable(
+	'admin_audit',
+	{
+		id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+		/** Staff email — stable even if the user row is later deleted. */
+		actor: text('actor').notNull(),
+		action: text('action').notNull(),
+		/** What was acted on (row id, export month, …); '' when self-evident. */
+		target: text('target').notNull().default(''),
+		at: timestamp('at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [index('admin_audit_at_idx').on(table.at)]
+);
+
 export type StaffUser = typeof users.$inferSelect;
 export type LoginAttempt = typeof loginAttempts.$inferSelect;
+export type AdminAuditRow = typeof adminAudit.$inferSelect;
