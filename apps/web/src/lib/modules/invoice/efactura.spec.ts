@@ -4,7 +4,7 @@ import type { InvoiceDocumentModel } from './model.ts';
 import { bpToPercent, renderEFacturaXml, taxGroups, vatCategoryFor } from './efactura.ts';
 import { validateEFacturaXml } from './efactura-validate.ts';
 import { noopEFacturaSubmitter, selectEFacturaSubmitter } from './efactura-submitter.ts';
-import { computeLineAmounts, sumAmounts } from './vat.ts';
+import { computeLineAmounts, partialStornoLineAmounts, sumAmounts } from './vat.ts';
 
 // The XML and the PDF render from ONE snapshot; this suite proves the XML
 // side never disagrees with it: structural + arithmetic validity for a range
@@ -167,6 +167,45 @@ describe('renderEFacturaXml', () => {
 		expect(xml).toContain('<cbc:ID>BSL-0042</cbc:ID>');
 		expect(xml).toContain('<cbc:InvoicedQuantity unitCode="H87">-2</cbc:InvoicedQuantity>');
 		expect(xml).toContain('>-82.48<'); // negative net total, dot decimal
+	});
+
+	it('renders a PARTIAL storno (one amount line at the original rate) as a valid negative 380', () => {
+		// FIX-10: a partial refund of 15,00 lei on a 99,80 lei invoice.
+		const base = modelFromItems([{ name: 'Pernă', qty: 2, priceCents: 4990 }]);
+		const original = base.invoice;
+		const amounts = partialStornoLineAmounts(1500, 2100);
+		const storno: InvoiceDocumentModel = {
+			invoice: {
+				...original,
+				id: 'inv-3',
+				kind: 'storno',
+				number: 44,
+				displayNumber: 'BSL-0044',
+				stornoOfInvoiceId: original.id,
+				netTotalCents: amounts.netCents,
+				vatTotalCents: amounts.vatCents,
+				grossTotalCents: amounts.grossCents
+			},
+			lines: [
+				{
+					id: 'line-partial',
+					invoiceId: 'inv-3',
+					position: 1,
+					description: 'Storno parțial — factura BSL-0042',
+					qty: -1,
+					unitPriceCents: 1500,
+					vatRateBp: 2100,
+					...amounts
+				}
+			],
+			stornoOf: { displayNumber: original.displayNumber, issuedAt: original.issuedAt }
+		};
+		const xml = renderEFacturaXml(storno);
+		expect(validateEFacturaXml(xml, storno)).toEqual([]);
+		expect(xml).toContain('<cac:BillingReference>');
+		expect(xml).toContain('<cbc:InvoicedQuantity unitCode="H87">-1</cbc:InvoicedQuantity>');
+		expect(xml).toContain('>-15.00<'); // gross, dot decimal
+		expect(xml).toContain('>-2.60<'); // the VAT contained in 15,00 at 21 %
 	});
 
 	it('the validator bites: tampered totals and wrong snapshots are reported', () => {
