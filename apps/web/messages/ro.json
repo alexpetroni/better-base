@@ -450,5 +450,11 @@
 	"admin_order_event_payment_failed": "plată eșuată (Stripe) — comandă anulată",
 	"admin_orders_attention": "Semnale Stripe de verificat",
 	"admin_orders_attention_refund": "Rambursare fără comandă — intent {intent}: {amount} din {total}, primită {date}",
-	"admin_orders_attention_empty_cart": "Sesiune finalizată fără coș — eveniment {eventId}, primit {date} (sesiunea și suma sunt în jurnalul serverului)"
+	"admin_orders_attention_empty_cart": "Sesiune finalizată fără coș — eveniment {eventId}, primit {date} (sesiunea și suma sunt în jurnalul serverului)",
+	"cart_qty_max": "maxim {n} buc.",
+	"cart_line_max_qty": "Doar {n} bucăți în stoc — redu cantitatea pentru a continua.",
+	"admin_product_stock_add": "Adaugă în stoc (bucăți, relativ)",
+	"admin_product_err_stock_changed": "Stocul s-a schimbat între timp (acum: {stock}). Reîncarcă pagina și încearcă din nou.",
+	"admin_settings_shop_allow_all_payment_methods": "Permite toate metodele de plată activate în Stripe (implicit: doar card)",
+	"admin_settings_err_too_long": "Text prea lung."
 }

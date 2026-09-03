@@ -23,7 +23,13 @@ import { parseLeiToCents } from '../../util/money.ts';
 export type SettingJsonValue = string | number | boolean;
 
 export type SettingErrorCode =
-	'required' | 'invalid-value' | 'invalid-url' | 'invalid-email' | 'invalid-number' | 'invalid-cui';
+	| 'required'
+	| 'invalid-value'
+	| 'invalid-url'
+	| 'invalid-email'
+	| 'invalid-number'
+	| 'invalid-cui'
+	| 'too-long';
 
 /**
  * `kind` drives both the admin form control and the validators:
@@ -58,6 +64,8 @@ export type SettingSpec = BaseSpec &
 				default: string;
 				pattern?: RegExp;
 				patternCode?: SettingErrorCode;
+				/** Upper bound on the stored (trimmed) length; `too-long` beyond it. */
+				maxLength?: number;
 		  }
 		| { kind: 'url' | 'email'; default: string }
 		| { kind: 'boolean'; default: boolean }
@@ -65,6 +73,15 @@ export type SettingSpec = BaseSpec &
 	);
 
 export const SETTINGS_PLACEHOLDER_PREFIX = 'PLACEHOLDER';
+
+/**
+ * Shipping option name / ETA caps (audit 2026-09-03 P2): Stripe rejects a
+ * shipping rate whose display name exceeds 100 characters, which would fail
+ * EVERY checkout. The name and the ETA are composed as `name (eta)` and the
+ * composer trims at Stripe's limit as the last line of defense.
+ */
+export const SHIPPING_NAME_MAX_LENGTH = 60;
+export const SHIPPING_ETA_MAX_LENGTH = 40;
 
 const ph = (hint: string) => `${SETTINGS_PLACEHOLDER_PREFIX} — ${hint}`;
 
@@ -208,6 +225,7 @@ export const SETTINGS_REGISTRY = {
 	'shop.shippingStandardName': {
 		kind: 'text',
 		default: 'Curier standard',
+		maxLength: SHIPPING_NAME_MAX_LENGTH,
 		launchRequired: false,
 		clientSafe: true
 	},
@@ -225,12 +243,14 @@ export const SETTINGS_REGISTRY = {
 	'shop.shippingStandardEta': {
 		kind: 'text',
 		default: '1-3 zile lucrătoare',
+		maxLength: SHIPPING_ETA_MAX_LENGTH,
 		launchRequired: false,
 		clientSafe: true
 	},
 	'shop.shippingExpressName': {
 		kind: 'text',
 		default: '',
+		maxLength: SHIPPING_NAME_MAX_LENGTH,
 		launchRequired: false,
 		clientSafe: true
 	},
@@ -241,8 +261,25 @@ export const SETTINGS_REGISTRY = {
 		launchRequired: false,
 		clientSafe: true
 	},
-	'shop.shippingExpressEta': { kind: 'text', default: '', launchRequired: false, clientSafe: true },
-	'shop.shippingNote': { kind: 'multiline', default: '', launchRequired: false, clientSafe: true }
+	'shop.shippingExpressEta': {
+		kind: 'text',
+		default: '',
+		maxLength: SHIPPING_ETA_MAX_LENGTH,
+		launchRequired: false,
+		clientSafe: true
+	},
+	'shop.shippingNote': { kind: 'multiline', default: '', launchRequired: false, clientSafe: true },
+	// Payment methods Stripe Checkout may offer (FIX-10). Off = every session
+	// is pinned to `card`, so a delayed method (bank debit, voucher…) enabled
+	// in the Stripe dashboard can never put orders on the async-payment path
+	// by accident; on = the dashboard configuration decides (the async events
+	// are handled either way — this is the operator's conscious choice).
+	'shop.allowAllPaymentMethods': {
+		kind: 'boolean',
+		default: false,
+		launchRequired: false,
+		clientSafe: false
+	}
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS_REGISTRY;
@@ -336,6 +373,9 @@ export function validateSettingValue(key: SettingKey, value: unknown): SettingEr
 			if (spec.kind === 'email' && !EMAIL_PATTERN.test(trimmed)) return 'invalid-email';
 			if ('pattern' in spec && spec.pattern && !spec.pattern.test(trimmed)) {
 				return spec.patternCode ?? 'invalid-value';
+			}
+			if ('maxLength' in spec && spec.maxLength !== undefined && trimmed.length > spec.maxLength) {
+				return 'too-long';
 			}
 			return null;
 		}

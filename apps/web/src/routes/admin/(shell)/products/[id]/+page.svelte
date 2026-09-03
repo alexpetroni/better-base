@@ -24,6 +24,11 @@
 		// Editable "49,90" string; parsed server-side into integer bani.
 		price: formatCents(data.product.priceCents).split(' ')[0],
 		stock: data.product.stock === null ? '' : String(data.product.stock),
+		// What the stock field was loaded with: the optimistic guard the server
+		// checks before an absolute write (a sale in between → stock-changed).
+		stockLoaded: data.product.stock === null ? '' : String(data.product.stock),
+		// Relative restock ("adaugă N bucăți"): stock + N in SQL, never a race.
+		stockDelta: '',
 		status: data.product.status,
 		descriptionMd: data.product.descriptionMd,
 		coverMediaId: data.product.coverMediaId ?? '',
@@ -62,6 +67,7 @@
 		if (code === 'invalid-slug') return m.admin_product_err_slug();
 		if (code === 'invalid-price') return m.admin_product_err_price();
 		if (code === 'invalid-stock') return m.admin_product_err_stock();
+		if (code === 'stock-changed') return m.admin_product_err_stock_changed({ stock: detail });
 		if (code === 'unknown-pillar') return m.admin_product_err_pillar({ detail });
 		return m.admin_product_err_not_found();
 	}
@@ -127,6 +133,12 @@
 			if (result.type === 'success' && result.data?.slug) {
 				// The server may have normalized/deduplicated the slug.
 				draft.slug = String(result.data.slug);
+				// Re-base the stock buffer on the saved value (a relative restock
+				// changed it) and clear the one-shot delta.
+				const savedStock = result.data.stock;
+				draft.stock = savedStock === null || savedStock === undefined ? '' : String(savedStock);
+				draft.stockLoaded = draft.stock;
+				draft.stockDelta = '';
 				saved = true;
 				setTimeout(() => (saved = false), 2500);
 			}
@@ -160,7 +172,7 @@
 			/>
 		</label>
 
-		<div class="grid gap-4 sm:grid-cols-3">
+		<div class="grid gap-4 sm:grid-cols-4">
 			<label class="block">
 				<span class="mb-1 block text-sm font-medium">{m.admin_product_price()}</span>
 				<input
@@ -175,6 +187,7 @@
 			</label>
 			<label class="block">
 				<span class="mb-1 block text-sm font-medium">{m.admin_product_stock()}</span>
+				<input type="hidden" name="stockLoaded" value={draft.stockLoaded} />
 				<input
 					type="number"
 					name="stock"
@@ -182,6 +195,19 @@
 					step="1"
 					bind:value={draft.stock}
 					data-testid="product-editor-stock"
+					class="w-full rounded border border-(--color-brand-soft) px-3 py-2"
+				/>
+			</label>
+			<label class="block">
+				<span class="mb-1 block text-sm font-medium">{m.admin_product_stock_add()}</span>
+				<input
+					type="number"
+					name="stockDelta"
+					min="1"
+					step="1"
+					placeholder="+N"
+					bind:value={draft.stockDelta}
+					data-testid="product-editor-stock-delta"
 					class="w-full rounded border border-(--color-brand-soft) px-3 py-2"
 				/>
 			</label>

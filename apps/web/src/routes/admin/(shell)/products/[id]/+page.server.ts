@@ -34,11 +34,27 @@ function patchFrom(form: FormData): ProductPatch | ParseError {
 	const priceCents = parseLeiToCents(formStr(form, 'price'));
 	if (priceCents === null) return { error: 'invalid-price', detail: '' };
 
+	// Stock (audit P2 — the absolute write raced the webhook decrement):
+	// a relative "adaugă N bucăți" is `stock + N` in SQL; an absolute edit is
+	// written only when the operator actually changed the field, guarded by
+	// the value the form was loaded with (a sale in between → stock-changed).
 	const stockRaw = formStr(form, 'stock').trim();
-	let stock: number | null = null;
-	if (stockRaw !== '') {
-		stock = Number(stockRaw);
-		if (!Number.isInteger(stock) || stock < 0) return { error: 'invalid-stock', detail: '' };
+	const loadedRaw = formStr(form, 'stockLoaded').trim();
+	const deltaRaw = formStr(form, 'stockDelta').trim();
+	let stockPatch: Pick<ProductPatch, 'stock' | 'expectedStock' | 'stockDelta'> = {};
+	if (deltaRaw !== '') {
+		const delta = Number(deltaRaw);
+		if (!Number.isInteger(delta) || delta <= 0) return { error: 'invalid-stock', detail: '' };
+		stockPatch = { stockDelta: delta };
+	} else if (stockRaw !== loadedRaw) {
+		let stock: number | null = null;
+		if (stockRaw !== '') {
+			stock = Number(stockRaw);
+			if (!Number.isInteger(stock) || stock < 0) return { error: 'invalid-stock', detail: '' };
+		}
+		const loaded = loadedRaw === '' ? null : Number(loadedRaw);
+		if (loaded !== null && !Number.isInteger(loaded)) return { error: 'invalid-stock', detail: '' };
+		stockPatch = { stock, expectedStock: loaded };
 	}
 
 	const statusRaw = formStr(form, 'status');
@@ -47,7 +63,7 @@ function patchFrom(form: FormData): ProductPatch | ParseError {
 		slug: formStr(form, 'slug'),
 		descriptionMd: formStr(form, 'descriptionMd'),
 		priceCents,
-		stock,
+		...stockPatch,
 		status: STATUSES.includes(statusRaw as ProductStatus)
 			? (statusRaw as ProductStatus)
 			: undefined,
@@ -73,6 +89,8 @@ export const actions: Actions = {
 		return {
 			saved: true,
 			slug: result.value.slug,
+			// The form re-bases its stock buffer on what was actually saved.
+			stock: result.value.stock,
 			syncError: sync.ok ? '' : (sync.detail ?? sync.error)
 		};
 	}

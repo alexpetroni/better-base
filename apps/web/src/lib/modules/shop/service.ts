@@ -1,4 +1,17 @@
-import { and, desc, eq, exists, inArray, sql, ilike, or } from 'drizzle-orm';
+import {
+	and,
+	desc,
+	eq,
+	exists,
+	inArray,
+	isNotNull,
+	isNull,
+	sql,
+	ilike,
+	or,
+	type SQL
+} from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Db } from '../../db/client.ts';
 import {
 	pillarSlugsFor,
@@ -29,6 +42,8 @@ export type ShopError =
 	| 'invalid-slug'
 	| 'invalid-price'
 	| 'invalid-stock'
+	/** The stock moved since the form was loaded — detail carries the current value. */
+	| 'stock-changed'
 	| 'unknown-pillar';
 
 export type ShopResult<T> = Result<T, ShopError>;
@@ -84,7 +99,29 @@ export interface ProductPatch {
 	gallery?: string[];
 	/** null = untracked stock. */
 	stock?: number | null;
+	/**
+	 * Optimistic guard for an absolute `stock` write: the value the form was
+	 * loaded with. The whole save is refused (`stock-changed`, detail = the
+	 * current stock) when the row no longer holds it — a webhook decrement in
+	 * between must never be overwritten with a stale number (audit P2).
+	 */
+	expectedStock?: number | null;
+	/**
+	 * Relative restock: `stock = stock + delta` in SQL, so it composes with a
+	 * concurrent sale instead of racing it. Tracked stock only; wins over
+	 * `stock` when both are given.
+	 */
+	stockDelta?: number;
 	pillarSlugs?: string[];
+}
+
+/** Thrown inside the save transaction to roll back the retag with the refused write. */
+class StockConflict extends Error {
+	readonly current: number | null;
+	constructor(current: number | null) {
+		super('stock changed since the form was loaded');
+		this.current = current;
+	}
 }
 
 export async function updateProduct(
@@ -95,7 +132,10 @@ export async function updateProduct(
 	const existing = await deps.db.select().from(products).where(eq(products.id, id));
 	if (existing.length === 0) return { ok: false, error: 'not-found' };
 
-	const set: Partial<typeof products.$inferInsert> = { updatedAt: new Date() };
+	const set: PgUpdateSetSource<typeof products> = { updatedAt: new Date() };
+	// Extra WHERE for the stock write: the optimistic expectation, or "still
+	// tracked" for a relative restock. No match → StockConflict, nothing saved.
+	let stockGuard: SQL | undefined;
 	if (patch.name !== undefined) {
 		const name = patch.name.trim();
 		if (!name) return { ok: false, error: 'invalid-name' };
@@ -114,11 +154,25 @@ export async function updateProduct(
 		}
 		set.priceCents = patch.priceCents;
 	}
-	if (patch.stock !== undefined) {
+	if (patch.stockDelta !== undefined) {
+		if (!Number.isInteger(patch.stockDelta) || patch.stockDelta <= 0) {
+			return { ok: false, error: 'invalid-stock', detail: 'delta' };
+		}
+		if (existing[0].stock === null)
+			return { ok: false, error: 'invalid-stock', detail: 'untracked' };
+		set.stock = sql`${products.stock} + ${patch.stockDelta}`;
+		stockGuard = isNotNull(products.stock);
+	} else if (patch.stock !== undefined) {
 		if (patch.stock !== null && (!Number.isInteger(patch.stock) || patch.stock < 0)) {
 			return { ok: false, error: 'invalid-stock' };
 		}
 		set.stock = patch.stock;
+		if (patch.expectedStock !== undefined) {
+			stockGuard =
+				patch.expectedStock === null
+					? isNull(products.stock)
+					: eq(products.stock, patch.expectedStock);
+		}
 	}
 	if (patch.descriptionMd !== undefined) set.descriptionMd = patch.descriptionMd;
 	if (patch.status !== undefined) set.status = patch.status;
@@ -136,13 +190,32 @@ export async function updateProduct(
 
 	// Retag + row update commit together: a failure between the join-table
 	// delete and re-insert must not strip the product's tags — that would
-	// silently hide it from every site.
-	const row = await deps.db.transaction(async (tx) => {
-		if (pillarRows !== null) await setPillars(tx, PRODUCT_PILLARS, id, pillarRows);
-		const [updated] = await tx.update(products).set(set).where(eq(products.id, id)).returning();
-		return updated;
-	});
-	return { ok: true, value: row };
+	// silently hide it from every site. A refused stock write rolls the retag
+	// back with it: the save is all-or-nothing from the operator's view.
+	try {
+		const row = await deps.db.transaction(async (tx) => {
+			if (pillarRows !== null) await setPillars(tx, PRODUCT_PILLARS, id, pillarRows);
+			const [updated] = await tx
+				.update(products)
+				.set(set)
+				.where(stockGuard ? and(eq(products.id, id), stockGuard) : eq(products.id, id))
+				.returning();
+			if (!updated) {
+				const [current] = await tx
+					.select({ stock: products.stock })
+					.from(products)
+					.where(eq(products.id, id));
+				throw new StockConflict(current?.stock ?? null);
+			}
+			return updated;
+		});
+		return { ok: true, value: row };
+	} catch (err) {
+		if (err instanceof StockConflict) {
+			return { ok: false, error: 'stock-changed', detail: String(err.current) };
+		}
+		throw err;
+	}
 }
 
 async function mediaFor(

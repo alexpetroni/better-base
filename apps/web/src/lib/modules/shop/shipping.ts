@@ -79,9 +79,21 @@ export function findShippingOption(
 	return options.find((option) => option.id === id);
 }
 
-/** `Curier standard (1-3 zile lucrătoare)` — what Stripe Checkout displays. */
+/** Stripe rejects a shipping rate whose `display_name` is longer than this. */
+export const STRIPE_SHIPPING_DISPLAY_NAME_MAX = 100;
+
+/**
+ * `Curier standard (1-3 zile lucrătoare)` — what Stripe Checkout displays.
+ * The settings caps (60 + 40) plus the parentheses can still exceed Stripe's
+ * limit by three characters, so the tail is trimmed here rather than letting
+ * a long ETA fail every checkout (audit 2026-09-03 P2).
+ */
 export function shippingDisplayName(option: Pick<ShippingOption, 'name' | 'etaText'>): string {
-	return option.etaText ? `${option.name} (${option.etaText})` : option.name;
+	const full = option.etaText ? `${option.name} (${option.etaText})` : option.name;
+	const chars = Array.from(full);
+	return chars.length > STRIPE_SHIPPING_DISPLAY_NAME_MAX
+		? chars.slice(0, STRIPE_SHIPPING_DISPLAY_NAME_MAX).join('')
+		: full;
 }
 
 export const SHIPPING_METADATA_KEY = 'ship';

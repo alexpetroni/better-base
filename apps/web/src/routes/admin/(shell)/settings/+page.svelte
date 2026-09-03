@@ -38,7 +38,8 @@
 		'shop.shippingExpressName': m.admin_settings_shop_shipping_express_name,
 		'shop.shippingExpressPriceBani': m.admin_settings_shop_shipping_express_price,
 		'shop.shippingExpressEta': m.admin_settings_shop_shipping_express_eta,
-		'shop.shippingNote': m.admin_settings_shop_shipping_note
+		'shop.shippingNote': m.admin_settings_shop_shipping_note,
+		'shop.allowAllPaymentMethods': m.admin_settings_shop_allow_all_payment_methods
 	};
 
 	const errorLabels: Record<string, () => string> = {
@@ -46,7 +47,8 @@
 		'invalid-url': m.admin_settings_err_url,
 		'invalid-email': m.admin_settings_err_email,
 		'invalid-number': m.admin_settings_err_number,
-		'invalid-cui': m.admin_settings_err_cui
+		'invalid-cui': m.admin_settings_err_cui,
+		'too-long': m.admin_settings_err_too_long
 	};
 
 	function errorMessage(code: string): string {

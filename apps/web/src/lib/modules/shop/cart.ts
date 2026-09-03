@@ -80,3 +80,19 @@ export function cartCount(items: CartItem[]): number {
 export function cartTotalCents(lines: Array<{ priceCents: number; qty: number }>): number {
 	return lines.reduce((sum, l) => sum + l.priceCents * l.qty, 0);
 }
+
+/**
+ * Cap one line at the product's tracked stock (null = untracked, untouched),
+ * so a cart never asks for more than can ship. Zero stock keeps the line at
+ * one unit rather than deleting the customer's choice — the cart page flags
+ * it unavailable and says why (audit 2026-09-03 P1 "quantity vs stock").
+ */
+export function clampLineToStock(
+	items: CartItem[],
+	productId: string,
+	stock: number | null
+): CartItem[] {
+	if (stock === null) return items;
+	const cap = Math.max(1, stock);
+	return items.map((i) => (i.productId === productId && i.qty > cap ? { ...i, qty: cap } : i));
+}

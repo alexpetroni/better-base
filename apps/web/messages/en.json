@@ -450,5 +450,11 @@
 	"admin_order_event_payment_failed": "payment failed (Stripe) — order cancelled",
 	"admin_orders_attention": "Stripe signals to check",
 	"admin_orders_attention_refund": "Refund without an order — intent {intent}: {amount} of {total}, received {date}",
-	"admin_orders_attention_empty_cart": "Completed session without a cart — event {eventId}, received {date} (session id and amount are in the server log)"
+	"admin_orders_attention_empty_cart": "Completed session without a cart — event {eventId}, received {date} (session id and amount are in the server log)",
+	"cart_qty_max": "max {n}",
+	"cart_line_max_qty": "Only {n} in stock — reduce the quantity to continue.",
+	"admin_product_stock_add": "Add to stock (units, relative)",
+	"admin_product_err_stock_changed": "Stock changed meanwhile (now: {stock}). Reload the page and try again.",
+	"admin_settings_shop_allow_all_payment_methods": "Allow every payment method enabled in Stripe (default: card only)",
+	"admin_settings_err_too_long": "Text too long."
 }

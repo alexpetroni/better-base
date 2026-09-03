@@ -6,6 +6,7 @@ export {
 	CART_COOKIE,
 	cartCount,
 	cartTotalCents,
+	clampLineToStock,
 	parseCartCookie,
 	removeFromCart,
 	serializeCart,

@@ -73,6 +73,15 @@ export function createStripeGateway(
 		async createCheckoutSession(input) {
 			const session = await stripe.checkout.sessions.create({
 				mode: 'payment',
+				// Pinned unless the operator opened all methods: an unpinned
+				// session offers whatever the dashboard enables, delayed methods
+				// included (audit 2026-09-03 P1 "pending orders").
+				...(input.paymentMethodTypes
+					? {
+							payment_method_types:
+								input.paymentMethodTypes as Stripe.Checkout.SessionCreateParams.PaymentMethodType[]
+						}
+					: {}),
 				line_items: input.lineItems.map((li) => ({
 					quantity: li.qty,
 					price_data: {

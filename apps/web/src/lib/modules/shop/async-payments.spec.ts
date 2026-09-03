@@ -17,6 +17,7 @@ import { siteSettings } from '../settings/schema.ts';
 import { buildCartMetadata, createCheckoutFromCart } from './checkout.ts';
 import { createMockStripeGateway } from './mock-gateway.ts';
 import { orderEvents, orders, products } from './schema.ts';
+import { updateProduct } from './service.ts';
 import {
 	listEmptyCartEvents,
 	processStripeEvent,
@@ -361,6 +362,8 @@ describe('card-only by default', () => {
 
 	it('checkout pins payment_method_types to card unless the setting opens the door', async () => {
 		const product = await makeProduct(null);
+		// Checkout only sells products tagged to a site pillar.
+		await updateProduct({ db }, product.id, { pillarSlugs: ['somn'] });
 		const gateway = createMockStripeGateway();
 		const deps = { db, gateway, baseUrl: 'https://example.ro' };
 		const items = [{ productId: product.id, qty: 1 }];

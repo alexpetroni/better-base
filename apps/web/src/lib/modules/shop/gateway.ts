@@ -46,6 +46,12 @@ export interface CheckoutSessionInput {
 	shippingCountries: string[];
 	/** Absent only for carts created before shipping existed (NEXT-8). */
 	shippingOption?: CheckoutShippingOption;
+	/**
+	 * Payment methods the session may offer (`['card']` by default upstream —
+	 * see `shop.allowAllPaymentMethods`). Undefined = Stripe's dashboard
+	 * configuration decides, which may include delayed methods.
+	 */
+	paymentMethodTypes?: string[];
 	metadata: Record<string, string>;
 }
 

@@ -19,12 +19,14 @@ export {
 	parseBuyerCompanyForm,
 	parseBuyerCompanyMetadata,
 	parseCartMetadata,
+	paymentMethodTypesFor,
 	type BuyerCompanyParse,
 	type CartDetails,
 	type CartLine,
 	type CartMetadataItem,
 	type CheckoutDeps,
-	type CheckoutOutcome
+	type CheckoutOutcome,
+	type PaymentSettings
 } from './checkout.ts';
 export type {
 	CheckoutLineItem,

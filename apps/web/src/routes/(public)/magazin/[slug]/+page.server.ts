@@ -3,7 +3,7 @@ import { getDb } from '$lib/db';
 import { renderArticleHtml } from '$lib/modules/blog/server';
 import type { ImageSources } from '$lib/modules/media';
 import { getImageProvider, imgSources } from '$lib/modules/media/server';
-import { addToCart } from '$lib/modules/shop';
+import { addToCart, clampLineToStock } from '$lib/modules/shop';
 import { getProductBySlug, isOutOfStock } from '$lib/modules/shop/server';
 import { canonicalUrl } from '$lib/seo';
 import { readCart, writeCart } from '$lib/server/cart';
@@ -53,7 +53,15 @@ export const actions: Actions = {
 
 		const form = await request.formData();
 		const qty = Math.max(1, Number(form.get('qty')) || 1);
-		writeCart(cookies, addToCart(readCart(cookies), found.product.id, qty));
+		// Never more units in the cart than in stock (audit P1).
+		writeCart(
+			cookies,
+			clampLineToStock(
+				addToCart(readCart(cookies), found.product.id, qty),
+				found.product.id,
+				found.product.stock
+			)
+		);
 		redirect(303, '/cos');
 	}
 };

@@ -52,11 +52,22 @@
 					</a>
 					<span class="text-sm text-(--color-ink)/70">
 						{formatCents(line.priceCents, line.currency)}
+						{#if line.maxQty !== null && line.maxQty > 0}
+							<span data-testid="cart-line-max" class="ml-1 text-xs">
+								({m.cart_qty_max({ n: line.maxQty })})
+							</span>
+						{/if}
 					</span>
 					{#if !line.available}
-						<span data-testid="cart-line-unavailable" class="block text-sm text-red-700">
-							{m.cart_unavailable()}
-						</span>
+						{#if line.maxQty !== null && line.maxQty > 0 && line.qty > line.maxQty}
+							<span data-testid="cart-line-stock-limit" class="block text-sm text-red-700">
+								{m.cart_line_max_qty({ n: line.maxQty })}
+							</span>
+						{:else}
+							<span data-testid="cart-line-unavailable" class="block text-sm text-red-700">
+								{m.cart_unavailable()}
+							</span>
+						{/if}
 					{/if}
 				</div>
 				<form method="POST" action="?/setQty" use:singleSubmit class="flex items-center gap-2">
@@ -66,7 +77,7 @@
 						name="qty"
 						value={line.qty}
 						min="0"
-						max="99"
+						max={line.maxQty !== null && line.maxQty > 0 ? Math.min(line.maxQty, 99) : 99}
 						aria-label={m.cart_qty_label({ name: line.name })}
 						data-testid="cart-qty"
 						class="w-18 rounded border border-(--color-brand-soft) px-2 py-1"

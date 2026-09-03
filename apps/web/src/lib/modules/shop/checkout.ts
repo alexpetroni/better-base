@@ -2,6 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
 import { CUI_PATTERN } from '../../util/cui.ts';
+import type { SiteSettings } from '../settings/registry.ts';
 import { cartTotalCents, type CartItem } from './cart.ts';
 import type { StripeGateway } from './gateway.ts';
 import { productPillars, products, type BuyerCompany, type ProductRow } from './schema.ts';
@@ -126,8 +127,13 @@ export interface CartLine {
 	qty: number;
 	/** qty × unit price, integer cents. */
 	lineTotalCents: number;
-	/** False when the product went inactive/out of stock since it was added. */
+	/**
+	 * False when the product went inactive, out of stock, or the line asks
+	 * for more units than are in stock since it was added.
+	 */
 	available: boolean;
+	/** Units purchasable right now (the tracked stock); null = untracked, no cap. */
+	maxQty: number | null;
 }
 
 export interface CartDetails {
@@ -139,7 +145,8 @@ export interface CartDetails {
 /**
  * Join cookie items against the catalog. Lines whose product disappeared are
  * dropped; lines that became unavailable (inactive, untagged for this site,
- * out of stock) are kept but flagged so the cart page can say why.
+ * out of stock, or asking for more than the stock) are kept but flagged, with
+ * `maxQty`, so the cart page can say why and cap the input.
  */
 export async function loadCartDetails(
 	deps: Pick<CheckoutDeps, 'db'>,
@@ -164,11 +171,14 @@ export async function loadCartDetails(
 		const tagged = tagRows.some(
 			(t) => t.productId === product.id && sitePillarSlugs.includes(t.slug)
 		);
+		const maxQty = product.stock;
+		const inStock = !isOutOfStock(product) && (maxQty === null || item.qty <= maxQty);
 		lines.push({
 			product,
 			qty: item.qty,
 			lineTotalCents: product.priceCents * item.qty,
-			available: product.status === 'active' && tagged && !isOutOfStock(product)
+			available: product.status === 'active' && tagged && inStock,
+			maxQty
 		});
 	}
 	return {
@@ -180,6 +190,17 @@ export async function loadCartDetails(
 		),
 		currency: lines[0]?.product.currency ?? 'ron'
 	};
+}
+
+/** The registry key that decides which Stripe payment methods a session offers. */
+export type PaymentSettings = Pick<SiteSettings, 'shop.allowAllPaymentMethods'>;
+
+/**
+ * Card-only unless the operator opened all methods (undefined = Stripe's
+ * dashboard configuration decides). Absent settings mean the safe default.
+ */
+export function paymentMethodTypesFor(settings?: PaymentSettings): string[] | undefined {
+	return settings?.['shop.allowAllPaymentMethods'] ? undefined : ['card'];
 }
 
 export type CheckoutOutcome =
@@ -200,6 +221,8 @@ export async function createCheckoutFromCart(
 		/** Option id chosen in the cart; validated against the offered options. */
 		shippingOptionId: string;
 		buyerCompany?: BuyerCompany | null;
+		/** `shop.allowAllPaymentMethods`; omitted = card-only. */
+		paymentSettings?: PaymentSettings;
 	}
 ): Promise<CheckoutOutcome> {
 	const details = await loadCartDetails(deps, input.items, input.sitePillarSlugs);
@@ -207,10 +230,16 @@ export async function createCheckoutFromCart(
 
 	const unavailable = details.lines.filter((l) => !l.available);
 	if (unavailable.length > 0) {
+		// A line over the stock names the count still available; the cart page
+		// renders this list verbatim, so it stays language-neutral.
 		return {
 			ok: false,
 			error: 'unavailable',
-			detail: unavailable.map((l) => l.product.name).join(', ')
+			detail: unavailable
+				.map((l) =>
+					l.maxQty !== null && l.maxQty > 0 ? `${l.product.name} (max ${l.maxQty})` : l.product.name
+				)
+				.join(', ')
 		};
 	}
 
@@ -238,6 +267,7 @@ export async function createCheckoutFromCart(
 				amountCents: shipping.priceCents,
 				currency: details.currency
 			},
+			paymentMethodTypes: paymentMethodTypesFor(input.paymentSettings),
 			metadata: {
 				[CART_METADATA_KEY]: buildCartMetadata(
 					details.lines.map((l) => ({
