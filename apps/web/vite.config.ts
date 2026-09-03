@@ -37,7 +37,26 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter
+			adapter,
+			// The STATIC half of the CSP — kit nonces its inline bootstrap under
+			// 'strict-dynamic' (script tags the nonced bootstrap creates are
+			// trusted transitively, which is how the consent-gated analytics
+			// loader injects its script). The env-derived half (img-src,
+			// connect-src, frame-src, form-action, frame-ancestors) is appended
+			// per-response by handleSecurityHeaders in hooks.server.ts.
+			// NOTE: SvelteKit strips 'strict-dynamic' in dev — validate CSP
+			// behavior on `pnpm build && pnpm preview`, never on the dev server.
+			csp: {
+				mode: 'auto',
+				directives: {
+					'script-src': ['self', 'strict-dynamic'],
+					// Inline styles are load-bearing: the theme token style
+					// attribute, blurhash placeholders and the quiz score bar.
+					'style-src': ['self', 'unsafe-inline'],
+					'object-src': ['none'],
+					'base-uri': ['self']
+				}
+			}
 		}),
 		paraglideVitePlugin({ project: './project.inlang', outdir: './src/lib/paraglide' })
 	],

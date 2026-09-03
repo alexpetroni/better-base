@@ -9,6 +9,7 @@ import { getAuth, guardAdminPath, isStaffRole, routeIdPathname } from '$lib/modu
 import { createSettingsLoader } from '$lib/modules/settings/server';
 import { assertBootEnv } from '$lib/server/boot';
 import { formatServerError } from '$lib/server/log';
+import { applySecurityHeaders } from '$lib/server/security-headers';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
 // without an ANTHROPIC_API_KEY fails fast instead of at the first message.
 import '$lib/modules/chat/server';
@@ -16,6 +17,24 @@ import '$lib/modules/chat/server';
 // Fail fast (audit resilience #10): refuse to boot on missing required env
 // instead of 500ing on first use. PUBLIC_SITE_URL lives in the public env.
 assertBootEnv({ ...env, PUBLIC_SITE_URL: publicEnv.PUBLIC_SITE_URL });
+
+/**
+ * Security headers + the env-derived CSP half on every response (audit
+ * 2026-09-03: no headers/CSP anywhere). FIRST in the sequence so it wraps
+ * the others and stamps the final response on the way out; the static CSP
+ * half (script-src/style-src/…) is rendered by kit.csp in vite.config.ts
+ * and preserved by the append. See $lib/server/security-headers.
+ */
+const handleSecurityHeaders: Handle = async ({ event, resolve }) => {
+	const response = await resolve(event);
+	const pathname = routeIdPathname(event.route.id);
+	applySecurityHeaders(
+		response,
+		{ ...env, ...publicEnv },
+		{ isAdmin: pathname === '/admin' || pathname.startsWith('/admin/') }
+	);
+	return response;
+};
 
 const handleParaglide: Handle = ({ event, resolve }) =>
 	paraglideMiddleware(event.request, ({ request, locale }) => {
@@ -80,7 +99,12 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-export const handle: Handle = sequence(handleParaglide, handleSettings, handleAdminGuard);
+export const handle: Handle = sequence(
+	handleSecurityHeaders,
+	handleParaglide,
+	handleSettings,
+	handleAdminGuard
+);
 
 /**
  * Every unexpected server error is logged as one structured JSON line and
