@@ -107,8 +107,9 @@ describe('audited staff surfaces write one admin_audit row each', () => {
 		const form = new FormData();
 		form.set('email', LOGIN_EMAIL);
 		form.set('password', PASSWORD);
-		const outcome = await mod.actions
-			.default({
+		let thrown: unknown = null;
+		try {
+			await mod.actions.default({
 				request: new Request('http://localhost/admin/login', { method: 'POST', body: form }),
 				getClientAddress: () => '203.0.113.7',
 				locals: { user: null },
@@ -119,12 +120,11 @@ describe('audited staff surfaces write one admin_audit row each', () => {
 					delete: () => {},
 					serialize: () => ''
 				}
-			} as unknown as Parameters<(typeof mod)['actions']['default']>[0])
-			.then(
-				() => null,
-				(e) => e
-			);
-		expect(isRedirect(outcome)).toBe(true);
+			} as unknown as Parameters<(typeof mod)['actions']['default']>[0]);
+		} catch (e) {
+			thrown = e;
+		}
+		expect(isRedirect(thrown)).toBe(true);
 
 		const rows = await auditRows('login');
 		expect(rows.filter((r) => r.actor === LOGIN_EMAIL)).toHaveLength(1);

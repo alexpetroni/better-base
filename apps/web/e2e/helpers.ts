@@ -19,3 +19,37 @@ export async function login(page: Page, credentials: { email: string; password: 
 	await submitLogin(page, credentials);
 	await expect(page).toHaveURL(/\/admin$/);
 }
+
+/**
+ * CSP violation tracking (FIX-9): call BEFORE the first goto. Collects every
+ * `securitypolicyviolation` event plus every console error that reads like a
+ * CSP refusal, so a flow test can end with `assertNoCspViolations` and prove
+ * the enforced policy did not break it.
+ */
+export async function armCspGuard(page: Page): Promise<{ consoleErrors: string[] }> {
+	const consoleErrors: string[] = [];
+	page.on('console', (message) => {
+		if (message.type() === 'error' && /Content Security Policy|Refused to/.test(message.text())) {
+			consoleErrors.push(message.text());
+		}
+	});
+	await page.addInitScript(() => {
+		const w = window as unknown as { __cspViolations: string[] };
+		w.__cspViolations = [];
+		document.addEventListener('securitypolicyviolation', (event) => {
+			w.__cspViolations.push(`${event.violatedDirective}: ${event.blockedURI || '(inline)'}`);
+		});
+	});
+	return { consoleErrors };
+}
+
+export async function assertNoCspViolations(
+	page: Page,
+	guard: { consoleErrors: string[] }
+): Promise<void> {
+	const violations = await page.evaluate(
+		() => (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? []
+	);
+	expect(violations, 'securitypolicyviolation events').toEqual([]);
+	expect(guard.consoleErrors, 'CSP console errors').toEqual([]);
+}

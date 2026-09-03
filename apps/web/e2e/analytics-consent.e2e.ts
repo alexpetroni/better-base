@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { E2E_ADMIN } from './env.ts';
-import { login } from './helpers.ts';
+import { armCspGuard, assertNoCspViolations, login } from './helpers.ts';
 
 // Consent-gated analytics, end-to-end. PUBLIC_ANALYTICS_* points at the
 // app's OWN origin (playwright.config.ts), so the provider script URL never
@@ -56,6 +56,7 @@ test('first visit: banner links the cookie policy; refusing loads nothing', asyn
 test('accepting injects exactly one script tag and the analytics request fires once', async ({
 	page
 }) => {
+	const cspGuard = await armCspGuard(page);
 	const counters = await armAnalyticsRoutes(page);
 	await page.goto('/');
 	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
@@ -72,6 +73,9 @@ test('accepting injects exactly one script tag and the analytics request fires o
 	await page.reload();
 	await expect(page.locator('script[data-analytics="plausible"]')).toHaveCount(1);
 	await expect.poll(() => counters.event).toBe(2);
+
+	// FIX-9: the DOM-injected script and its beacon passed the enforced CSP.
+	await assertNoCspViolations(page, cspGuard);
 });
 
 test('revoking on the cookie-policy page stops analytics for good', async ({ page }) => {

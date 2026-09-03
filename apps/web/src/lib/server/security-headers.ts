@@ -50,14 +50,16 @@ function sources(...candidates: Array<string | null>): string[] {
  * static half. `isAdmin` widens connect-src with the bucket endpoint — the
  * admin media page PUTs uploads there directly; no public page may.
  */
-export function runtimeCspDirectives(
-	env: SecurityHeadersEnv,
-	opts: { isAdmin: boolean }
-): string {
+export function runtimeCspDirectives(env: SecurityHeadersEnv, opts: { isAdmin: boolean }): string {
+	const mediaOrigin = directOriginFromEnv({
+		MEDIA_PUBLIC_BASE_URL: env.MEDIA_PUBLIC_BASE_URL,
+		S3_ENDPOINT: env.S3_ENDPOINT,
+		S3_BUCKET: env.S3_BUCKET
+	});
 	const imgSrc = sources(
 		"'self'",
 		'data:',
-		originOf(directOriginFromEnv(env)),
+		originOf(mediaOrigin),
 		originOf(env.IMGPROXY_URL),
 		originOf(env.CF_IMAGE_BASE_URL)
 	);

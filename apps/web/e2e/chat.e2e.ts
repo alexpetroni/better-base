@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { armCspGuard, assertNoCspViolations } from './helpers.ts';
 
 // The chat runs on the MOCK provider (playwright.config forces CHAT_PROVIDER=mock
 // and an empty ANTHROPIC_API_KEY into the preview servers) — replies below are
@@ -21,6 +22,7 @@ async function send(page: Page, text: string) {
 }
 
 test('widget: streamed mock reply, disclaimer, reset starts a new session', async ({ page }) => {
+	const cspGuard = await armCspGuard(page);
 	await page.goto('/');
 	await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true');
 
@@ -46,6 +48,9 @@ test('widget: streamed mock reply, disclaimer, reset starts a new session', asyn
 	const secondSession = await chatCookie(page);
 	expect(secondSession).toBeTruthy();
 	expect(secondSession).not.toBe(firstSession);
+
+	// FIX-9: the whole streamed round-trip ran under the enforced CSP.
+	await assertNoCspViolations(page, cspGuard);
 });
 
 test('reloading the page restores the conversation without duplicates', async ({ page }) => {

@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
 import path from 'node:path';
 import { E2E_ADMIN } from './env.ts';
-import { login } from './helpers.ts';
+import { armCspGuard, assertNoCspViolations, login } from './helpers.ts';
 
 const FIXTURE = path.resolve(import.meta.dirname, '../tests/fixtures/test-image.png');
 const FIXTURE_NAME = 'test-image.png';
 
 test('admin uploads an image, sees its thumbnail, edits alt text, deletes it', async ({ page }) => {
+	const cspGuard = await armCspGuard(page);
 	await login(page, E2E_ADMIN);
 	await page.goto('/admin/media');
 
@@ -39,4 +40,7 @@ test('admin uploads an image, sees its thumbnail, edits alt text, deletes it', a
 	await expect(page.getByTestId('media-item').filter({ hasText: FIXTURE_NAME })).toHaveCount(0);
 	await page.reload();
 	await expect(page.getByTestId('media-item').filter({ hasText: FIXTURE_NAME })).toHaveCount(0);
+
+	// FIX-9: presign + PUT to the bucket + thumbnail render all passed the CSP.
+	await assertNoCspViolations(page, cspGuard);
 });

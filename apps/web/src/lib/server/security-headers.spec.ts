@@ -78,9 +78,13 @@ describe('applySecurityHeaders', () => {
 		);
 
 		const http = new Response('x');
-		applySecurityHeaders(http, { ...PROD_ENV, PUBLIC_SITE_URL: 'http://localhost:5173' }, {
-			isAdmin: false
-		});
+		applySecurityHeaders(
+			http,
+			{ ...PROD_ENV, PUBLIC_SITE_URL: 'http://localhost:5173' },
+			{
+				isAdmin: false
+			}
+		);
 		expect(http.headers.get('strict-transport-security')).toBeNull();
 	});
 

@@ -6,7 +6,7 @@ import { buildCartMetadata } from '../src/lib/modules/shop/checkout.ts';
 import { orders, products } from '../src/lib/modules/shop/schema.ts';
 import { DEMO_PRODUCTS } from '../src/lib/modules/shop/seed-products.ts';
 import { E2E_ADMIN, E2E_STRIPE_WEBHOOK_SECRET, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
-import { login } from './helpers.ts';
+import { armCspGuard, assertNoCspViolations, login } from './helpers.ts';
 
 // The shop happy path on BOTH sites, against the seeded demo catalog (all
 // products are somn-tagged, active on sleep AND life): browse → add 2
@@ -28,6 +28,7 @@ test('visitor browses, fills the cart, reaches checkout; a signed webhook create
 
 	try {
 		// --- Catalog: the 3 seeded products render with real cover images.
+		const cspGuard = await armCspGuard(page);
 		await page.goto('/magazin');
 		await expect(page.locator('[data-testid="product-card"]')).toHaveCount(3);
 		const mascaCard = page.locator(`[data-testid="product-card"][data-slug="${MASCA.slug}"]`);
@@ -62,6 +63,9 @@ test('visitor browses, fills the cart, reaches checkout; a signed webhook create
 		await expect(mascaLine.getByTestId('cart-line-total')).toHaveText('89,90 lei');
 		const expectedTotalCents = MASCA.priceCents + CEAI.priceCents;
 		await expect(page.getByTestId('cart-total')).toHaveText('124,40 lei');
+
+		// FIX-9: catalog, gallery and cart all rendered under the enforced CSP.
+		await assertNoCspViolations(page, cspGuard);
 
 		// --- Checkout: the action must 303 to the (mock) Stripe Checkout URL.
 		// `accept: text/html` forces the plain form-post protocol — with the
