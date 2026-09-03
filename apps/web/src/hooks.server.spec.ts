@@ -3,14 +3,17 @@ import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { isHttpError, isRedirect, type Handle } from '@sveltejs/kit';
-import * as kitInternalServer from '@sveltejs/kit/internal/server';
 import { createDb, type Db } from './lib/db/client.ts';
 
 // `sequence()` reads SvelteKit's AsyncLocalStorage request store, so the
 // harness must enter it the way the server runtime does. The helper is an
-// internal-but-exported API (used by adapters); typed here because the
-// package's public types do not declare it.
-const { with_request_store: withRequestStore } = kitInternalServer as unknown as {
+// internal-but-exported runtime API whose published types are not a module —
+// the specifier is assembled at runtime so neither tsc nor vite tries to
+// type-resolve it, and the shape is declared locally instead.
+const kitInternalServerSpecifier = ['@sveltejs/kit', 'internal', 'server'].join('/');
+const { with_request_store: withRequestStore } = (await import(
+	/* @vite-ignore */ kitInternalServerSpecifier
+)) as {
 	with_request_store: <T>(store: { event: unknown; state: unknown }, fn: () => T) => T;
 };
 

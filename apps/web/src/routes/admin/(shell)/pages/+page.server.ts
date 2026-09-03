@@ -10,6 +10,9 @@ export const load: PageServerLoad = async () => {
 export const actions: Actions = {
 	create: createEntityAction({
 		field: 'title',
+		// The pages section holds the LEGAL pages (T&C, privacy, cookies) —
+		// admin-only, see ADMIN_ONLY_SECTIONS.
+		require: 'admin',
 		create: (title) => createPage({ db: getDb() }, { title }),
 		redirectTo: (page) => `/admin/pages/${page.id}`
 	})

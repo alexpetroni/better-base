@@ -1,11 +1,18 @@
 export type StaffRole = 'admin' | 'editor';
 
-/** /admin/<section> prefixes an editor may NOT access (admin role only). */
+/**
+ * /admin/<section> prefixes an editor may NOT access (admin role only).
+ * `pages` is here because the WHOLE section is the legal surface (terms,
+ * privacy, cookie policy — seed-pages.ts): rewriting those is an admin
+ * decision, so the section is admin-only rather than per-slug rules that a
+ * new legal page could silently miss (audit 2026-09-03, editor scoping).
+ */
 export const ADMIN_ONLY_SECTIONS = [
 	'products',
 	'orders',
 	'subscribers',
 	'nurture',
+	'pages',
 	'settings'
 ] as const;
 

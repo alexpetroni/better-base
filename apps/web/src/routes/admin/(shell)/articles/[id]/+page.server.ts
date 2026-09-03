@@ -9,7 +9,7 @@ import {
 	type ArticlePatch
 } from '$lib/modules/blog/server';
 import { getImageProvider, imgSources } from '$lib/modules/media/server';
-import { failResult, formStr, formStrAll } from '$lib/server/forms';
+import { failResult, formStr, formStrAll, requireStaff } from '$lib/server/forms';
 import { loadLibraryImages } from '$lib/server/media-library';
 import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
@@ -44,7 +44,8 @@ function patchFrom(form: FormData): ArticlePatch {
 }
 
 export const actions: Actions = {
-	save: async ({ request, params }) => {
+	save: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const result = await updateArticle({ db: getDb() }, params.id, patchFrom(form));
 		if (!result.ok) return failResult(result);
@@ -52,7 +53,8 @@ export const actions: Actions = {
 	},
 
 	// Publish/unpublish also persist the current form so no edits are lost.
-	publish: async ({ request, params }) => {
+	publish: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const saved = await updateArticle({ db: getDb() }, params.id, patchFrom(form));
 		if (!saved.ok) return failResult(saved);
@@ -61,7 +63,8 @@ export const actions: Actions = {
 		return { saved: true, slug: result.value.slug };
 	},
 
-	unpublish: async ({ request, params }) => {
+	unpublish: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const saved = await updateArticle({ db: getDb() }, params.id, patchFrom(form));
 		if (!saved.ok) return failResult(saved);
@@ -71,7 +74,8 @@ export const actions: Actions = {
 	},
 
 	// Render the CURRENT textarea content (not the saved one) for the preview pane.
-	preview: async ({ request }) => {
+	preview: async ({ request, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const bodyMd = formStr(form, 'bodyMd');
 		const html = await renderArticleHtml({ db: getDb() }, getImageProvider(), bodyMd);

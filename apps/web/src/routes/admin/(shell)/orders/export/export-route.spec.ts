@@ -185,7 +185,8 @@ describe('GET /admin/orders/export', () => {
 
 	it('is admin-only and validates the month', async () => {
 		await expect(statusOf(get(requestEvent('2026-08', EDITOR)))).resolves.toBe(403);
-		await expect(statusOf(get(requestEvent('2026-08', null)))).resolves.toBe(403);
+		// Anonymous is 401 (unauthenticated), not 403 — requireAdmin semantics.
+		await expect(statusOf(get(requestEvent('2026-08', null)))).resolves.toBe(401);
 		await expect(statusOf(get(requestEvent('2026-13', ADMIN)))).resolves.toBe(400);
 		await expect(statusOf(get(requestEvent(null, ADMIN)))).resolves.toBe(400);
 	});

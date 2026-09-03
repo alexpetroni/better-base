@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { getStorage } from '$lib/modules/media/server';
 import { ensureShipmentLabel, getCourierProvider, shipments } from '$lib/modules/shop/server';
+import { requireAdmin } from '$lib/server/forms';
 import { eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 
@@ -14,7 +15,7 @@ import type { RequestHandler } from './$types';
  * downloads survive courier-side label expiry.
  */
 export const GET: RequestHandler = async ({ params, locals }) => {
-	if (locals.user?.role !== 'admin') error(403);
+	requireAdmin(locals);
 
 	const db = getDb();
 	const [shipment] = await db.select().from(shipments).where(eq(shipments.id, params.id));

@@ -10,6 +10,7 @@ import {
 	signUploadTicket,
 	verifyUploadTicket
 } from '$lib/modules/media/server';
+import { requireStaff } from '$lib/server/forms';
 import { tokenSecretFrom } from '$lib/server/secrets';
 import type { RequestHandler } from './$types';
 
@@ -20,11 +21,10 @@ import type { RequestHandler } from './$types';
  * The browser PUTs the file to `uploadUrl` between the two calls. The signed
  * ticket binds confirm to the key presign issued (audit L3) — a session
  * cannot register arbitrary bucket objects as its own media rows.
- * /admin/* is staff-gated by hooks.server.ts.
+ * /admin/* is staff-gated by hooks.server.ts; requireStaff is the second layer.
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
-	const user = locals.user;
-	if (!user) error(401);
+	const user = requireStaff(locals);
 
 	let body: Record<string, unknown>;
 	try {

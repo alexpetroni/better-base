@@ -17,6 +17,7 @@ export const load: PageServerLoad = async ({ url }) => {
 export const actions: Actions = {
 	create: createEntityAction({
 		field: 'name',
+		require: 'admin',
 		create: (name) => createProduct({ db: getDb() }, { name }),
 		// Mirror into Stripe right away (no price yet → product only). A gateway
 		// failure is not fatal here: the next editor save retries the sync.

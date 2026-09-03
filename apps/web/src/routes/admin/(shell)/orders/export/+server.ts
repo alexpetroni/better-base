@@ -10,6 +10,7 @@ import {
 	loadInvoiceModel
 } from '$lib/modules/invoice/server';
 import { getStorage } from '$lib/modules/media/server';
+import { requireAdmin } from '$lib/server/forms';
 import { centsToDecimal } from '$lib/util/money';
 import type { RequestHandler } from './$types';
 
@@ -43,7 +44,7 @@ function csvField(value: string): string {
 
 export const GET: RequestHandler = async ({ url, locals }) => {
 	// Defense in depth on top of the admin-section route guard.
-	if (locals.user?.role !== 'admin') error(403);
+	requireAdmin(locals);
 
 	const month = url.searchParams.get('month') ?? '';
 	if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) error(400, 'month must be YYYY-MM');

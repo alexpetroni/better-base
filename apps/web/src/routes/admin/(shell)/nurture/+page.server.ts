@@ -1,10 +1,11 @@
-import { error, fail } from '@sveltejs/kit';
+import { fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import {
 	listParkedSends,
 	listSequencesWithStats,
 	setSequenceActive
 } from '$lib/modules/nurture/server';
+import { requireAdmin } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
 // Admin-only section (enforced by the /admin hook guard via ADMIN_ONLY_SECTIONS).
@@ -22,7 +23,7 @@ export const actions: Actions = {
 	// active sequences.
 	toggle: async ({ request, locals }) => {
 		// Defense in depth on a mutating action (the hook already gates the section).
-		if (locals.user?.role !== 'admin') error(403);
+		requireAdmin(locals);
 		const form = await request.formData();
 		const id = String(form.get('id') ?? '');
 		const active = String(form.get('active') ?? '');

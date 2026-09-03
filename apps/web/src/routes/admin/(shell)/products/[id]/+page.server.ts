@@ -9,7 +9,7 @@ import {
 	updateProduct,
 	type ProductPatch
 } from '$lib/modules/shop/server';
-import { failResult, formStr, formStrAll } from '$lib/server/forms';
+import { failResult, formStr, formStrAll, requireAdmin } from '$lib/server/forms';
 import { loadLibraryImages } from '$lib/server/media-library';
 import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
@@ -58,7 +58,8 @@ function patchFrom(form: FormData): ProductPatch | ParseError {
 }
 
 export const actions: Actions = {
-	save: async ({ request, params }) => {
+	save: async ({ request, params, locals }) => {
+		requireAdmin(locals);
 		const form = await request.formData();
 		const patch = patchFrom(form);
 		if ('error' in patch) return fail(400, patch);

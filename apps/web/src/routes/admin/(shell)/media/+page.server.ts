@@ -13,7 +13,7 @@ import {
 	listMedia,
 	updateMediaAlt
 } from '$lib/modules/media/server';
-import { formStr } from '$lib/server/forms';
+import { formStr, requireStaff } from '$lib/server/forms';
 import { MEDIA_REFERENCE_CHECKS } from '$lib/server/media-library';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -36,7 +36,8 @@ export const load: PageServerLoad = async () => {
 };
 
 export const actions: Actions = {
-	updateAlt: async ({ request }) => {
+	updateAlt: async ({ request, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const id = formStr(form, 'id');
 		const alt = formStr(form, 'alt').trim();
@@ -45,7 +46,8 @@ export const actions: Actions = {
 		return { updated: id };
 	},
 
-	delete: async ({ request }) => {
+	delete: async ({ request, locals }) => {
+		requireStaff(locals);
 		const form = await request.formData();
 		const id = formStr(form, 'id');
 		const result = await deleteMedia(

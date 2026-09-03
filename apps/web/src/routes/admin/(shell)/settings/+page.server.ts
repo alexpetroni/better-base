@@ -12,7 +12,7 @@ import {
 	type SettingKey
 } from '$lib/modules/settings';
 import { loadSettingsForAdmin, saveSettings } from '$lib/modules/settings/server';
-import { failResult, formStr } from '$lib/server/forms';
+import { failResult, formStr, requireAdmin } from '$lib/server/forms';
 import { formatCents } from '$lib/util/money';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -50,6 +50,7 @@ export const actions: Actions = {
 	 * per-field errors and echoed input — nothing is written.
 	 */
 	save: async ({ request, locals }) => {
+		const user = requireAdmin(locals);
 		const form = await request.formData();
 		const group = formStr(form, 'group');
 		if (!isSettingGroup(group)) error(400, 'Unknown settings group');
@@ -74,8 +75,7 @@ export const actions: Actions = {
 		}
 		if (Object.keys(errors).length) return fail(400, { group, errors, values });
 
-		// The shell guard guarantees a staff user, and /admin/settings is admin-only.
-		const result = await saveSettings({ db: getDb() }, entries, locals.user!.id);
+		const result = await saveSettings({ db: getDb() }, entries, user.id);
 		if (!result.ok) return failResult(result, { group, errors, values });
 		return { saved: true, group };
 	}

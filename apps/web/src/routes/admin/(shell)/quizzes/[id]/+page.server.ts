@@ -9,7 +9,7 @@ import {
 	updateQuiz,
 	type QuizPatch
 } from '$lib/modules/quiz/server';
-import { failResult, formStr } from '$lib/server/forms';
+import { failResult, formStr, requireStaff } from '$lib/server/forms';
 import { resolveSitePillars } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -76,14 +76,16 @@ async function saveFrom(request: Request, id: string) {
 }
 
 export const actions: Actions = {
-	save: async ({ request, params }) => {
+	save: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const outcome = await saveFrom(request, params.id);
 		if (outcome.response) return outcome.response;
 		return { saved: true, slug: outcome.saved!.slug };
 	},
 
 	// Publish/unpublish also persist the current form so no edits are lost.
-	publish: async ({ request, params }) => {
+	publish: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const outcome = await saveFrom(request, params.id);
 		if (outcome.response) return outcome.response;
 		const result = await publishQuiz({ db: getDb() }, params.id);
@@ -91,7 +93,8 @@ export const actions: Actions = {
 		return { saved: true, slug: result.value.slug };
 	},
 
-	unpublish: async ({ request, params }) => {
+	unpublish: async ({ request, params, locals }) => {
+		requireStaff(locals);
 		const outcome = await saveFrom(request, params.id);
 		if (outcome.response) return outcome.response;
 		const result = await unpublishQuiz({ db: getDb() }, params.id);

@@ -18,7 +18,7 @@ import {
 	orderLookupUrl,
 	transitionFulfillment
 } from '$lib/modules/shop/server';
-import { formStr } from '$lib/server/forms';
+import { formStr, requireAdmin } from '$lib/server/forms';
 import { getSite } from '$lib/server/site';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -45,14 +45,14 @@ export const actions: Actions = {
 	 * on its own (defense in depth — a guard regression must not open writes).
 	 */
 	transition: async ({ request, params, locals }) => {
-		if (locals.user?.role !== 'admin') error(403);
+		const user = requireAdmin(locals);
 
 		const form = await request.formData();
 		const to = formStr(form, 'to');
 		if (!isFulfillmentStatus(to)) return fail(400, { error: 'invalid-status' as const });
 
 		const result = await transitionFulfillment({ db: getDb() }, params.id, to, {
-			actor: locals.user.email,
+			actor: user.email,
 			note: formStr(form, 'note').trim()
 		});
 		if (!result.ok) {
@@ -69,9 +69,9 @@ export const actions: Actions = {
 	 * is a no-op. Same defense-in-depth admin check as `transition`.
 	 */
 	issueInvoice: async ({ params, locals }) => {
-		if (locals.user?.role !== 'admin') error(403);
+		const user = requireAdmin(locals);
 
-		const result = await ensureInvoicesForOrder({ db: getDb() }, params.id, locals.user.email);
+		const result = await ensureInvoicesForOrder({ db: getDb() }, params.id, user.email);
 		if (!result.ok) {
 			if (result.error === 'order-not-found') error(404);
 			return fail(400, { invoiceError: result.error, invoiceDetail: result.detail ?? '' });
@@ -88,7 +88,7 @@ export const actions: Actions = {
 	 * check as the other actions.
 	 */
 	generateAwb: async ({ params, locals }) => {
-		if (locals.user?.role !== 'admin') error(403);
+		const user = requireAdmin(locals);
 
 		const result = await createShipmentForOrder(
 			{
@@ -99,7 +99,7 @@ export const actions: Actions = {
 				publicBaseUrl: publicEnv.PUBLIC_SITE_URL
 			},
 			params.id,
-			locals.user.email
+			user.email
 		);
 		if (!result.ok) {
 			if (result.error === 'order-not-found') error(404);
@@ -114,7 +114,7 @@ export const actions: Actions = {
 	 * defense-in-depth admin check as the other actions.
 	 */
 	resendInvoice: async ({ request, params, locals }) => {
-		if (locals.user?.role !== 'admin') error(403);
+		requireAdmin(locals);
 
 		const form = await request.formData();
 		const nonce = formStr(form, 'nonce');

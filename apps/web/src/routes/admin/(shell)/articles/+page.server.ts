@@ -12,9 +12,8 @@ export const load: PageServerLoad = async ({ url }) => {
 export const actions: Actions = {
 	create: createEntityAction({
 		field: 'title',
-		// The admin hook guard guarantees a staff user here.
-		create: (title, locals) =>
-			createArticle({ db: getDb() }, { title, createdBy: locals.user!.id }),
+		require: 'staff',
+		create: (title, user) => createArticle({ db: getDb() }, { title, createdBy: user.id }),
 		redirectTo: (article) => `/admin/articles/${article.id}`
 	})
 };

@@ -153,7 +153,9 @@ async function expectHttpError(fn: () => Promise<unknown>, status: number, label
 		await fn();
 		expect.fail(`${label}: expected a thrown ${status}, but the handler ran`);
 	} catch (e) {
-		if (!isHttpError(e, status)) throw new Error(`${label}: expected ${status}, got: ${String(e)}`);
+		if (!isHttpError(e, status)) {
+			throw new Error(`${label}: expected ${status}, got: ${String(e)}`, { cause: e });
+		}
 		expect(e.status).toBe(status);
 	}
 }

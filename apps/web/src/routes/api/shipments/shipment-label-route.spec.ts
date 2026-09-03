@@ -138,7 +138,8 @@ describe('GET /api/shipments/[id]/label', () => {
 
 	it('refuses editors and anonymous requests before touching anything', async () => {
 		await expect(statusOf(get(requestEvent(shipmentId, EDITOR)))).resolves.toBe(403);
-		await expect(statusOf(get(requestEvent(shipmentId, null)))).resolves.toBe(403);
+		// Anonymous is 401 (unauthenticated), not 403 — requireAdmin semantics.
+		await expect(statusOf(get(requestEvent(shipmentId, null)))).resolves.toBe(401);
 	});
 
 	it('404s an unknown shipment', async () => {
