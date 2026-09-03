@@ -133,6 +133,13 @@ export const orders = pgTable(
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
 		/** Optional company details for a B2B invoice, as entered at checkout. */
 		billingCompany: jsonb('billing_company').$type<BuyerCompany>(),
+		/**
+		 * Cumulative amount refunded by Stripe, in bani (`charge.amount_refunded`).
+		 * A partial refund leaves `status` at `paid` and only moves this column;
+		 * a full one flips the status too. Backfilled from the status by the
+		 * migration (refunded → amount_total_cents).
+		 */
+		refundedCents: integer('refunded_cents').notNull().default(0),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [
@@ -229,6 +236,32 @@ export const shipments = pgTable(
 	]
 );
 
+/**
+ * Refunds whose order does not exist yet (audit 2026-09-03 P0 #3): Stripe
+ * does not order deliveries, so `charge.refunded` can land before its
+ * `checkout.session.completed` (rotated secret, bad deploy, retry backlog).
+ * The refund handler records the charge here instead of dropping it, and
+ * order creation consults the row for its payment intent — a full pending
+ * refund creates the order already `refunded`, a partial one sets
+ * `refunded_cents`. `matched_at` marks consumption; the retention sweep prunes
+ * matched rows after the ledger window (unmatched ones stay for the operator).
+ */
+export const pendingRefunds = pgTable(
+	'pending_refunds',
+	{
+		paymentIntent: text('payment_intent').primaryKey(),
+		chargeId: text('charge_id').notNull(),
+		/** The charge's total, in bani (`charge.amount`). */
+		amountCents: integer('amount_cents').notNull(),
+		/** Cumulative refunded amount, in bani (`charge.amount_refunded`). */
+		amountRefundedCents: integer('amount_refunded_cents').notNull(),
+		receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+		matchedAt: timestamp('matched_at', { withTimezone: true }),
+		orderId: text('order_id').references(() => orders.id, { onDelete: 'set null' })
+	},
+	(table) => [index('pending_refunds_matched_at_idx').on(table.matchedAt)]
+);
+
 export type ProductRow = typeof products.$inferSelect;
 export type ProductStatus = ProductRow['status'];
 export type OrderRow = typeof orders.$inferSelect;
@@ -237,3 +270,4 @@ export type OrderItemRow = typeof orderItems.$inferSelect;
 export type OrderEventRow = typeof orderEvents.$inferSelect;
 export type ShipmentRow = typeof shipments.$inferSelect;
 export type ShipmentStatus = ShipmentRow['status'];
+export type PendingRefundRow = typeof pendingRefunds.$inferSelect;

@@ -91,8 +91,10 @@ export const invoices = pgTable(
 		uniqueIndex('invoices_order_invoice_uq')
 			.on(table.orderId)
 			.where(sql`${table.kind} = 'invoice'`),
-		// At most one storno per original.
-		uniqueIndex('invoices_storno_of_uq').on(table.stornoOfInvoiceId),
+		// Stornos may be PARTIAL (a partial refund reverses only the refunded
+		// amount), so several may reference one original. The bound Σ storno
+		// gross ≤ original gross is a BEFORE INSERT trigger (migration 0022).
+		index('invoices_storno_of_idx').on(table.stornoOfInvoiceId),
 		index('invoices_order_id_idx').on(table.orderId)
 	]
 );
