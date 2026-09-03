@@ -11,7 +11,13 @@ export {
 	type AdminGuardDecision,
 	type StaffRole
 } from './guards.ts';
-export { clearAttempts, rateLimitKey, registerLoginAttempt } from './rate-limit.ts';
+export {
+	clearAttempts,
+	emailRateLimitKey,
+	rateLimitKey,
+	registerEmailLoginAttempt,
+	registerLoginAttempt
+} from './rate-limit.ts';
 export { upsertStaffUser, type UpsertStaffUserInput, type UpsertStaffUserResult } from './staff.ts';
 export {
 	users,

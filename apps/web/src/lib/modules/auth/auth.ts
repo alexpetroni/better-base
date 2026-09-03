@@ -33,6 +33,13 @@ export function createAuth({ db, secret, baseURL, plugins }: CreateAuthOptions) 
 			disableSignUp: true,
 			minPasswordLength: MIN_PASSWORD_LENGTH
 		},
+		session: {
+			// Staff accounts can export all PII and change the invoice IBAN —
+			// ~12h absolute lifetime instead of better-auth's 7 rolling days;
+			// updateAge keeps the DB write amortized to at most one per hour.
+			expiresIn: 60 * 60 * 12,
+			updateAge: 60 * 60
+		},
 		user: {
 			additionalFields: {
 				role: {

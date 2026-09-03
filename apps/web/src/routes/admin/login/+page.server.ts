@@ -1,7 +1,14 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { APIError } from 'better-auth';
 import { getDb } from '$lib/db';
-import { clearAttempts, getAuth, rateLimitKey, registerLoginAttempt } from '$lib/modules/auth';
+import {
+	clearAttempts,
+	emailRateLimitKey,
+	getAuth,
+	rateLimitKey,
+	registerEmailLoginAttempt,
+	registerLoginAttempt
+} from '$lib/modules/auth';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -19,11 +26,17 @@ export const actions: Actions = {
 
 		const db = getDb();
 		const key = rateLimitKey(event.getClientAddress(), email);
+		const emailKey = emailRateLimitKey(email);
 		// Count the attempt atomically BEFORE checking the password: the cap
 		// decision comes from the post-increment count, so a concurrent burst
-		// cannot slip past it (a successful login clears the counter below).
+		// cannot slip past it (a successful login clears the counters below).
+		// Two counters: per IP+email (fast lockout) and per email alone (an
+		// attacker rotating IPs stays bounded per account).
 		const attempt = await registerLoginAttempt(db, key);
-		if (attempt.limited) return fail(429, { error: 'rate_limited' as const, email });
+		const emailAttempt = await registerEmailLoginAttempt(db, emailKey);
+		if (attempt.limited || emailAttempt.limited) {
+			return fail(429, { error: 'rate_limited' as const, email });
+		}
 
 		try {
 			await getAuth().api.signInEmail({
@@ -38,6 +51,7 @@ export const actions: Actions = {
 		}
 
 		await clearAttempts(db, key);
+		await clearAttempts(db, emailKey);
 		redirect(303, '/admin');
 	}
 };
