@@ -2652,7 +2652,7 @@ invoice errors `nothing-to-storno`, `storno-exceeds-original`; services
 reset truncates `pending_refunds` with the order tables.
 
 **Verification (builder run 2026-09-03):** `pnpm lint && pnpm check &&
-pnpm test:unit` green from the repo root (apps/web 98 files, 885 passed,
+pnpm test:unit` green from the repo root (apps/web 98 files, 886 passed,
 4 skipped — the pre-existing `driver-parity` suite that only runs with
 `NEON_WS_PROXY`; +33 new tests across `refunds.spec.ts`,
 `async-payments.spec.ts`, `stock.spec.ts`, `vat.spec.ts`,
