@@ -13,6 +13,7 @@ import {
 	listMedia,
 	updateMediaAlt
 } from '$lib/modules/media/server';
+import { recordAdminAudit } from '$lib/modules/auth';
 import { formStr, requireStaff } from '$lib/server/forms';
 import { MEDIA_REFERENCE_CHECKS } from '$lib/server/media-library';
 import type { Actions, PageServerLoad } from './$types';
@@ -47,7 +48,7 @@ export const actions: Actions = {
 	},
 
 	delete: async ({ request, locals }) => {
-		requireStaff(locals);
+		const user = requireStaff(locals);
 		const form = await request.formData();
 		const id = formStr(form, 'id');
 		const result = await deleteMedia(
@@ -60,6 +61,7 @@ export const actions: Actions = {
 			}
 			return fail(404, { error: result.error });
 		}
+		await recordAdminAudit(getDb(), { actor: user.email, action: 'media-delete', target: id });
 		return { deleted: id };
 	}
 };

@@ -9,6 +9,7 @@ import {
 	invoices,
 	loadInvoiceModel
 } from '$lib/modules/invoice/server';
+import { recordAdminAudit } from '$lib/modules/auth';
 import { getStorage } from '$lib/modules/media/server';
 import { requireAdmin } from '$lib/server/forms';
 import { centsToDecimal } from '$lib/util/money';
@@ -44,12 +45,13 @@ function csvField(value: string): string {
 
 export const GET: RequestHandler = async ({ url, locals }) => {
 	// Defense in depth on top of the admin-section route guard.
-	requireAdmin(locals);
+	const user = requireAdmin(locals);
 
 	const month = url.searchParams.get('month') ?? '';
 	if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) error(400, 'month must be YYYY-MM');
 
 	const db = getDb();
+	await recordAdminAudit(db, { actor: user.email, action: 'orders-export', target: month });
 	const storage = getStorage();
 
 	// Documents are dated in Europe/Bucharest (like the documents themselves),

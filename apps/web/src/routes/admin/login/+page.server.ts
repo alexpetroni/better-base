@@ -6,6 +6,7 @@ import {
 	emailRateLimitKey,
 	getAuth,
 	rateLimitKey,
+	recordAdminAudit,
 	registerEmailLoginAttempt,
 	registerLoginAttempt
 } from '$lib/modules/auth';
@@ -52,6 +53,7 @@ export const actions: Actions = {
 
 		await clearAttempts(db, key);
 		await clearAttempts(db, emailKey);
+		await recordAdminAudit(db, { actor: email, action: 'login' });
 		redirect(303, '/admin');
 	}
 };
