@@ -79,6 +79,9 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 
 	return {
 		async send(input) {
+			// Lowercased once here so the log row AND the transport agree, and
+			// GDPR erasure matches whatever casing the caller passed through.
+			const to = input.to.trim().toLowerCase();
 			const rendered = renderEmailTemplate(input.template, input.data);
 			const claimStatus: EmailStatus = cfg.dryRun ? 'dryrun' : 'sending';
 
@@ -99,7 +102,7 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 				.values({
 					id: crypto.randomUUID(),
 					idempotencyKey: input.idempotencyKey,
-					toEmail: input.to,
+					toEmail: to,
 					template: input.template,
 					subject: rendered.subject,
 					data: input.data as Record<string, unknown>,
@@ -141,7 +144,7 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 				const { providerId } = await cfg.transport.send({
 					from: cfg.from,
 					replyTo: cfg.replyTo,
-					to: input.to,
+					to,
 					subject: rendered.subject,
 					html: rendered.html,
 					text: rendered.text,

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 /**
@@ -23,7 +24,11 @@ export const emailLog = pgTable(
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
-	(table) => [index('email_log_to_email_idx').on(table.toEmail)]
+	(table) => [
+		index('email_log_to_email_idx').on(table.toEmail),
+		// GDPR erase matches on lower(to_email) — see modules/gdpr/erase.ts.
+		index('email_log_to_email_lower_idx').on(sql`lower(${table.toEmail})`)
+	]
 );
 
 export interface EmailAttachmentMeta {

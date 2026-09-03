@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { normalizeEmail } from '../../util/email.ts';
 import type { Result } from '../../util/result.ts';
@@ -65,10 +65,14 @@ export async function eraseSubscriberData(
 			subscriberDeleted = true;
 		}
 
+		// lower() on the column: writers normalize since 2026-09, but rows
+		// written before that (and any future bypassing writer) carry the
+		// customer's casing verbatim — an erase must reach those too. The
+		// expression indexes from migration 0021 keep this a range scan.
 		const anonymizedOrders = await tx
 			.update(orders)
 			.set({ email: ANONYMIZED_EMAIL, shippingAddress: null, billingCompany: null })
-			.where(eq(orders.email, email))
+			.where(sql`lower(${orders.email}) = ${email}`)
 			.returning({ id: orders.id });
 
 		// Count (not touch) the fiscal documents that stay behind — legally
@@ -86,10 +90,11 @@ export async function eraseSubscriberData(
 							)
 						);
 
+		// error can quote the recipient (SMTP replies) — nulled with the rest.
 		const anonymizedLog = await tx
 			.update(emailLog)
-			.set({ toEmail: ANONYMIZED_EMAIL, data: {}, updatedAt: new Date() })
-			.where(eq(emailLog.toEmail, email))
+			.set({ toEmail: ANONYMIZED_EMAIL, data: {}, error: null, updatedAt: new Date() })
+			.where(sql`lower(${emailLog.toEmail}) = ${email}`)
 			.returning({ id: emailLog.id });
 
 		return {

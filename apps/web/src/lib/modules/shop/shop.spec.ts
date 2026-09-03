@@ -418,10 +418,11 @@ describe('webhook: signature verification', () => {
 
 describe('webhook: checkout.session.completed', () => {
 	it('stores the order email lowercased, however Stripe delivers it (GDPR erase match)', async () => {
+		const product = await makeProduct({ name: 'Comandă mixed-case', priceCents: 4990 });
 		const payload = completedSessionEvent({
 			id: 'cs_mixed_email',
-			cart: [],
-			amountTotal: 0,
+			cart: [{ productId: product.id, qty: 1, priceCents: 4990 }],
+			amountTotal: 4990,
 			email: 'Ion.Popescu@Gmail.com'
 		});
 		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);

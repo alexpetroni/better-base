@@ -189,7 +189,9 @@ async function createOrderFromSession(
 		.insert(orders)
 		.values({
 			id: crypto.randomUUID(),
-			email: session.customer_details?.email ?? '',
+			// Lowercased at write time so GDPR erasure and any email join match
+			// case-insensitively (audit 2026-09-03; Stripe passes it as typed).
+			email: session.customer_details?.email?.toLowerCase() ?? '',
 			stripeSessionId: session.id,
 			stripePaymentIntent: paymentIntent,
 			amountTotalCents: session.amount_total ?? goodsFromCart + shippingCents,

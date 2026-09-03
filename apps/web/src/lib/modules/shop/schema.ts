@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
 	boolean,
 	index,
@@ -138,6 +139,8 @@ export const orders = pgTable(
 		index('orders_created_at_idx').on(table.createdAt),
 		// GDPR erase anonymizes by email; the refund webhook matches by intent.
 		index('orders_email_idx').on(table.email),
+		// Erase matches on lower(email): historical rows kept Stripe's casing.
+		index('orders_email_lower_idx').on(sql`lower(${table.email})`),
 		index('orders_stripe_payment_intent_idx').on(table.stripePaymentIntent),
 		// The admin work queue filters on the fulfillment dimension.
 		index('orders_fulfillment_status_idx').on(table.fulfillmentStatus)
