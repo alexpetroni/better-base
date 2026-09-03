@@ -16,7 +16,8 @@ import { armCspGuard, assertNoCspViolations } from './helpers.ts';
 // violation-free in their own specs (chat/media/analytics-consent).
 
 test('the percent-encoded admin-guard bypass stays closed on the built app', async ({
-	request
+	request,
+	baseURL
 }) => {
 	// Raw request — a browser would normalize %61 before sending (which is
 	// exactly why the audit reproduced this with fetch, not a page).
@@ -27,8 +28,11 @@ test('the percent-encoded admin-guard bypass stays closed on the built app', asy
 	expect(encodedCsv.headers()['location']).toBe('/admin/login');
 	expect(encodedCsv.headers()['content-type'] ?? '').not.toContain('text/csv');
 
+	// A matching `origin` clears SvelteKit's CSRF check, so the guard's own
+	// redirect (not a 403 CSRF refusal) is what this asserts — the action
+	// must never run for an anonymous caller.
 	const encodedAction = await request.post('/%61dmin/pages/some-id?/save', {
-		headers: { accept: 'text/html' },
+		headers: { accept: 'text/html', origin: baseURL! },
 		form: { title: 'x', bodyMd: 'y' },
 		maxRedirects: 0
 	});
@@ -69,10 +73,11 @@ test('every security header ships, CSP enforced, admin no-store', async ({ reque
 
 test('checkout form post redirects to Stripe under the enforced form-action', async ({ page }) => {
 	const guard = await armCspGuard(page);
-	// The mock gateway 303s to a checkout.stripe.com URL; intercept it so the
-	// browser NAVIGATES there (Chrome enforces form-action on that redirect)
-	// without the test ever leaving localhost.
-	await page.route('https://checkout.stripe.com/**', (route) =>
+	// The mock gateway 303s to a checkout.stripe.com URL; intercept it (regex
+	// so the redirected top-level navigation is matched) so the browser
+	// NAVIGATES there — Chrome enforces form-action on that redirect — without
+	// the test ever reaching real Stripe.
+	await page.route(/checkout\.stripe\.com/, (route) =>
 		route.fulfill({ contentType: 'text/html', body: '<h1 data-stub>stripe-checkout</h1>' })
 	);
 

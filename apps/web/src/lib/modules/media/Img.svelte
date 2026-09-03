@@ -34,10 +34,22 @@
 	// Blurhash placeholder: painted as the <img>'s background (SSR ships it, so
 	// it shows before hydration) and dropped once the real image has loaded —
 	// otherwise it would stay visible behind transparent images forever.
+	// The load listener is attached HERE, not as `onload={}` markup: Svelte 5
+	// server-renders that as an inline replay attribute (onload="this.__e=…"),
+	// which the enforced CSP blocks (script-src-attr, FIX-9). `complete`
+	// covers images that finished before hydration.
 	let imgEl = $state<HTMLImageElement>();
 	let loaded = $state(false);
 	$effect(() => {
-		if (imgEl?.complete) loaded = true;
+		const el = imgEl;
+		if (!el) return;
+		if (el.complete) {
+			loaded = true;
+			return;
+		}
+		const markLoaded = () => (loaded = true);
+		el.addEventListener('load', markLoaded, { once: true });
+		return () => el.removeEventListener('load', markLoaded);
 	});
 	const placeholderStyle = $derived(
 		image.placeholder && !loaded
@@ -61,7 +73,6 @@
 	{/if}
 	<img
 		bind:this={imgEl}
-		onload={() => (loaded = true)}
 		src={image.src}
 		alt={resolvedAlt}
 		width={image.width}
