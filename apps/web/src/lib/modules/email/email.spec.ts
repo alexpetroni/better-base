@@ -164,6 +164,17 @@ describe('sendEmail idempotency (integration)', () => {
 		return db.select().from(emailLog).where(eq(emailLog.idempotencyKey, key));
 	}
 
+	it('lowercases the recipient in the log row and toward the transport (GDPR erase match)', async () => {
+		const transport = fakeTransport();
+		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
+
+		const outcome = await sender.send({ ...input('mixed-to-1'), to: 'MiXed.Case@Example.RO' });
+		expect(outcome.status).toBe('sent');
+		expect(transport.send.mock.calls[0][0].to).toBe('mixed.case@example.ro');
+		const rows = await rowsFor('mixed-to-1');
+		expect(rows[0].toEmail).toBe('mixed.case@example.ro');
+	});
+
 	it('dry-run records exactly one log row and NEVER calls the transport', async () => {
 		const transport = fakeTransport();
 		const sender = createEmailSender({ db, dryRun: true, from: 'a@b.ro', transport });

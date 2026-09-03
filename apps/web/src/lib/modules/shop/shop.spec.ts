@@ -417,6 +417,21 @@ describe('webhook: signature verification', () => {
 });
 
 describe('webhook: checkout.session.completed', () => {
+	it('stores the order email lowercased, however Stripe delivers it (GDPR erase match)', async () => {
+		const payload = completedSessionEvent({
+			id: 'cs_mixed_email',
+			cart: [],
+			amountTotal: 0,
+			email: 'Ion.Popescu@Gmail.com'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+		const outcome = await processStripeEvent(webhookDeps, event);
+		expect(outcome.kind).toBe('order-created');
+		if (outcome.kind !== 'order-created') return;
+		const [order] = await db.select().from(orders).where(eq(orders.id, outcome.orderId));
+		expect(order.email).toBe('ion.popescu@gmail.com');
+	});
+
 	it('creates the order + item snapshots, decrements stock and logs ONE email', async () => {
 		const tracked = await makeProduct({ name: 'Comandă urmărită', priceCents: 4990, stock: 5 });
 		const untracked = await makeProduct({ name: 'Comandă neurmărită', priceCents: 12550 });

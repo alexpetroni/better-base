@@ -126,6 +126,46 @@ describe('eraseSubscriberData', () => {
 		});
 	});
 
+	it('anonymizes mixed-case emails stored verbatim and nulls the log error (audit 2026-09-03)', async () => {
+		// Stripe hands customer_details.email through as typed — historical
+		// orders and email_log rows carry the mixed-case form verbatim.
+		await db.insert(orders).values({
+			id: 'gdpr-mixed-order',
+			email: 'Ion.Popescu@Gmail.com',
+			stripeSessionId: 'cs_test_gdpr_mixed',
+			amountTotalCents: 8990,
+			currency: 'ron',
+			status: 'paid',
+			shippingAddress: { name: 'Ion Popescu', line1: 'Str. Mixtă 2', city: 'Iași' }
+		});
+		await db.insert(emailLog).values({
+			id: 'gdpr-mixed-log',
+			idempotencyKey: 'gdpr-mixed-key',
+			toEmail: 'Ion.Popescu@Gmail.com',
+			template: 'order-confirmation',
+			subject: 'Comanda ta',
+			data: { name: 'Ion Popescu' },
+			status: 'error',
+			// The error column can quote the recipient — it must not outlive erasure.
+			error: 'SMTP 550: mailbox Ion.Popescu@Gmail.com rejected'
+		});
+
+		const result = await eraseSubscriberData({ db }, 'ion.popescu@gmail.com');
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.ordersAnonymized).toBe(1);
+		expect(result.value.emailLogAnonymized).toBe(1);
+
+		const [order] = await db.select().from(orders).where(eq(orders.id, 'gdpr-mixed-order'));
+		expect(order.email).toBe(ANONYMIZED_EMAIL);
+		expect(order.shippingAddress).toBeNull();
+
+		const [log] = await db.select().from(emailLog).where(eq(emailLog.id, 'gdpr-mixed-log'));
+		expect(log.toEmail).toBe(ANONYMIZED_EMAIL);
+		expect(log.data).toEqual({});
+		expect(log.error).toBeNull();
+	});
+
 	it('is all-or-nothing: a failure mid-erasure leaves every row untouched (audit Theme B)', async () => {
 		const email = 'gdpr-atomic@example.com';
 		await db.insert(subscribers).values({
