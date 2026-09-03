@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import type { DbTx } from '../../server/event-ledger/core.ts';
 import type { Result } from '../../util/result.ts';
@@ -6,7 +6,12 @@ import { isSettingsPlaceholder, loadSettings } from '$lib/modules/settings/serve
 import type { SettingKey, SiteSettings } from '../settings/registry.ts';
 import { orderEvents, orderItems, orders, type OrderRow } from '../shop/schema.ts';
 import { invoiceLines, invoices, invoiceSeries, type InvoiceRow } from './schema.ts';
-import { computeLineAmounts, sumAmounts } from './vat.ts';
+import {
+	computeLineAmounts,
+	partialStornoLineAmounts,
+	sumAmounts,
+	type VatAmounts
+} from './vat.ts';
 
 /**
  * Invoice issuance: the only writer of the fiscal record. Everything here runs
@@ -27,7 +32,11 @@ export type InvoiceError =
 	/** Issuer settings unset or still the seeded placeholder — detail lists the keys. */
 	| 'settings-incomplete'
 	/** Refund arrived but there is no original invoice to reverse. */
-	| 'no-invoice-to-reverse';
+	| 'no-invoice-to-reverse'
+	/** Nothing left to reverse: the refunded amount is already fully storno'd. */
+	| 'nothing-to-storno'
+	/** The requested storno would reverse more than the original invoice. */
+	| 'storno-exceeds-original';
 
 export type InvoiceResult<T> = Result<T, InvoiceError>;
 
@@ -249,27 +258,123 @@ export async function issueInvoiceForOrderInTx(
 }
 
 /**
- * Issue the storno (reversal) for a refunded order's invoice. The original is
- * never touched: the storno is a NEW document with its own number in the same
- * series, whose lines negate the original's STORED amounts (no recomputation
- * — the reversal is exact by construction). Idempotent per original invoice.
+ * The order's original invoice, row-locked for the rest of the caller's
+ * transaction. `SELECT … FOR UPDATE` only locks — it fires no trigger, so the
+ * append-only rule is untouched — and it is what serializes concurrent
+ * stornos of one invoice: the sum check below reads a stable total.
+ */
+async function lockOriginalInvoice(tx: DbTx, orderId: string): Promise<InvoiceRow | undefined> {
+	const [original] = await tx
+		.select()
+		.from(invoices)
+		.where(and(eq(invoices.orderId, orderId), eq(invoices.kind, 'invoice')))
+		.for('update');
+	return original;
+}
+
+/** What the stornos of `originalId` already reverse, as a POSITIVE amount in bani. */
+export async function reversedCentsFor(executor: Db | DbTx, originalId: string): Promise<number> {
+	const [row] = await executor
+		.select({ total: sql<number>`coalesce(sum(-${invoices.grossTotalCents}), 0)::int` })
+		.from(invoices)
+		.where(eq(invoices.stornoOfInvoiceId, originalId));
+	return Number(row?.total ?? 0);
+}
+
+type StornoLineInput = Omit<typeof invoiceLines.$inferInsert, 'id' | 'invoiceId'>;
+
+/**
+ * Issue a storno (reversal) of the order's invoice inside the caller's
+ * transaction. The original is never touched: the storno is a NEW document
+ * with its own number in the same series, referencing the original.
+ *
+ * Without `grossCents` it reverses whatever is still unreversed — the whole
+ * invoice when nothing was storno'd before (lines negate the original's
+ * STORED amounts: no recomputation, exact by construction), or the remainder
+ * after earlier partial stornos. With `grossCents` it reverses exactly that
+ * amount (a partial refund). Either way a storno is a single negative line
+ * at the original rate when it is not the full negation, and the stornos of
+ * one invoice can never exceed it — checked here under the original's row
+ * lock and, as the backstop, by the `invoices_storno_bounded` trigger.
+ *
+ * Idempotent for the "reverse the rest" form: once fully reversed, the latest
+ * storno is returned with `created: false`.
  */
 export async function issueStornoForOrderInTx(
 	tx: DbTx,
 	order: OrderRow,
-	actor: string
+	actor: string,
+	options: { grossCents?: number } = {}
 ): Promise<InvoiceResult<IssuedDocument>> {
-	const [original] = await tx
-		.select()
-		.from(invoices)
-		.where(and(eq(invoices.orderId, order.id), eq(invoices.kind, 'invoice')));
+	const original = await lockOriginalInvoice(tx, order.id);
 	if (!original) return { ok: false, error: 'no-invoice-to-reverse' };
 
-	const [existing] = await tx
+	const reversed = await reversedCentsFor(tx, original.id);
+	const remaining = original.grossTotalCents - reversed;
+	if (options.grossCents === undefined && remaining <= 0) {
+		const [existing] = await tx
+			.select()
+			.from(invoices)
+			.where(eq(invoices.stornoOfInvoiceId, original.id))
+			.orderBy(desc(invoices.number))
+			.limit(1);
+		if (existing) return { ok: true, value: { invoice: existing, created: false } };
+		return { ok: false, error: 'nothing-to-storno', detail: `${original.displayNumber}: 0` };
+	}
+	const grossCents = options.grossCents ?? remaining;
+	if (!Number.isInteger(grossCents) || grossCents <= 0) {
+		return { ok: false, error: 'nothing-to-storno', detail: String(grossCents) };
+	}
+	if (grossCents > remaining) {
+		return {
+			ok: false,
+			error: 'storno-exceeds-original',
+			detail: `${grossCents} > ${remaining} (${original.displayNumber})`
+		};
+	}
+
+	const originalLines = await tx
 		.select()
-		.from(invoices)
-		.where(eq(invoices.stornoOfInvoiceId, original.id));
-	if (existing) return { ok: true, value: { invoice: existing, created: false } };
+		.from(invoiceLines)
+		.where(eq(invoiceLines.invoiceId, original.id))
+		.orderBy(asc(invoiceLines.position));
+
+	const full = reversed === 0 && grossCents === original.grossTotalCents;
+	let lines: StornoLineInput[];
+	let totals: VatAmounts;
+	if (full) {
+		lines = originalLines.map((line) => ({
+			position: line.position,
+			description: line.description,
+			qty: -line.qty,
+			unitPriceCents: line.unitPriceCents,
+			vatRateBp: line.vatRateBp,
+			netCents: -line.netCents,
+			vatCents: -line.vatCents,
+			grossCents: -line.grossCents
+		}));
+		totals = {
+			netCents: -original.netTotalCents,
+			vatCents: -original.vatTotalCents,
+			grossCents: -original.grossTotalCents
+		};
+	} else {
+		// One rate per document (issuance applies a single rate to every
+		// line), so the highest stored line rate IS the original's rate.
+		const vatRateBp = originalLines.reduce((max, line) => Math.max(max, line.vatRateBp), 0);
+		const amounts = partialStornoLineAmounts(grossCents, vatRateBp);
+		lines = [
+			{
+				position: 1,
+				description: `Storno parțial — factura ${original.displayNumber}`,
+				qty: -1,
+				unitPriceCents: grossCents,
+				vatRateBp,
+				...amounts
+			}
+		];
+		totals = amounts;
+	}
 
 	// The series row must exist (the original was numbered through it); the
 	// initial value only applies to the impossible fresh-series case.
@@ -286,39 +391,68 @@ export async function issueStornoForOrderInTx(
 			stornoOfInvoiceId: original.id,
 			issuedAt,
 			dueAt: issuedAt,
-			netTotalCents: -original.netTotalCents,
-			vatTotalCents: -original.vatTotalCents,
-			grossTotalCents: -original.grossTotalCents
+			netTotalCents: totals.netCents,
+			vatTotalCents: totals.vatCents,
+			grossTotalCents: totals.grossCents
 		})
 		.returning();
 
-	const originalLines = await tx
-		.select()
-		.from(invoiceLines)
-		.where(eq(invoiceLines.invoiceId, original.id))
-		.orderBy(asc(invoiceLines.position));
-	if (originalLines.length > 0) {
-		await tx.insert(invoiceLines).values(
-			originalLines.map((line) => ({
-				...line,
-				id: crypto.randomUUID(),
-				invoiceId: storno.id,
-				qty: -line.qty,
-				netCents: -line.netCents,
-				vatCents: -line.vatCents,
-				grossCents: -line.grossCents
-			}))
-		);
+	if (lines.length > 0) {
+		await tx
+			.insert(invoiceLines)
+			.values(lines.map((line) => ({ id: crypto.randomUUID(), invoiceId: storno.id, ...line })));
 	}
 
 	await appendFiscalOrderEvent(tx, {
 		orderId: order.id,
 		kind: 'storno-issued',
 		actor,
-		note: `${storno.displayNumber} → ${original.displayNumber}`
+		note: full
+			? `${storno.displayNumber} → ${original.displayNumber}`
+			: `${storno.displayNumber} → ${original.displayNumber} (parțial: ${grossCents})`
 	});
 
 	return { ok: true, value: { invoice: storno, created: true } };
+}
+
+/**
+ * The admin "storno parțial" action: reverse exactly what Stripe refunded
+ * and no earlier storno has reversed yet (`orders.refunded_cents` minus the
+ * stornos already issued). No amount is typed by the operator — the fiscal
+ * document follows the money movement Stripe recorded, so the two cannot
+ * disagree. Locks the order row (serializes with a racing webhook) and
+ * records a failure on the order's trail.
+ */
+export async function issuePartialStornoForOrder(
+	deps: InvoiceDeps,
+	orderId: string,
+	actor: string
+): Promise<InvoiceResult<IssuedDocument>> {
+	return deps.db.transaction(async (tx): Promise<InvoiceResult<IssuedDocument>> => {
+		const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update');
+		if (!order) return { ok: false, error: 'order-not-found' };
+		const original = await lockOriginalInvoice(tx, order.id);
+		if (!original) return { ok: false, error: 'no-invoice-to-reverse' };
+		const reversed = await reversedCentsFor(tx, original.id);
+		const grossCents = order.refundedCents - reversed;
+		if (grossCents <= 0) {
+			return {
+				ok: false,
+				error: 'nothing-to-storno',
+				detail: `rambursat ${order.refundedCents}, stornat ${reversed}`
+			};
+		}
+		const result = await issueStornoForOrderInTx(tx, order, actor, { grossCents });
+		if (!result.ok) {
+			await appendFiscalOrderEvent(tx, {
+				orderId,
+				kind: 'storno-failed',
+				actor,
+				note: result.detail ? `${result.error}: ${result.detail}` : result.error
+			});
+		}
+		return result;
+	});
 }
 
 export interface EnsuredDocuments {
@@ -356,6 +490,8 @@ export async function ensureInvoicesForOrder(
 			return issued;
 		}
 
+		// A refunded order gets whatever is still unreversed storno'd — the
+		// whole invoice, or the remainder after earlier partial stornos.
 		let storno: InvoiceRow | null = null;
 		if (order.status === 'refunded') {
 			const reversed = await issueStornoForOrderInTx(tx, order, actor);

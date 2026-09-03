@@ -26,9 +26,17 @@ An issued invoice is never UPDATEd and never DELETEd:
 
 A mistake or a refund is corrected by a **storno**: a new document with its own
 number in the same series, referencing the original via
-`storno_of_invoice_id`, whose lines negate the original's STORED amounts
-(negation, never recomputation — the reversal is exact by construction). One
-storno per invoice, enforced by a unique index.
+`storno_of_invoice_id`. A **full** storno's lines negate the original's STORED
+amounts (negation, never recomputation — the reversal is exact by
+construction). A **partial** storno (FIX-10: a partial Stripe refund) reverses
+an AMOUNT, not lines: one negative line at the original rate, VAT extracted
+from the refunded gross with the same half-up rule (`partialStornoLineAmounts`).
+Several stornos may therefore reference one invoice; the rule that matters —
+**Σ storno gross ≤ original gross** — is checked by the service under the
+original's row lock and enforced at the DB level by the `invoices_storno_bounded`
+`BEFORE INSERT` trigger (migration 0022). "Reverse the rest"
+(`issueStornoForOrderInTx` without an amount) is idempotent: once fully
+reversed it returns the latest storno instead of issuing another.
 
 ## Gapless, race-free numbering
 
@@ -69,8 +77,14 @@ registers, without touching code.
   ledger-guarded transaction that creates the order
   (`checkout.session.completed` → `issueInvoiceForOrderInTx`), so a redelivery
   cannot double-issue: the `processed_events` claim skips the whole effect, the
-  unique `(order_id) WHERE kind = 'invoice'` index backstops it. A refund
-  (`charge.refunded`) issues the storno the same way.
+  unique `(order_id) WHERE kind = 'invoice'` index backstops it. A FULL
+  refund (`charge.refunded` with `amount_refunded == amount`) issues the
+  storno the same way — of the whole invoice, or of the remainder if partial
+  stornos were issued before. A PARTIAL refund issues NO storno automatically:
+  the operator reviews the order and clicks "storno parțial"
+  (`issuePartialStornoForOrder`), which reverses exactly
+  `orders.refunded_cents − Σ stornos` — the document follows the money
+  Stripe recorded, no amount is typed.
 - **Failure never loses the order**: incomplete issuer settings (unset or
   seeded placeholders — see `REQUIRED_ISSUER_SETTINGS`) make issuance fail
   WITHOUT failing the order; the failure is recorded on the order's event trail

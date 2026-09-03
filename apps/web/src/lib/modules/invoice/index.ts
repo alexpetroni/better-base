@@ -4,6 +4,7 @@
 export {
 	computeLineAmounts,
 	extractVatFromGross,
+	partialStornoLineAmounts,
 	sumAmounts,
 	type VatAmounts,
 	type VatLineInput

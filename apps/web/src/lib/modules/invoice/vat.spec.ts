@@ -98,7 +98,11 @@ describe('partialStornoLineAmounts (a storno for a refunded amount, not for line
 	});
 
 	it('uses the same half-up extraction as issuance: the .5 tie rounds up, 0% has no VAT', () => {
-		expect(partialStornoLineAmounts(3, 2000)).toEqual({ grossCents: -3, vatCents: -1, netCents: -2 });
+		expect(partialStornoLineAmounts(3, 2000)).toEqual({
+			grossCents: -3,
+			vatCents: -1,
+			netCents: -2
+		});
 		expect(partialStornoLineAmounts(4990, 0)).toEqual({
 			grossCents: -4990,
 			vatCents: 0,
