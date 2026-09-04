@@ -79,7 +79,7 @@ beforeAll(async () => {
 		series: 'EXP',
 		currency: 'ron',
 		issuerName: 'Șosete Țesute SRL',
-		issuerCui: 'RO12345678',
+		issuerCui: 'RO12345676',
 		issuerVatRegistered: true,
 		issuerRegCom: 'J40/1234/2025',
 		issuerAddress: 'Str. Somnului 10, București',

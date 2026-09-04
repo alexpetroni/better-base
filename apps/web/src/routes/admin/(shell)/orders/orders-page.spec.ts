@@ -406,7 +406,7 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 			.values(
 				Object.entries({
 					'company.legalName': 'Better Sleep SRL',
-					'company.cui': 'RO12345678',
+					'company.cui': 'RO12345676',
 					'company.regCom': 'J40/1234/2025',
 					'company.address': 'Str. Somnului 10, București',
 					'invoice.seriesPrefix': 'QUE'
@@ -673,12 +673,12 @@ describe('/admin/orders/[id] ?/stornoPartial — the fiscal side of a partial re
 			.values(
 				Object.entries({
 					'company.legalName': 'Better Sleep SRL',
-					'company.cui': 'RO12345678',
+					'company.cui': 'RO12345676',
 					'company.vatRegistered': true,
 					'company.regCom': 'J40/1234/2025',
 					'company.address': 'Str. Somnului 10, București',
 					'invoice.seriesPrefix': 'QUE',
-					'invoice.vatRateBp': 2100
+					'invoice.vatStandardRates': '2025-08-01 21'
 				}).map(([key, value]) => ({ key, value }))
 			)
 			.onConflictDoNothing();

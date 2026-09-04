@@ -51,7 +51,7 @@ function saveEvent(fields: Record<string, string>): { request: Request; locals: 
 const COMPANY_FIELDS = {
 	group: 'company',
 	'company.legalName': 'Exemplu SRL',
-	'company.cui': 'RO12345678',
+	'company.cui': 'RO12345676',
 	'company.vatRegistered': 'on',
 	'company.regCom': 'J40/1234/2024',
 	'company.address': 'Str. Exemplu 1, București',
@@ -138,22 +138,42 @@ describe('/admin/settings save action', () => {
 		expect(await db.select().from(siteSettings)).toHaveLength(0);
 	});
 
-	it('converts percent/lei input to integer bp/bani on save', async () => {
+	it('stores the invoice group: integer next number, the rate schedule as trimmed text', async () => {
 		const result = await saveAction(
 			saveEvent({
 				group: 'invoice',
 				'invoice.seriesPrefix': 'BSL',
 				'invoice.nextNumber': '7',
 				'invoice.issuerPlace': 'București',
-				'invoice.vatRateBp': '19,5',
+				'invoice.vatStandardRates': ' 2017-01-01 19\n2025-08-01 21 ',
 				'invoice.paymentTermsNote': ''
 			})
 		);
 		expect(result).toEqual({ saved: true, group: 'invoice' });
 		const rows = await db.select().from(siteSettings);
 		const value = (key: string) => rows.find((row) => row.key === key)?.value;
-		expect(value('invoice.vatRateBp')).toBe(1950);
+		expect(value('invoice.vatStandardRates')).toBe('2017-01-01 19\n2025-08-01 21');
 		expect(value('invoice.nextNumber')).toBe(7);
+	});
+
+	it('refuses a rate schedule with a zero or unlisted rate, echoing the input', async () => {
+		const result = await saveAction(
+			saveEvent({
+				group: 'invoice',
+				'invoice.seriesPrefix': 'BSL',
+				'invoice.nextNumber': '7',
+				'invoice.issuerPlace': 'București',
+				'invoice.vatStandardRates': '2025-08-01 0',
+				'invoice.paymentTermsNote': ''
+			})
+		);
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		const data = result.data as { errors: Record<string, string>; values: Record<string, string> };
+		expect(data.errors).toEqual({ 'invoice.vatStandardRates': 'invalid-vat-rate' });
+		expect(data.values['invoice.vatStandardRates']).toBe('2025-08-01 0');
+		expect(
+			(await db.select().from(siteSettings)).find((row) => row.key === 'invoice.vatStandardRates')
+		).toBeUndefined();
 	});
 });
 
@@ -167,7 +187,7 @@ describe('client exposure through the public layout', () => {
 				'invoice.seriesPrefix': 'SECRET-SERIES',
 				'invoice.nextNumber': '1',
 				'invoice.issuerPlace': 'București',
-				'invoice.vatRateBp': '21',
+				'invoice.vatStandardRates': '2025-08-01 21',
 				'invoice.paymentTermsNote': ''
 			})
 		);

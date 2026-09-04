@@ -55,12 +55,12 @@ beforeAll(async () => {
 	await db.insert(siteSettings).values(
 		Object.entries({
 			'company.legalName': 'Exemplu SRL',
-			'company.cui': 'RO12345678',
+			'company.cui': 'RO12345676',
 			'company.vatRegistered': true,
 			'company.regCom': 'J40/1234/2024',
 			'company.address': 'Str. Exemplu 1, București',
 			'invoice.seriesPrefix': 'ASY',
-			'invoice.vatRateBp': 2100
+			'invoice.vatStandardRates': '2025-08-01 21'
 		}).map(([key, value]) => ({ key, value }))
 	);
 	// An active order-paid nurture sequence: what a PAID order enrolls into.

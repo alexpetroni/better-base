@@ -25,7 +25,7 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		dueAt: new Date('2026-08-07T10:15:00Z'),
 		currency: 'ron',
 		issuerName: 'Șosete Țesute SRL',
-		issuerCui: 'RO12345678',
+		issuerCui: 'RO12345676',
 		issuerVatRegistered: true,
 		issuerRegCom: 'J40/1234/2025',
 		issuerAddress: 'Str. Somnului 10, București',

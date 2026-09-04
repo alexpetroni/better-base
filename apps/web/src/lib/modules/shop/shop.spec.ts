@@ -13,7 +13,12 @@ import { emailLog } from '../email/schema.ts';
 import { settingsDefaults } from '../settings/registry.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { media } from '../media/schema.ts';
-import { buildCartMetadata, createCheckoutFromCart, loadCartDetails } from './checkout.ts';
+import {
+	buildCartMetadata,
+	createCheckoutFromCart,
+	loadCartDetails,
+	parseCartMetadata
+} from './checkout.ts';
 import { productsMediaReferenceCheck } from './media-ref.ts';
 import { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
 import { orderEvents, orderItems, orders, productPillars, products } from './schema.ts';
@@ -99,6 +104,19 @@ describe('product CRUD', () => {
 		expect((await updateProduct(deps, row.id, { pillarSlugs: ['nope'] })).ok).toBe(false);
 		const ok = await updateProduct(deps, row.id, { priceCents: 12345, stock: null });
 		expect(ok.ok && ok.value.priceCents).toBe(12345);
+	});
+
+	it('validates the per-product VAT rate against the RO allowlist; null means the standard rate', async () => {
+		const row = await makeProduct({ name: 'Cotă TVA' });
+		// Not a legal RO rate, a percent instead of basis points, and zero
+		// (category Z by accident) are all refused.
+		expect((await updateProduct(deps, row.id, { vatRateBp: 2200 })).ok).toBe(false);
+		expect((await updateProduct(deps, row.id, { vatRateBp: 21 })).ok).toBe(false);
+		expect((await updateProduct(deps, row.id, { vatRateBp: 0 })).ok).toBe(false);
+		const reduced = await updateProduct(deps, row.id, { vatRateBp: 1100 });
+		expect(reduced.ok && reduced.value.vatRateBp).toBe(1100);
+		const standard = await updateProduct(deps, row.id, { vatRateBp: null });
+		expect(standard.ok && standard.value.vatRateBp).toBeNull();
 	});
 
 	it('retagging is atomic: a failed re-insert keeps the old pillar tags (audit Theme B)', async () => {
@@ -324,6 +342,54 @@ describe('cart details and checkout session', () => {
 		);
 	});
 
+	it('the cart snapshot carries each product VAT rate, so the order items inherit it (FIX-12)', async () => {
+		const standard = await makeProduct({ name: 'Checkout TVA standard', priceCents: 4990 });
+		const reduced = await makeProduct({ name: 'Checkout TVA redusă', priceCents: 1150 });
+		expect((await updateProduct(deps, reduced.id, { vatRateBp: 1100 })).ok).toBe(true);
+
+		const outcome = await createCheckoutFromCart(
+			{ db, gateway, baseUrl: 'https://example.ro' },
+			{
+				items: [
+					{ productId: standard.id, qty: 1 },
+					{ productId: reduced.id, qty: 2 }
+				],
+				sitePillarSlugs: SLEEP_PILLARS,
+				shippingSettings: settingsDefaults(),
+				shippingOptionId: 'standard'
+			}
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		const session = gateway.sessions.get(outcome.sessionId)!;
+		expect(parseCartMetadata(session.metadata.cart)).toEqual([
+			{ i: standard.id, q: 1, p: 4990 },
+			{ i: reduced.id, q: 2, p: 1150, v: 1100 }
+		]);
+
+		// Through the webhook, the rate lands on the order items (null = standard).
+		const payload = completedSessionEvent({
+			id: 'cs_vat_snapshot',
+			cart: [
+				{ productId: standard.id, qty: 1, priceCents: 4990 },
+				{ productId: reduced.id, qty: 2, priceCents: 1150, vatRateBp: 1100 }
+			],
+			amountTotal: 7290
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+		const created = await processStripeEvent(webhookDeps, event);
+		if (created.kind !== 'order-created') throw new Error(`unexpected ${created.kind}`);
+		const items = await db.select().from(orderItems).where(eq(orderItems.orderId, created.orderId));
+		expect(
+			items.map((item) => [item.productId, item.vatRateBp]).sort((x, y) => (x[0]! < y[0]! ? -1 : 1))
+		).toEqual(
+			[
+				[standard.id, null],
+				[reduced.id, 1100]
+			].sort((x, y) => (x[0]! < y[0]! ? -1 : 1))
+		);
+	});
+
 	it('refuses an empty cart and carts with unavailable products', async () => {
 		const empty = await createCheckoutFromCart(
 			{ db, gateway, baseUrl: 'https://example.ro' },
@@ -353,7 +419,7 @@ describe('cart details and checkout session', () => {
 
 interface SessionOverrides {
 	id: string;
-	cart: Array<{ productId: string; qty: number; priceCents: number }>;
+	cart: Array<{ productId: string; qty: number; priceCents: number; vatRateBp?: number | null }>;
 	amountTotal: number;
 	paymentIntent?: string;
 	email?: string;

@@ -3,6 +3,7 @@ import {
 	computeLineAmounts,
 	extractVatFromGross,
 	partialStornoLineAmounts,
+	splitAmountByGross,
 	sumAmounts
 } from './vat.ts';
 
@@ -114,5 +115,42 @@ describe('partialStornoLineAmounts (a storno for a refunded amount, not for line
 		expect(() => partialStornoLineAmounts(0, 2100)).toThrow(/positive/);
 		expect(() => partialStornoLineAmounts(-100, 2100)).toThrow(/positive/);
 		expect(() => partialStornoLineAmounts(49.9, 2100)).toThrow(/integer/);
+	});
+});
+
+describe('splitAmountByGross (a partial storno of a MULTI-rate invoice)', () => {
+	// A refunded amount is money, not lines: on an invoice with several VAT
+	// rates it is split across the rate groups in proportion to each group's
+	// gross, in integer bani, leftover bani going to the largest fractional
+	// remainders — so the shares always add up to exactly the refund.
+	it('allocates pro rata with a largest-remainder correction; shares sum exactly', () => {
+		const shares = splitAmountByGross(1500, [
+			{ key: 2100, grossCents: 4990 },
+			{ key: 1100, grossCents: 2300 }
+		]);
+		// 1500 × 4990/7290 = 1026.75 → 1027 (gets the leftover ban); 1500 × 2300/7290 = 473.25 → 473.
+		expect(shares).toEqual([
+			{ key: 2100, amountCents: 1027 },
+			{ key: 1100, amountCents: 473 }
+		]);
+		expect(shares.reduce((sum, share) => sum + share.amountCents, 0)).toBe(1500);
+	});
+
+	it('a single group takes the whole amount; zero-share groups are dropped', () => {
+		expect(splitAmountByGross(1500, [{ key: 2100, grossCents: 4990 }])).toEqual([
+			{ key: 2100, amountCents: 1500 }
+		]);
+		expect(
+			splitAmountByGross(1, [
+				{ key: 2100, grossCents: 9000 },
+				{ key: 1100, grossCents: 1000 }
+			])
+		).toEqual([{ key: 2100, amountCents: 1 }]);
+	});
+
+	it('refuses to split more than the groups hold, or a non-positive amount', () => {
+		expect(() => splitAmountByGross(7291, [{ key: 2100, grossCents: 7290 }])).toThrow(/exceeds/);
+		expect(() => splitAmountByGross(0, [{ key: 2100, grossCents: 7290 }])).toThrow(/positive/);
+		expect(() => splitAmountByGross(10, [])).toThrow(/exceeds/);
 	});
 });

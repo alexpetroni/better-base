@@ -60,14 +60,14 @@ function memoryStorage() {
 
 const ISSUER_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
 	'company.legalName': 'Șosete Țesute SRL',
-	'company.cui': 'RO12345678',
+	'company.cui': 'RO12345676',
 	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2025',
 	'company.address': 'Str. Somnului 10, București',
 	'invoice.seriesPrefix': 'BSL',
 	'invoice.nextNumber': 101,
 	'invoice.issuerPlace': 'București',
-	'invoice.vatRateBp': 2100
+	'invoice.vatStandardRates': '2025-08-01 21'
 };
 
 async function setIssuerSettings(): Promise<void> {

@@ -32,12 +32,15 @@ import {
 describe('settings registry validation', () => {
 	it('accepts the valid shape of each kind', () => {
 		expect(validateSettingValue('company.legalName', 'Exemplu SRL')).toBeNull();
-		expect(validateSettingValue('company.cui', 'RO12345678')).toBeNull();
-		expect(validateSettingValue('company.cui', '12345678')).toBeNull();
+		expect(validateSettingValue('company.cui', 'RO12345676')).toBeNull();
+		expect(validateSettingValue('company.cui', '12345676')).toBeNull();
 		expect(validateSettingValue('company.vatRegistered', true)).toBeNull();
 		expect(validateSettingValue('company.contactEmail', 'contact@exemplu.ro')).toBeNull();
 		expect(validateSettingValue('legal.anpcSalUrl', 'https://anpc.ro/ce-este-sal/')).toBeNull();
-		expect(validateSettingValue('invoice.vatRateBp', 2100)).toBeNull();
+		expect(validateSettingValue('invoice.vatStandardRates', '2025-08-01 21')).toBeNull();
+		expect(
+			validateSettingValue('invoice.vatStandardRates', '2017-01-01 19\n2025-08-01 21')
+		).toBeNull();
 		expect(validateSettingValue('invoice.nextNumber', 1)).toBeNull();
 		expect(validateSettingValue('shop.freeShippingThresholdBani', 0)).toBeNull();
 		// Optional text may stay empty.
@@ -48,30 +51,49 @@ describe('settings registry validation', () => {
 		// Empty CUI (launch-required text must be non-empty on save).
 		expect(validateSettingValue('company.cui', '')).toBe('required');
 		expect(validateSettingValue('company.cui', 'not-a-cui')).toBe('invalid-cui');
+		// Shape alone is not enough: the mod-11 control digit must check out
+		// (audit 2026-09-03 P1 "CUI is shape-only").
+		expect(validateSettingValue('company.cui', 'RO12345676')).toBe('invalid-cui');
+		expect(validateSettingValue('company.cui', '12345678')).toBe('invalid-cui');
 		// Non-URL ANPC link.
 		expect(validateSettingValue('legal.anpcSalUrl', 'anpc punct ro')).toBe('invalid-url');
 		expect(validateSettingValue('legal.anpcSolUrl', 'ftp://example.com')).toBe('invalid-url');
-		// Negative VAT rate and a rate above 100%.
-		expect(validateSettingValue('invoice.vatRateBp', -100)).toBe('invalid-number');
-		expect(validateSettingValue('invoice.vatRateBp', 10_100)).toBe('invalid-number');
+		// The standard-rate schedule: a zero rate on a registered issuer would
+		// emit category Z by accident, an unlisted rate is a typo, and a
+		// malformed line is not a schedule at all.
+		expect(validateSettingValue('invoice.vatStandardRates', '')).toBe('required');
+		expect(validateSettingValue('invoice.vatStandardRates', '2025-08-01 0')).toBe(
+			'invalid-vat-rate'
+		);
+		expect(validateSettingValue('invoice.vatStandardRates', '2025-08-01 22')).toBe(
+			'invalid-vat-rate'
+		);
+		expect(validateSettingValue('invoice.vatStandardRates', '21')).toBe('invalid-vat-rate');
+		expect(validateSettingValue('invoice.vatStandardRates', 2100)).toBe('invalid-value');
 		// Non-integers and wrong primitive types never validate.
-		expect(validateSettingValue('invoice.vatRateBp', 21.5)).toBe('invalid-number');
 		expect(validateSettingValue('invoice.nextNumber', 0)).toBe('invalid-number');
 		expect(validateSettingValue('company.contactEmail', 'not-an-email')).toBe('invalid-email');
 		expect(validateSettingValue('company.vatRegistered', 'da')).toBe('invalid-value');
 		expect(validateSettingValue('company.legalName', 42)).toBe('invalid-value');
 	});
 
-	it('parses admin input with integer math only: lei → bani, percent → bp', () => {
-		expect(parseSettingInput('invoice.vatRateBp', '21')).toEqual({ ok: true, value: 2100 });
-		expect(parseSettingInput('invoice.vatRateBp', '19,5')).toEqual({ ok: true, value: 1950 });
+	it('parses admin input with integer math only: lei → bani', () => {
 		expect(parseSettingInput('shop.freeShippingThresholdBani', '250')).toEqual({
 			ok: true,
 			value: 25_000
 		});
+		expect(parseSettingInput('shop.shippingStandardPriceBani', '19,90')).toEqual({
+			ok: true,
+			value: 1990
+		});
 		expect(parseSettingInput('invoice.nextNumber', '42')).toEqual({ ok: true, value: 42 });
+		// The rate schedule is stored as the (trimmed) text the operator typed.
+		expect(parseSettingInput('invoice.vatStandardRates', ' 2025-08-01 21 ')).toEqual({
+			ok: true,
+			value: '2025-08-01 21'
+		});
 		// Signs, letters and empty numerics are rejected, not guessed at.
-		expect(parseSettingInput('invoice.vatRateBp', '-5')).toEqual({
+		expect(parseSettingInput('shop.shippingStandardPriceBani', '-5')).toEqual({
 			ok: false,
 			code: 'invalid-number'
 		});
@@ -100,7 +122,7 @@ describe('settings registry validation', () => {
 
 	it('returns the declared default for a never-set key', () => {
 		const settings = mergeSettings([]);
-		expect(settings['invoice.vatRateBp']).toBe(2100);
+		expect(settings['invoice.vatStandardRates']).toBe('2025-08-01 21');
 		expect(settings['invoice.nextNumber']).toBe(1);
 		expect(settings['company.vatRegistered']).toBe(false);
 		expect(settings['company.legalName']).toBe('');
@@ -111,10 +133,10 @@ describe('settings registry validation', () => {
 		const settings = mergeSettings([
 			{ key: 'company.legalName', value: 'Exemplu SRL' },
 			{ key: 'future.notYetKnown', value: 'from a newer deploy' },
-			{ key: 'invoice.vatRateBp', value: 'not-a-number' }
+			{ key: 'invoice.nextNumber', value: 'not-a-number' }
 		]);
 		expect(settings['company.legalName']).toBe('Exemplu SRL');
-		expect(settings['invoice.vatRateBp']).toBe(2100);
+		expect(settings['invoice.nextNumber']).toBe(1);
 		expect('future.notYetKnown' in settings).toBe(false);
 	});
 
@@ -128,7 +150,7 @@ describe('settings registry validation', () => {
 		expect(Object.keys(exposed)).not.toContain('company.bank');
 		expect(Object.keys(exposed)).not.toContain('invoice.seriesPrefix');
 		expect(Object.keys(exposed)).not.toContain('invoice.nextNumber');
-		expect(Object.keys(exposed)).not.toContain('invoice.vatRateBp');
+		expect(Object.keys(exposed)).not.toContain('invoice.vatStandardRates');
 	});
 });
 
@@ -176,7 +198,9 @@ const STAFF = { id: 'settings-staff-1', email: 'settings-admin@example.com' };
 /** Valid values for every launch-required key (used to green launch:check). */
 const VALID_LAUNCH_VALUES: Partial<SiteSettings> = {
 	'company.legalName': 'Exemplu SRL',
-	'company.cui': 'RO12345678',
+	'company.cui': 'RO12345676',
+	// The RO prefix must agree with the registration flag (FIX-12).
+	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2024',
 	'company.address': 'Str. Exemplu 1, București',
 	'company.contactEmail': 'contact@exemplu.ro',
@@ -185,7 +209,7 @@ const VALID_LAUNCH_VALUES: Partial<SiteSettings> = {
 	'legal.anpcSolUrl': 'https://ec.europa.eu/consumers/odr',
 	'invoice.seriesPrefix': 'BSL',
 	'invoice.issuerPlace': 'București',
-	'invoice.vatRateBp': 2100,
+	'invoice.vatStandardRates': '2025-08-01 21',
 	// NEXT-8: shipping must be a conscious pricing decision before launch.
 	'shop.shippingStandardPriceBani': 1990
 };
@@ -241,13 +265,13 @@ describe('settings service (integration)', () => {
 	it('writes nothing when any entry is invalid', async () => {
 		const result = await saveSettings(
 			{ db },
-			{ 'company.legalName': 'Exemplu SRL', 'invoice.vatRateBp': -100 },
+			{ 'company.legalName': 'Exemplu SRL', 'invoice.vatStandardRates': '2025-08-01 0' },
 			STAFF.id
 		);
 		expect(result).toEqual({
 			ok: false,
 			error: 'invalid-value',
-			detail: 'invoice.vatRateBp: invalid-number'
+			detail: 'invoice.vatStandardRates: invalid-vat-rate'
 		});
 		expect(await db.select().from(siteSettings)).toHaveLength(0);
 	});
@@ -280,7 +304,7 @@ describe('settings launch rule (integration)', () => {
 		const placeholders = await settingsLaunchProblems({ db });
 		expect(placeholders.length).toBe(LAUNCH_REQUIRED_SETTING_KEYS.length);
 		expect(placeholders.join('\n')).toMatch(/"company\.cui" still holds the seeded placeholder/);
-		expect(placeholders.join('\n')).toMatch(/"invoice\.vatRateBp" is not set/);
+		expect(placeholders.join('\n')).toMatch(/"invoice\.vatStandardRates" is not set/);
 	});
 
 	it('flags an invalid stored value, and passes once every key is really set', async () => {
@@ -297,5 +321,22 @@ describe('settings launch rule (integration)', () => {
 		expect(problems).toEqual([
 			'site setting "legal.anpcSalUrl" has an invalid value (invalid-url) — fix it at /admin/settings'
 		]);
+	});
+
+	it('flags a CUI whose RO prefix contradicts the VAT-registration flag (FIX-12)', async () => {
+		await seedPlaceholderSettings(db);
+		await saveSettings({ db }, VALID_LAUNCH_VALUES, STAFF.id);
+		expect(await settingsLaunchProblems({ db })).toEqual([]);
+
+		await saveSettings({ db }, { 'company.vatRegistered': false }, STAFF.id);
+		const prefixed = await settingsLaunchProblems({ db });
+		expect(prefixed).toHaveLength(1);
+		expect(prefixed[0]).toMatch(/"company\.cui".*RO prefix.*"company\.vatRegistered"/);
+
+		await saveSettings({ db }, { 'company.cui': '12345676' }, STAFF.id);
+		expect(await settingsLaunchProblems({ db })).toEqual([]);
+
+		await saveSettings({ db }, { 'company.vatRegistered': true }, STAFF.id);
+		expect(await settingsLaunchProblems({ db })).toHaveLength(1);
 	});
 });

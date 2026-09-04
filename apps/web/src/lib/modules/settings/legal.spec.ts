@@ -11,7 +11,7 @@ function filledSettings(overrides: Partial<PublicSiteSettings> = {}): PublicSite
 	return {
 		...clientSafeSettings(settingsDefaults()),
 		'company.legalName': 'Exemplu Teste SRL',
-		'company.cui': '12345678',
+		'company.cui': '12345676',
 		'company.vatRegistered': true,
 		'company.regCom': 'J40/1234/2024',
 		'company.address': 'Str. Somnului 1\nBucurești',
@@ -26,11 +26,11 @@ function filledSettings(overrides: Partial<PublicSiteSettings> = {}): PublicSite
 
 describe('displayCui', () => {
 	it('prefixes RO exactly when VAT-registered, never doubling it', () => {
-		expect(displayCui('12345678', true)).toBe('RO12345678');
-		expect(displayCui('RO12345678', true)).toBe('RO12345678');
-		expect(displayCui('ro12345678', true)).toBe('RO12345678');
-		expect(displayCui('12345678', false)).toBe('12345678');
-		expect(displayCui('RO12345678', false)).toBe('12345678');
+		expect(displayCui('12345676', true)).toBe('RO12345676');
+		expect(displayCui('RO12345676', true)).toBe('RO12345676');
+		expect(displayCui('ro12345676', true)).toBe('RO12345676');
+		expect(displayCui('12345676', false)).toBe('12345676');
+		expect(displayCui('RO12345676', false)).toBe('12345676');
 	});
 });
 
@@ -38,7 +38,7 @@ describe('legalIdentity', () => {
 	it('maps every filled field, applying the CUI display rule', () => {
 		expect(legalIdentity(filledSettings())).toEqual({
 			legalName: 'Exemplu Teste SRL',
-			cui: 'RO12345678',
+			cui: 'RO12345676',
 			regCom: 'J40/1234/2024',
 			address: 'Str. Somnului 1\nBucurești',
 			contactEmail: 'contact@exemplu-teste.ro',
@@ -66,7 +66,7 @@ describe('legalIdentity', () => {
 
 	it('never RO-prefixes a placeholder CUI', () => {
 		const identity = legalIdentity(
-			filledSettings({ 'company.cui': 'PLACEHOLDER — CUI / codul fiscal (ex. RO12345678)' })
+			filledSettings({ 'company.cui': 'PLACEHOLDER — CUI / codul fiscal (ex. RO12345676)' })
 		);
 		expect(identity.cui).toBeNull();
 	});
@@ -76,7 +76,7 @@ describe('LegalIdentity component (SSR)', () => {
 	it('renders every required field from settings', () => {
 		const { body } = render(LegalIdentity, { props: { settings: filledSettings() } });
 		expect(body).toContain('Exemplu Teste SRL');
-		expect(body).toContain('RO12345678');
+		expect(body).toContain('RO12345676');
 		expect(body).toContain('J40/1234/2024');
 		expect(body).toContain('Str. Somnului 1');
 		expect(body).toContain('mailto:contact@exemplu-teste.ro');

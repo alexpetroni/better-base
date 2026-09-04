@@ -24,7 +24,7 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		dueAt: new Date('2026-08-07T10:15:00Z'),
 		currency: 'ron',
 		issuerName: 'Șosete Țesute SRL',
-		issuerCui: 'RO12345678',
+		issuerCui: 'RO12345676',
 		issuerVatRegistered: true,
 		issuerRegCom: 'J40/1234/2025',
 		issuerAddress: 'Str. Somnului 10, București',
@@ -114,7 +114,7 @@ describe('renderInvoicePdf', () => {
 		expect(text).toContain('07.08.2026');
 		// Issuer identification — with comma-below diacritics surviving.
 		expect(text).toContain('Șosete Țesute SRL');
-		expect(text).toContain('RO12345678');
+		expect(text).toContain('RO12345676');
 		expect(text).toContain('J40/1234/2025');
 		expect(text).toContain('Str. Somnului 10, București');
 		expect(text).toContain('RO49AAAA1B31007593840000');

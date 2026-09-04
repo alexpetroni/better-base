@@ -16,8 +16,15 @@ import {
 	verifyStripeEvent,
 	type WebhookDeps
 } from '../shop/webhook.ts';
+import { loadInvoiceModel } from './documents.ts';
+import { renderEFacturaXml } from './efactura.ts';
+import { validateEFacturaXml } from './efactura-validate.ts';
 import { invoiceLines, invoices, invoiceSeries } from './schema.ts';
-import { composeDisplayNumber, ensureInvoicesForOrder } from './service.ts';
+import {
+	composeDisplayNumber,
+	ensureInvoicesForOrder,
+	issuePartialStornoForOrder
+} from './service.ts';
 
 // Integration against the compose Postgres (TEST_DATABASE_URL, re-migrated
 // fresh): the fiscal record end-to-end — gapless numbering under a real race,
@@ -34,7 +41,7 @@ let webhookDeps: WebhookDeps;
 /** The complete, valid issuer configuration the tests start from. */
 const ISSUER_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
 	'company.legalName': 'Better Sleep SRL',
-	'company.cui': 'RO12345678',
+	'company.cui': 'RO12345676',
 	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2025',
 	'company.address': 'Str. Somnului 10, București',
@@ -43,7 +50,8 @@ const ISSUER_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
 	'invoice.seriesPrefix': 'BSL',
 	'invoice.nextNumber': 101,
 	'invoice.issuerPlace': 'București',
-	'invoice.vatRateBp': 2100
+	// The effective-dated standard rate (FIX-12): one line per rate change.
+	'invoice.vatStandardRates': '2025-08-01 21'
 };
 
 async function setSettings(entries: Partial<Record<SettingKey, SettingJsonValue>>): Promise<void> {
@@ -59,9 +67,14 @@ let seq = 0;
 async function insertPaidOrder(input?: {
 	status?: 'paid' | 'refunded' | 'pending';
 	paymentIntent?: string;
-	items?: Array<{ name: string; qty: number; priceCents: number }>;
+	/** Per-item VAT rate snapshot (FIX-12); omitted = the standard rate at the order date. */
+	items?: Array<{ name: string; qty: number; priceCents: number; vatRateBp?: number | null }>;
+	/** The order (= chargeability) date; defaults to now. */
+	createdAt?: Date;
+	refundedCents?: number;
 }) {
 	const id = `inv-order-${++seq}`;
+	const items = input?.items ?? [{ name: 'Pernă memory foam', qty: 1, priceCents: 4990 }];
 	const [order] = await db
 		.insert(orders)
 		.values({
@@ -69,20 +82,22 @@ async function insertPaidOrder(input?: {
 			email: `client-${seq}@example.ro`,
 			stripeSessionId: `cs_${id}`,
 			stripePaymentIntent: input?.paymentIntent ?? null,
-			amountTotalCents: 4990,
+			amountTotalCents: items.reduce((sum, item) => sum + item.qty * item.priceCents, 0),
 			currency: 'ron',
 			status: input?.status ?? 'paid',
-			shippingAddress: { name: 'Ana Pop', line1: 'Str. Exemplu 1', city: 'Cluj-Napoca' }
+			shippingAddress: { name: 'Ana Pop', line1: 'Str. Exemplu 1', city: 'Cluj-Napoca' },
+			...(input?.createdAt ? { createdAt: input.createdAt } : {}),
+			...(input?.refundedCents !== undefined ? { refundedCents: input.refundedCents } : {})
 		})
 		.returning();
-	const items = input?.items ?? [{ name: 'Pernă memory foam', qty: 1, priceCents: 4990 }];
 	await db.insert(orderItems).values(
 		items.map((item, i) => ({
 			id: `${id}-item-${i}`,
 			orderId: id,
 			name: item.name,
 			qty: item.qty,
-			priceCents: item.priceCents
+			priceCents: item.priceCents,
+			vatRateBp: item.vatRateBp ?? null
 		}))
 	);
 	return order;
@@ -250,7 +265,7 @@ describe('issuance snapshot', () => {
 			orderId: order.id,
 			currency: 'ron',
 			issuerName: 'Better Sleep SRL',
-			issuerCui: 'RO12345678',
+			issuerCui: 'RO12345676',
 			issuerVatRegistered: true,
 			issuerRegCom: 'J40/1234/2025',
 			issuerAddress: 'Str. Somnului 10, București',
@@ -316,7 +331,7 @@ describe('automatic idempotent issuance (webhook path)', () => {
 			id: 'cs_auto_invoice',
 			cart,
 			amountTotal: 4990,
-			company: { name: 'Client SRL', cui: 'RO999888', regCom: 'J12/99/2020' }
+			company: { name: 'Client SRL', cui: 'RO999885', regCom: 'J12/99/2020' }
 		});
 		expect((await deliver(payload)).kind).toBe('order-created');
 
@@ -327,7 +342,7 @@ describe('automatic idempotent issuance (webhook path)', () => {
 		// The B2B capture flowed through metadata onto the order…
 		expect(order.billingCompany).toEqual({
 			name: 'Client SRL',
-			cui: 'RO999888',
+			cui: 'RO999885',
 			regCom: 'J12/99/2020'
 		});
 
@@ -336,7 +351,7 @@ describe('automatic idempotent issuance (webhook path)', () => {
 		expect(docs[0].kind).toBe('invoice');
 		// …and into the invoice snapshot.
 		expect(docs[0].buyerCompanyName).toBe('Client SRL');
-		expect(docs[0].buyerCompanyCui).toBe('RO999888');
+		expect(docs[0].buyerCompanyCui).toBe('RO999885');
 		expect(docs[0].buyerName).toBe('Client SRL');
 
 		// The issuance is on the order's audit trail.
@@ -612,5 +627,152 @@ describe('series bookkeeping', () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].series).toBe('BSL');
 		expect(rows[0].nextNumber).toBeGreaterThan(101);
+	});
+});
+
+describe('VAT model (FIX-12): per-product rates, the order-date standard rate', () => {
+	it('two products at 21% and 11% → lines at their own rates, two tax subtotals, integer totals reconcile', async () => {
+		const order = await insertPaidOrder({
+			items: [
+				{ name: 'Pernă memory foam', qty: 1, priceCents: 4990 }, // standard rate
+				{ name: 'Ceai de seară', qty: 2, priceCents: 1150, vatRateBp: 1100 } // reduced (food)
+			]
+		});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'vat-model-test');
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const invoice = result.value.invoice;
+
+		const lines = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, invoice.id))
+			.orderBy(asc(invoiceLines.position));
+		expect(lines.map((line) => line.vatRateBp)).toEqual([2100, 1100]);
+		// 4990 @ 21 %: VAT 866 / net 4124; 2300 @ 11 %: 2300·1100/11100 = 227.9 → 228 / net 2072.
+		expect(lines[0]).toMatchObject({ grossCents: 4990, vatCents: 866, netCents: 4124 });
+		expect(lines[1]).toMatchObject({ grossCents: 2300, vatCents: 228, netCents: 2072 });
+		expect(invoice).toMatchObject({
+			netTotalCents: 4124 + 2072,
+			vatTotalCents: 866 + 228,
+			grossTotalCents: 7290
+		});
+		expect(invoice.netTotalCents + invoice.vatTotalCents).toBe(invoice.grossTotalCents);
+		expect(invoice.grossTotalCents).toBe(order.amountTotalCents);
+
+		// The e-Factura XML carries ONE TaxSubtotal per rate and still validates.
+		const model = (await loadInvoiceModel({ db }, invoice.id))!;
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml.match(/<cac:TaxSubtotal>/g)).toHaveLength(2);
+		expect(xml).toContain('<cbc:Percent>21</cbc:Percent>');
+		expect(xml).toContain('<cbc:Percent>11</cbc:Percent>');
+	});
+
+	it('a retry issued after a standard-rate change uses the rate in force on the ORDER date', async () => {
+		// The schedule changes on 2026-07-01; one order before it, one after.
+		await setSettings({ 'invoice.vatStandardRates': '2025-08-01 21\n2026-07-01 19' });
+		const before = await insertPaidOrder({ createdAt: new Date('2026-06-15T10:00:00Z') });
+		const after = await insertPaidOrder({ createdAt: new Date('2026-07-02T10:00:00Z') });
+
+		const issuedBefore = await ensureInvoicesForOrder({ db }, before.id, 'rate-change-test');
+		const issuedAfter = await ensureInvoicesForOrder({ db }, after.id, 'rate-change-test');
+		expect(issuedBefore.ok && issuedAfter.ok).toBe(true);
+		if (!issuedBefore.ok || !issuedAfter.ok) return;
+
+		const [lineBefore] = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, issuedBefore.value.invoice.id));
+		const [lineAfter] = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, issuedAfter.value.invoice.id));
+		expect(lineBefore.vatRateBp).toBe(2100);
+		expect(lineBefore.vatCents).toBe(866);
+		expect(lineAfter.vatRateBp).toBe(1900);
+		expect(lineAfter.vatCents).toBe(797); // 4990·1900/11900 = 796.7 → 797
+	});
+
+	it('a Bucharest-midnight order takes the rate of the Bucharest day, not the UTC day', async () => {
+		await setSettings({ 'invoice.vatStandardRates': '2025-08-01 21\n2026-07-01 19' });
+		// 21:30 UTC on June 30 is already July 1 in Bucharest (EEST).
+		const order = await insertPaidOrder({ createdAt: new Date('2026-06-30T21:30:00Z') });
+		const issued = await ensureInvoicesForOrder({ db }, order.id, 'rate-tz-test');
+		expect(issued.ok).toBe(true);
+		if (!issued.ok) return;
+		const [line] = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, issued.value.invoice.id));
+		expect(line.vatRateBp).toBe(1900);
+	});
+
+	it('an unparseable rate schedule fails issuance as settings-incomplete, naming the key', async () => {
+		await setSettings({ 'invoice.vatStandardRates': '2025-08-01 22' });
+		const order = await insertPaidOrder({});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'bad-schedule-test');
+		expect(!result.ok && result.error).toBe('settings-incomplete');
+		expect(!result.ok && result.detail).toContain('invoice.vatStandardRates');
+		expect(await invoicesForOrder(order.id)).toHaveLength(0);
+	});
+
+	it('a partial storno of a multi-rate invoice splits the refund across the rates pro rata', async () => {
+		const order = await insertPaidOrder({
+			items: [
+				{ name: 'Pernă memory foam', qty: 1, priceCents: 4990 },
+				{ name: 'Ceai de seară', qty: 2, priceCents: 1150, vatRateBp: 1100 }
+			],
+			refundedCents: 1500
+		});
+		expect((await ensureInvoicesForOrder({ db }, order.id, 'split-test')).ok).toBe(true);
+		const storno = await issuePartialStornoForOrder({ db }, order.id, 'admin@example.ro');
+		expect(storno.ok).toBe(true);
+		if (!storno.ok) return;
+
+		const lines = await db
+			.select()
+			.from(invoiceLines)
+			.where(eq(invoiceLines.invoiceId, storno.value.invoice.id))
+			.orderBy(asc(invoiceLines.position));
+		// 1500 split 4990:2300 → 1027 @ 21 % (VAT 178) and 473 @ 11 % (VAT 47).
+		expect(lines.map((line) => [line.vatRateBp, line.grossCents, line.vatCents])).toEqual([
+			[2100, -1027, -178],
+			[1100, -473, -47]
+		]);
+		expect(storno.value.invoice.grossTotalCents).toBe(-1500);
+		expect(storno.value.invoice.vatTotalCents).toBe(-225);
+		expect(storno.value.invoice.netTotalCents).toBe(-1275);
+		const model = (await loadInvoiceModel({ db }, storno.value.invoice.id))!;
+		expect(validateEFacturaXml(renderEFacturaXml(model), model)).toEqual([]);
+	});
+});
+
+describe('issuer CUI (FIX-12): display form and the prefix/registration rule', () => {
+	it('snapshots the CUI in display form: uppercase, RO prefix exactly when VAT-registered', async () => {
+		await setSettings({ 'company.cui': 'ro12345676', 'company.vatRegistered': true });
+		const registered = await ensureInvoicesForOrder(
+			{ db },
+			(await insertPaidOrder({})).id,
+			'cui-test'
+		);
+		expect(registered.ok && registered.value.invoice.issuerCui).toBe('RO12345676');
+	});
+
+	it('a RO-prefixed CUI on a VAT-unregistered issuer fails issuance, naming company.cui', async () => {
+		await setSettings({ 'company.cui': 'RO12345676', 'company.vatRegistered': false });
+		const order = await insertPaidOrder({});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'cui-mismatch-test');
+		expect(!result.ok && result.error).toBe('settings-incomplete');
+		expect(!result.ok && result.detail).toContain('company.cui');
+		expect(await invoicesForOrder(order.id)).toHaveLength(0);
+	});
+
+	it('a bare CUI on a VAT-registered issuer is the same mismatch', async () => {
+		await setSettings({ 'company.cui': '12345676', 'company.vatRegistered': true });
+		const order = await insertPaidOrder({});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'cui-mismatch-test');
+		expect(!result.ok && result.error).toBe('settings-incomplete');
+		expect(!result.ok && result.detail).toContain('company.cui');
 	});
 });
