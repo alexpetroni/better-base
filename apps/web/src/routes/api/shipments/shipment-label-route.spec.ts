@@ -113,6 +113,7 @@ beforeAll(async () => {
 		'admin@example.ro'
 	);
 	if (!created.ok) throw new Error(`shipment setup failed: ${created.error}`);
+	if (!created.value.shipment.awb) throw new Error('shipment setup failed: no AWB');
 	shipmentId = created.value.shipment.id;
 	awb = created.value.shipment.awb;
 

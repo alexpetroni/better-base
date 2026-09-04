@@ -110,14 +110,21 @@ function sessionEvent(input: {
 				currency: 'ron',
 				payment_intent: input.paymentIntent,
 				payment_status: 'paid',
+				// Phone + county: what the courier needs before an AWB (FIX-11).
 				customer_details: {
 					email: input.email ?? `client-${input.id}@example.ro`,
-					name: 'Ana Pop'
+					name: 'Ana Pop',
+					phone: '+40723000111'
 				},
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
-						address: { line1: 'Str. Somnului 10', city: 'Cluj-Napoca', country: 'RO' }
+						address: {
+							line1: 'Str. Somnului 10',
+							city: 'Cluj-Napoca',
+							state: 'Cluj',
+							country: 'RO'
+						}
 					}
 				},
 				metadata: { cart: buildCartMetadata(input.cart) }

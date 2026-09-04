@@ -36,6 +36,25 @@ export interface CreatedShipment {
 export type CourierTrackingStatus =
 	'registered' | 'in-transit' | 'delivered' | 'returned' | 'cancelled';
 
+/**
+ * The courier rejected the CREDENTIALS (login refused, or a 401/403 on a
+ * call): no AWB is at fault, so the status sync aborts the whole run instead
+ * of backing every row off one by one. Checked by name as well as by class so
+ * it survives duplicated module instances.
+ */
+export class CourierAuthError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'CourierAuthError';
+	}
+}
+
+export function isCourierAuthError(err: unknown): err is CourierAuthError {
+	return (
+		err instanceof CourierAuthError || (err instanceof Error && err.name === 'CourierAuthError')
+	);
+}
+
 export interface CourierProvider {
 	/** Stable adapter id stored on the shipment row (`mock` | `sameday`). */
 	readonly name: string;

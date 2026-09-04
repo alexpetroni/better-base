@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import Stripe from 'stripe';
 import { resolveSiteConfig } from '../../config/index.ts';
@@ -136,6 +136,18 @@ function gatedCourier(): { courier: CourierProvider; release: () => void } {
 			}
 		}
 	};
+}
+
+/**
+ * Move every in-flight row out of the polling set. Only in-flight rows: a
+ * replaced (cancelled/failed) row set to `delivered` would become a second
+ * live row for its order and trip the partial unique index.
+ */
+async function parkInFlight(): Promise<void> {
+	await db
+		.update(shipments)
+		.set({ status: 'delivered' })
+		.where(inArray(shipments.status, ['registered', 'in-transit']));
 }
 
 async function shipmentRows(orderId: string): Promise<ShipmentRow[]> {
@@ -612,7 +624,7 @@ describe('cron shipment-status sync', () => {
 	it('is a no-op with nothing in flight', async () => {
 		// Everything registered so far in THIS block's fresh sub-state: move all
 		// existing in-flight rows out of the way by syncing against reality.
-		await db.update(shipments).set({ status: 'delivered' });
+		await parkInFlight();
 		const result = await syncShipmentStatuses({ db, courier });
 		expect(result).toEqual({ polled: 0, updated: 0, errors: 0 });
 	});
@@ -620,7 +632,7 @@ describe('cron shipment-status sync', () => {
 	it('updates changed statuses, transitions fulfillment, and is idempotent', async () => {
 		const order = await orderViaWebhook({});
 		const created = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
-		if (!created.ok) throw new Error('shipment failed');
+		if (!created.ok || !created.value.shipment.awb) throw new Error('shipment failed');
 		const awb = created.value.shipment.awb;
 
 		// No courier-side change yet: polled but nothing written.
@@ -678,7 +690,7 @@ describe('cron shipment-status sync', () => {
 		const after = await db.select().from(shipments).where(eq(shipments.status, 'registered'));
 		expect(after.every((r) => r.lastSyncedAt !== null)).toBe(true);
 		// Park them so later tests start from a clean in-flight set.
-		await db.update(shipments).set({ status: 'delivered' });
+		await parkInFlight();
 	});
 
 	it('a courier lookup failure skips the row and keeps the run alive', async () => {
@@ -691,7 +703,7 @@ describe('cron shipment-status sync', () => {
 		const result = await syncShipmentStatuses({ db, courier });
 		expect(result.polled).toBe(1);
 		expect(result.updated).toBe(0);
-		await db.update(shipments).set({ status: 'delivered' });
+		await parkInFlight();
 	});
 });
 
@@ -708,18 +720,22 @@ describe('shipment-sync rotation and health', () => {
 		orderA: OrderRow;
 		orderB: OrderRow;
 	}> {
-		await db.update(shipments).set({ status: 'delivered' });
+		await parkInFlight();
 		const orderA = await orderViaWebhook({});
 		const orderB = await orderViaWebhook({});
 		const a = await createShipmentForOrder(shipDeps, orderA.id, ACTOR);
 		const b = await createShipmentForOrder(shipDeps, orderB.id, ACTOR);
 		if (!a.ok || !b.ok) throw new Error('shipment setup failed');
-		// A was synced long ago, B never: A polls first.
+		// A was synced an hour ago, B just now: oldest-synced first, so A leads.
 		await db
 			.update(shipments)
 			.set({ lastSyncedAt: new Date(Date.now() - 3_600_000) })
 			.where(eq(shipments.id, a.value.shipment.id));
-		return { a: a.value.shipment, b: b.value.shipment, orderA, orderB };
+		await db
+			.update(shipments)
+			.set({ lastSyncedAt: new Date() })
+			.where(eq(shipments.id, b.value.shipment.id));
+		return { a: await row(a.value.shipment.id), b: await row(b.value.shipment.id), orderA, orderB };
 	}
 
 	async function row(id: string): Promise<ShipmentRow> {
@@ -789,9 +805,9 @@ describe('shipment-sync rotation and health', () => {
 		expect(result).toEqual({ polled: 1, updated: 0, errors: 1, aborted: 'auth' });
 		expect(errorLog).toHaveBeenCalledWith(expect.stringMatching(/credentials|authentication/i));
 
-		// B was never polled; A records the failure (visible on the dashboard)
+		// B was not polled; A records the failure (visible on the dashboard)
 		// but is NOT backed off: the credentials are at fault, not the AWB.
-		expect((await row(b.id)).lastSyncedAt).toBeNull();
+		expect((await row(b.id)).lastSyncedAt?.getTime()).toBe(b.lastSyncedAt?.getTime());
 		const rowA = await row(a.id);
 		expect(rowA.errorCount).toBe(1);
 		expect(rowA.lastError).toContain('authentication failed');
@@ -818,7 +834,7 @@ describe('shipment-sync rotation and health', () => {
 // `shipped` forever and the cancelled row blocked any replacement AWB.
 describe('courier-cancelled AWB (outside the refund path)', () => {
 	it('moves the order back to packed, marks the row cancelled, and allows a replacement AWB', async () => {
-		await db.update(shipments).set({ status: 'delivered' });
+		await parkInFlight();
 		const order = await orderViaWebhook({});
 		const first = await createShipmentForOrder(shipDeps, order.id, ACTOR);
 		if (!first.ok) throw new Error('shipment failed');
@@ -894,7 +910,7 @@ describe('refund vs fulfillment/shipment rule', () => {
 	it('refund after an AWB that is not picked up cancels it with the courier and marks the order returned', async () => {
 		const order = await orderViaWebhook({});
 		const created = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
-		if (!created.ok) throw new Error('shipment failed');
+		if (!created.ok || !created.value.shipment.awb) throw new Error('shipment failed');
 		const awb = created.value.shipment.awb;
 
 		await refundViaWebhook(order);
@@ -910,7 +926,7 @@ describe('refund vs fulfillment/shipment rule', () => {
 	it('refund after pickup marks order and shipment returned without a courier cancel', async () => {
 		const order = await orderViaWebhook({});
 		const created = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
-		if (!created.ok) throw new Error('shipment failed');
+		if (!created.ok || !created.value.shipment.awb) throw new Error('shipment failed');
 		const awb = created.value.shipment.awb;
 		courier.setTrackingStatus(awb, 'in-transit');
 		await syncShipmentStatuses({ db, courier });

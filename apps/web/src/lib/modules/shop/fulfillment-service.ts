@@ -36,7 +36,8 @@ export async function applyFulfillmentTransitionInTx(
 	by: TransitionActor
 ): Promise<TransitionResult> {
 	const from = order.fulfillmentStatus;
-	if (!canTransition(from, to)) return { ok: false, error: 'illegal-transition', from, to };
+	if (!canTransition(from, to, by.actor))
+		return { ok: false, error: 'illegal-transition', from, to };
 
 	const [updated] = await tx
 		.update(orders)

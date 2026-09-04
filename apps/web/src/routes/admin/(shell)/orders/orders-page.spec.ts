@@ -510,7 +510,7 @@ describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page'
 		expect(result.status).toBe(400);
 		expect(result.data).toMatchObject({ awbError: 'missing-recipient-data' });
 		expect(
-			String((result.data as { awbDetail: string }).awbDetail)
+			String((result.data as unknown as { awbDetail: string }).awbDetail)
 				.split(', ')
 				.sort()
 		).toEqual(['county', 'phone']);

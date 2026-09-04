@@ -24,6 +24,8 @@ export interface MockCourierProvider extends CourierProvider {
 	setTrackingStatus(awb: string, status: CourierTrackingStatus): void;
 	/** When set, the next createShipment call rejects with this error. */
 	failNextCreate: Error | null;
+	/** AWBs whose trackShipment rejects with the mapped error until removed (sync-rotation tests). */
+	readonly trackFailures: Map<string, Error>;
 }
 
 /**
@@ -57,12 +59,14 @@ export function createMockCourierProvider(): MockCourierProvider {
 	let seq = 0;
 	const shipments = new Map<string, { request: ShipmentRequest; status: CourierTrackingStatus }>();
 	const cancelled: string[] = [];
+	const trackFailures = new Map<string, Error>();
 
 	return {
 		name: 'mock',
 		shipments,
 		cancelled,
 		failNextCreate: null,
+		trackFailures,
 
 		setTrackingStatus(awb, status) {
 			const shipment = shipments.get(awb);
@@ -86,6 +90,8 @@ export function createMockCourierProvider(): MockCourierProvider {
 		},
 
 		async trackShipment(awb) {
+			const failure = trackFailures.get(awb);
+			if (failure) throw failure;
 			return shipments.get(awb)?.status ?? null;
 		},
 

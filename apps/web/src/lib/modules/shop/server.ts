@@ -43,6 +43,8 @@ export {
 	type TransitionResult
 } from './fulfillment-service.ts';
 export {
+	CourierAuthError,
+	isCourierAuthError,
 	selectCourierProvider,
 	type CourierProvider,
 	type CourierSelection,
@@ -59,10 +61,14 @@ export {
 export { createMockStripeGateway, type MockStripeGateway } from './mock-gateway.ts';
 export { orderLookupUrl } from './order-link.ts';
 export {
+	classifySamedayStatus,
 	createSamedayCourier,
+	matchSamedayStatusText,
 	normalizeSamedayStatus,
+	SAMEDAY_STATUS_BY_ID,
 	samedayTrackingUrl,
-	type SamedayCourierOptions
+	type SamedayCourierOptions,
+	type SamedayStatusPayload
 } from './sameday-courier.ts';
 export {
 	cancelShipmentBestEffort,
@@ -71,14 +77,21 @@ export {
 	getShipmentForOrder,
 	missingRecipientFields,
 	REQUIRED_RECIPIENT_FIELDS,
+	SHIPMENT_CREATING_STALE_MS,
+	SHIPMENT_REPLACEABLE_STATUSES,
 	SHIPMENT_SYNC_ACTOR,
+	SHIPMENT_SYNC_BACKOFF_BASE_MS,
+	SHIPMENT_SYNC_BACKOFF_MAX_MS,
 	SHIPMENT_SYNC_BATCH,
 	shipmentLabelKey,
+	shipmentSyncHealth,
+	syncBackoffMs,
 	syncShipmentStatuses,
 	type CreateShipmentDeps,
 	type CreateShipmentError,
 	type RecipientField,
 	type ShipmentDeps,
+	type ShipmentSyncHealth,
 	type ShipmentSyncResult
 } from './shipment-service.ts';
 export {

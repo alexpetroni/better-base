@@ -40,13 +40,33 @@ const LEGAL_TRANSITIONS: Record<FulfillmentStatus, readonly FulfillmentStatus[]>
 	cancelled: []
 };
 
+/** Actor recorded on order events written by the cron shipment sync. */
+export const SHIPMENT_SYNC_ACTOR = 'shipment-sync';
+
+/**
+ * Edges only a SYSTEM actor may take (FIX-11): when the courier cancels an
+ * AWB the parcel is back at the warehouse, so the sync moves `shipped →
+ * packed` and a replacement AWB can be generated. Operators never get this
+ * edge — for them shipping stays the point of no return — and the admin UI
+ * renders `legalTransitions` only.
+ */
+const SYSTEM_TRANSITIONS: Partial<Record<FulfillmentStatus, readonly FulfillmentStatus[]>> = {
+	shipped: ['packed']
+};
+
 /** The transitions an operator may take from `from`, in display order. */
 export function legalTransitions(from: FulfillmentStatus): readonly FulfillmentStatus[] {
 	return LEGAL_TRANSITIONS[from];
 }
 
-export function canTransition(from: FulfillmentStatus, to: FulfillmentStatus): boolean {
-	return LEGAL_TRANSITIONS[from].includes(to);
+/** Legal for anyone, or — given the actor — legal for that system actor. */
+export function canTransition(
+	from: FulfillmentStatus,
+	to: FulfillmentStatus,
+	actor?: string
+): boolean {
+	if (LEGAL_TRANSITIONS[from].includes(to)) return true;
+	return actor === SHIPMENT_SYNC_ACTOR && (SYSTEM_TRANSITIONS[from] ?? []).includes(to);
 }
 
 /** Thrown (or carried in a Result) when a requested transition is not legal. */

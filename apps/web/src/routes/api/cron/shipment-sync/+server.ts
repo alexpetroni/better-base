@@ -23,7 +23,8 @@ export const GET: RequestHandler = async ({ request }) => {
 	// One structured line in the function logs — the only place this job's
 	// output is visible on a serverless deploy.
 	console.log(
-		`shipment-sync polled=${result.polled} updated=${result.updated} errors=${result.errors}`
+		`shipment-sync polled=${result.polled} updated=${result.updated} errors=${result.errors}` +
+			(result.aborted ? ` aborted=${result.aborted}` : '')
 	);
 	return json(result, { headers: NO_STORE });
 };
