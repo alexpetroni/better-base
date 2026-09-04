@@ -5,6 +5,7 @@
 	import { slugify } from '$lib/util/slug';
 	import { Img, type ImageSources } from '$lib/modules/media';
 	import { formatCents } from '$lib/util/money';
+	import { RO_VAT_RATES_BP, vatRateBpToPercentText } from '$lib/util/vat-rates';
 	import CoverField from '$lib/components/CoverField.svelte';
 	import MediaPicker, { type LibraryImage } from '$lib/components/MediaPicker.svelte';
 	import PillarChecklist from '$lib/components/PillarChecklist.svelte';
@@ -23,6 +24,8 @@
 		slug: data.product.slug,
 		// Editable "49,90" string; parsed server-side into integer bani.
 		price: formatCents(data.product.priceCents).split(' ')[0],
+		// '' = the standard rate from the invoicing settings (FIX-12).
+		vatRateBp: data.product.vatRateBp === null ? '' : String(data.product.vatRateBp),
 		stock: data.product.stock === null ? '' : String(data.product.stock),
 		// What the stock field was loaded with: the optimistic guard the server
 		// checks before an absolute write (a sale in between → stock-changed).
@@ -66,6 +69,7 @@
 		if (code === 'invalid-name') return m.admin_product_err_name();
 		if (code === 'invalid-slug') return m.admin_product_err_slug();
 		if (code === 'invalid-price') return m.admin_product_err_price();
+		if (code === 'invalid-vat-rate') return m.admin_product_err_vat_rate();
 		if (code === 'invalid-stock') return m.admin_product_err_stock();
 		if (code === 'stock-changed') return m.admin_product_err_stock_changed({ stock: detail });
 		if (code === 'unknown-pillar') return m.admin_product_err_pillar({ detail });
@@ -172,7 +176,7 @@
 			/>
 		</label>
 
-		<div class="grid gap-4 sm:grid-cols-4">
+		<div class="grid gap-4 sm:grid-cols-5">
 			<label class="block">
 				<span class="mb-1 block text-sm font-medium">{m.admin_product_price()}</span>
 				<input
@@ -184,6 +188,20 @@
 					data-testid="product-editor-price"
 					class="w-full rounded border border-(--color-brand-soft) px-3 py-2"
 				/>
+			</label>
+			<label class="block">
+				<span class="mb-1 block text-sm font-medium">{m.admin_product_vat_rate()}</span>
+				<select
+					name="vatRateBp"
+					bind:value={draft.vatRateBp}
+					data-testid="product-editor-vat-rate"
+					class="w-full rounded border border-(--color-brand-soft) px-3 py-2"
+				>
+					<option value="">{m.admin_product_vat_rate_standard()}</option>
+					{#each RO_VAT_RATES_BP as bp (bp)}
+						<option value={String(bp)}>{vatRateBpToPercentText(bp)}%</option>
+					{/each}
+				</select>
 			</label>
 			<label class="block">
 				<span class="mb-1 block text-sm font-medium">{m.admin_product_stock()}</span>

@@ -29,20 +29,30 @@ export interface CheckoutDeps {
 	baseUrl: string;
 }
 
-/** What the webhook needs to rebuild order items: id, qty, unit price paid. */
+/**
+ * What the webhook needs to rebuild order items: id, qty, unit price paid,
+ * and (FIX-12) the product's VAT rate at checkout — `v` is omitted for the
+ * standard rate, so older sessions and standard-rate lines look alike.
+ */
 export interface CartMetadataItem {
 	i: string;
 	q: number;
 	p: number;
+	v?: number;
 }
 
 export const CART_METADATA_KEY = 'cart';
 
 export function buildCartMetadata(
-	lines: Array<{ productId: string; qty: number; priceCents: number }>
+	lines: Array<{ productId: string; qty: number; priceCents: number; vatRateBp?: number | null }>
 ): string {
 	return JSON.stringify(
-		lines.map((l): CartMetadataItem => ({ i: l.productId, q: l.qty, p: l.priceCents }))
+		lines.map((l): CartMetadataItem => ({
+			i: l.productId,
+			q: l.qty,
+			p: l.priceCents,
+			...(l.vatRateBp != null ? { v: l.vatRateBp } : {})
+		}))
 	);
 }
 
@@ -64,7 +74,9 @@ export function parseCartMetadata(value: string | undefined): CartMetadataItem[]
 			Number.isInteger((entry as CartMetadataItem).q) &&
 			(entry as CartMetadataItem).q > 0 &&
 			Number.isInteger((entry as CartMetadataItem).p) &&
-			(entry as CartMetadataItem).p >= 0
+			(entry as CartMetadataItem).p >= 0 &&
+			((entry as CartMetadataItem).v === undefined ||
+				(Number.isInteger((entry as CartMetadataItem).v) && (entry as CartMetadataItem).v! > 0))
 	);
 }
 
@@ -273,7 +285,8 @@ export async function createCheckoutFromCart(
 					details.lines.map((l) => ({
 						productId: l.product.id,
 						qty: l.qty,
-						priceCents: l.product.priceCents
+						priceCents: l.product.priceCents,
+						vatRateBp: l.product.vatRateBp
 					}))
 				),
 				[SHIPPING_METADATA_KEY]: buildShippingMetadata(shipping),

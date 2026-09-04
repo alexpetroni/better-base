@@ -1,6 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { parseLeiToCents } from '$lib/util/money';
+import { isAllowedVatRateBp } from '$lib/util/vat-rates';
 import type { ProductStatus } from '$lib/modules/shop';
 import {
 	getProduct,
@@ -57,12 +58,21 @@ function patchFrom(form: FormData): ProductPatch | ParseError {
 		stockPatch = { stock, expectedStock: loaded };
 	}
 
+	// VAT rate (FIX-12): '' = the standard rate; anything else must be an
+	// allowlisted RO rate in basis points (the select offers exactly those).
+	const vatRaw = formStr(form, 'vatRateBp').trim();
+	const vatRateBp = vatRaw === '' ? null : Number(vatRaw);
+	if (vatRateBp !== null && !isAllowedVatRateBp(vatRateBp)) {
+		return { error: 'invalid-vat-rate', detail: vatRaw };
+	}
+
 	const statusRaw = formStr(form, 'status');
 	return {
 		name: formStr(form, 'name'),
 		slug: formStr(form, 'slug'),
 		descriptionMd: formStr(form, 'descriptionMd'),
 		priceCents,
+		vatRateBp,
 		...stockPatch,
 		status: STATUSES.includes(statusRaw as ProductStatus)
 			? (statusRaw as ProductStatus)

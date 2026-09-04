@@ -168,7 +168,10 @@ describe('/admin/settings save action', () => {
 			})
 		);
 		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
-		const data = result.data as { errors: Record<string, string>; values: Record<string, string> };
+		const data = result.data as unknown as {
+			errors: Record<string, string>;
+			values: Record<string, string>;
+		};
 		expect(data.errors).toEqual({ 'invoice.vatStandardRates': 'invalid-vat-rate' });
 		expect(data.values['invoice.vatStandardRates']).toBe('2025-08-01 0');
 		expect(

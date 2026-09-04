@@ -112,6 +112,7 @@ const PRODUCT_ROW = {
 	currency: 'ron',
 	stripeProductId: 'prod_x',
 	stripePriceId: 'price_x',
+	vatRateBp: null,
 	status: 'active',
 	coverMediaId: 'm-1',
 	gallery: ['m-1'],

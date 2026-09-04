@@ -346,7 +346,7 @@
 	"admin_settings_invoice_series_prefix": "Seria facturilor",
 	"admin_settings_invoice_next_number": "Următorul număr de factură",
 	"admin_settings_invoice_issuer_place": "Locul emiterii",
-	"admin_settings_invoice_vat_rate": "Cota TVA (%)",
+	"admin_settings_invoice_vat_standard_rates": "Cota standard de TVA, cu data intrării în vigoare — o linie per modificare: AAAA-LL-ZZ procent (ex. 2025-08-01 21)",
 	"admin_settings_invoice_payment_terms": "Mențiune termeni de plată",
 	"admin_settings_invoice_vat_unregistered_mention": "Mențiune neplătitor de TVA (apare pe facturi)",
 	"admin_settings_shop_free_shipping": "Prag livrare gratuită (lei, 0 = dezactivat)",
@@ -482,5 +482,9 @@
 	"admin_product_stock_add": "Adaugă în stoc (bucăți, relativ)",
 	"admin_product_err_stock_changed": "Stocul s-a schimbat între timp (acum: {stock}). Reîncarcă pagina și încearcă din nou.",
 	"admin_settings_shop_allow_all_payment_methods": "Permite toate metodele de plată activate în Stripe (implicit: doar card)",
-	"admin_settings_err_too_long": "Text prea lung."
+	"admin_settings_err_too_long": "Text prea lung.",
+	"admin_settings_err_vat_rate": "Listă de cote invalidă — o linie per cotă, „AAAA-LL-ZZ procent”, cu una dintre cotele legale (5, 9, 11, 19, 21).",
+	"admin_product_vat_rate": "Cota TVA",
+	"admin_product_vat_rate_standard": "standard (conform setărilor de facturare)",
+	"admin_product_err_vat_rate": "Cotă TVA invalidă."
 }

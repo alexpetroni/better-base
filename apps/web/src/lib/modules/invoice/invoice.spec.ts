@@ -306,7 +306,8 @@ describe('issuance snapshot', () => {
 	});
 
 	it('VAT-unregistered issuer: 0% lines plus the required mention', async () => {
-		await setSettings({ 'company.vatRegistered': false });
+		// A neplătitor states its CUI without the RO prefix (FIX-12 prefix rule).
+		await setSettings({ 'company.vatRegistered': false, 'company.cui': '12345676' });
 		const order = await insertPaidOrder({});
 		const result = await ensureInvoicesForOrder({ db }, order.id, 'neplatitor-test');
 		expect(result.ok).toBe(true);

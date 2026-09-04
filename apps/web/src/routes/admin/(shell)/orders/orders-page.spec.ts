@@ -407,6 +407,7 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 				Object.entries({
 					'company.legalName': 'Better Sleep SRL',
 					'company.cui': 'RO12345676',
+					'company.vatRegistered': true,
 					'company.regCom': 'J40/1234/2025',
 					'company.address': 'Str. Somnului 10, București',
 					'invoice.seriesPrefix': 'QUE'

@@ -28,7 +28,7 @@
 		'invoice.seriesPrefix': m.admin_settings_invoice_series_prefix,
 		'invoice.nextNumber': m.admin_settings_invoice_next_number,
 		'invoice.issuerPlace': m.admin_settings_invoice_issuer_place,
-		'invoice.vatRateBp': m.admin_settings_invoice_vat_rate,
+		'invoice.vatStandardRates': m.admin_settings_invoice_vat_standard_rates,
 		'invoice.paymentTermsNote': m.admin_settings_invoice_payment_terms,
 		'invoice.vatUnregisteredMention': m.admin_settings_invoice_vat_unregistered_mention,
 		'shop.freeShippingThresholdBani': m.admin_settings_shop_free_shipping,
@@ -48,6 +48,7 @@
 		'invalid-email': m.admin_settings_err_email,
 		'invalid-number': m.admin_settings_err_number,
 		'invalid-cui': m.admin_settings_err_cui,
+		'invalid-vat-rate': m.admin_settings_err_vat_rate,
 		'too-long': m.admin_settings_err_too_long
 	};
 
@@ -119,11 +120,7 @@
 									type="text"
 									name={field.key}
 									{value}
-									inputmode={field.kind === 'int' ||
-									field.kind === 'bani' ||
-									field.kind === 'percentBp'
-										? 'decimal'
-										: undefined}
+									inputmode={field.kind === 'int' || field.kind === 'bani' ? 'decimal' : undefined}
 									data-testid="settings-field-{field.key}"
 									class="w-full rounded border border-(--color-brand-soft) px-3 py-2 text-sm"
 								/>

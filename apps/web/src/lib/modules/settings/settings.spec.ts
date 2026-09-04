@@ -53,7 +53,7 @@ describe('settings registry validation', () => {
 		expect(validateSettingValue('company.cui', 'not-a-cui')).toBe('invalid-cui');
 		// Shape alone is not enough: the mod-11 control digit must check out
 		// (audit 2026-09-03 P1 "CUI is shape-only").
-		expect(validateSettingValue('company.cui', 'RO12345676')).toBe('invalid-cui');
+		expect(validateSettingValue('company.cui', 'RO12345678')).toBe('invalid-cui');
 		expect(validateSettingValue('company.cui', '12345678')).toBe('invalid-cui');
 		// Non-URL ANPC link.
 		expect(validateSettingValue('legal.anpcSalUrl', 'anpc punct ro')).toBe('invalid-url');
@@ -245,6 +245,17 @@ describe('settings service (integration)', () => {
 		expect(saved.ok).toBe(true);
 		const settings = await loadSettings({ db });
 		expect(settings['company.legalName']).toBe('Exemplu SRL');
+	});
+
+	it('a numeric-looking text value (a bare CUI) round-trips through jsonb as TEXT', async () => {
+		// node-postgres hands drizzle the jsonb string already parsed and the
+		// jsonb column re-parses it, so "12345676" would come back as the
+		// number 12345676 and a text key would silently fall back to its
+		// default (an unregistered issuer's bare CUI vanished). The read path
+		// coerces by the registry kind.
+		await saveSettings({ db }, { 'company.cui': '12345676' }, STAFF.id);
+		expect((await loadSettings({ db }))['company.cui']).toBe('12345676');
+		expect((await loadSettingsForAdmin({ db })).settings['company.cui']).toBe('12345676');
 	});
 
 	it('upserts with audit fields and reports who saved last', async () => {

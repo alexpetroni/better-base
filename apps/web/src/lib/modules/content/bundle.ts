@@ -3,6 +3,7 @@ import type { MediaRow } from '../media/schema.ts';
 import type { QuizRow } from '../quiz/schema.ts';
 import type { ProductRow } from '../shop/schema.ts';
 import { isRecord } from '../../util/object.ts';
+import { isAllowedVatRateBp } from '../../util/vat-rates.ts';
 
 /**
  * Content bundle format: the JSON produced by `pnpm content export` and
@@ -118,6 +119,9 @@ export function productToContent(row: ProductRow): ProductContent {
 		descriptionMd: row.descriptionMd,
 		priceCents: row.priceCents,
 		currency: row.currency,
+		// Per-product VAT rate (FIX-12): a reduced-rate product must stay
+		// reduced-rate on the site it is copied to; null = the standard rate.
+		vatRateBp: row.vatRateBp,
 		status: row.status,
 		coverMediaId: row.coverMediaId,
 		gallery: row.gallery,
@@ -248,7 +252,9 @@ function validProduct(raw: unknown): raw is ProductContent {
 		(raw.status === 'draft' || raw.status === 'active' || raw.status === 'archived') &&
 		optionalString(raw.coverMediaId) &&
 		isStringArray(raw.gallery) &&
-		optionalInt(raw.stock)
+		optionalInt(raw.stock) &&
+		// Absent in bundles exported before FIX-12 (= the standard rate).
+		(raw.vatRateBp == null || isAllowedVatRateBp(raw.vatRateBp))
 	);
 }
 

@@ -169,6 +169,13 @@
 			"when": 1788525672905,
 			"tag": "0023_shipment_lifecycle",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1788543106936,
+			"tag": "0024_vat_model",
+			"breakpoints": true
 		}
 	]
 }

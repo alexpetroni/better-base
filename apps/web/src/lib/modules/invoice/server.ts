@@ -50,5 +50,6 @@ export {
 	type InvoiceError,
 	type InvoiceItemInput,
 	type InvoiceResult,
-	type IssuedDocument
+	type IssuedDocument,
+	type IssuerSettingsProblem
 } from './service.ts';

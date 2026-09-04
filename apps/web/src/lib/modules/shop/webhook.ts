@@ -308,7 +308,7 @@ async function createOrderFromSession(
 	}
 
 	const productRows = await tx
-		.select({ id: products.id, name: products.name })
+		.select({ id: products.id, name: products.name, vatRateBp: products.vatRateBp })
 		.from(products)
 		.where(
 			inArray(
@@ -316,15 +316,18 @@ async function createOrderFromSession(
 				cart.map((item) => item.i)
 			)
 		);
-	const nameById = new Map(productRows.map((r) => [r.id, r.name]));
+	const productById = new Map(productRows.map((r) => [r.id, r]));
 
 	const items = cart.map((item) => ({
 		id: crypto.randomUUID(),
 		orderId: order.id,
-		productId: nameById.has(item.i) ? item.i : null,
-		name: nameById.get(item.i) ?? 'Produs',
+		productId: productById.has(item.i) ? item.i : null,
+		name: productById.get(item.i)?.name ?? 'Produs',
 		priceCents: item.p,
-		qty: item.q
+		qty: item.q,
+		// The rate the cart snapshotted at checkout; a session created before
+		// the snapshot carried it falls back to the product's current rate.
+		vatRateBp: item.v ?? productById.get(item.i)?.vatRateBp ?? null
 	}));
 	await tx.insert(orderItems).values(items);
 

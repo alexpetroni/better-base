@@ -75,6 +75,7 @@ function productBundle(slug: string, mediaId: string, key: string): ContentBundl
 			descriptionMd: 'desc',
 			priceCents: 9900,
 			currency: 'RON',
+			vatRateBp: null,
 			status: 'active',
 			coverMediaId: mediaId,
 			gallery: [],

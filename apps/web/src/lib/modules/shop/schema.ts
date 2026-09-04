@@ -29,6 +29,14 @@ export const products = pgTable(
 		/** Unit price in bani (RON cents). Integer only. */
 		priceCents: integer('price_cents').notNull().default(0),
 		currency: text('currency').notNull().default('ron'),
+		/**
+		 * VAT rate in basis points from the RO allowlist (`$lib/util/vat-rates`),
+		 * e.g. 1100 for a reduced-rate food item; null = the STANDARD rate in
+		 * force on the order date (`invoice.vatStandardRates`). Snapshotted onto
+		 * `order_items` at checkout and from there onto the invoice lines
+		 * (FIX-12).
+		 */
+		vatRateBp: integer('vat_rate_bp'),
 		/** Mirrored Stripe catalog ids, filled by the sync (null until synced). */
 		stripeProductId: text('stripe_product_id'),
 		stripePriceId: text('stripe_price_id'),
@@ -198,7 +206,13 @@ export const orderItems = pgTable(
 		/** Name + unit price snapshot as sold. */
 		name: text('name').notNull(),
 		priceCents: integer('price_cents').notNull(),
-		qty: integer('qty').notNull()
+		qty: integer('qty').notNull(),
+		/**
+		 * The product's VAT rate (bp) as it was at checkout; null = the standard
+		 * rate on the order date. Issuance copies it to the invoice line, so a
+		 * later product edit never changes what an order is invoiced at.
+		 */
+		vatRateBp: integer('vat_rate_bp')
 	},
 	(table) => [
 		index('order_items_order_id_idx').on(table.orderId),

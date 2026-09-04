@@ -20,8 +20,8 @@ import type { Actions, PageServerLoad } from './$types';
 function displayValue(key: SettingKey, value: string | number | boolean): string | boolean {
 	const kind = SETTINGS_REGISTRY[key].kind;
 	if (kind === 'boolean') return value as boolean;
-	if (kind === 'bani' || kind === 'percentBp') {
-		// 4990 bani → "49,90"; 2100 bp → "21,00" — drop the " lei" display unit.
+	if (kind === 'bani') {
+		// 4990 bani → "49,90" — drop the " lei" display unit.
 		return formatCents(value as number).split(' ')[0];
 	}
 	return String(value);

@@ -7,6 +7,8 @@ import {
 	isSettingsPlaceholder,
 	LAUNCH_REQUIRED_SETTING_KEYS,
 	mergeSettings,
+	settingsConsistencyProblems,
+	storedSettingValue,
 	validateSettingValue,
 	type SettingJsonValue,
 	type SettingKey,
@@ -119,7 +121,7 @@ export async function settingsLaunchProblems(deps: SettingsDeps): Promise<string
 			problems.push(`site setting "${key}" is not set — fill it in at /admin/settings`);
 			continue;
 		}
-		const value = stored.get(key);
+		const value = storedSettingValue(key, stored.get(key));
 		if (isSettingsPlaceholder(value)) {
 			problems.push(
 				`site setting "${key}" still holds the seeded placeholder — replace it at /admin/settings`
@@ -132,6 +134,11 @@ export async function settingsLaunchProblems(deps: SettingsDeps): Promise<string
 				`site setting "${key}" has an invalid value (${code}) — fix it at /admin/settings`
 			);
 		}
+	}
+	// Cross-key rules (the CUI prefix vs. the registration flag) — the same
+	// check issuance applies, so a config that launches also invoices.
+	for (const problem of settingsConsistencyProblems(mergeSettings(rows))) {
+		problems.push(`site setting "${problem.key}" ${problem.message} — fix it at /admin/settings`);
 	}
 	return problems;
 }

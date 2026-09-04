@@ -23,6 +23,7 @@ import { pillars, type Pillar } from '../../db/schema/core.ts';
 import { ensureUniqueSlug, slugTaken } from '../../db/unique-slug.ts';
 import type { Result } from '../../util/result.ts';
 import { slugify } from '../../util/slug.ts';
+import { isAllowedVatRateBp } from '../../util/vat-rates.ts';
 import { media, type MediaRow } from '../media/schema.ts';
 import { productPillars, products, type ProductRow, type ProductStatus } from './schema.ts';
 
@@ -42,6 +43,8 @@ export type ShopError =
 	| 'invalid-slug'
 	| 'invalid-price'
 	| 'invalid-stock'
+	/** Not a legal RO VAT rate (basis points from `RO_VAT_RATES_BP`). */
+	| 'invalid-vat-rate'
 	/** The stock moved since the form was loaded — detail carries the current value. */
 	| 'stock-changed'
 	| 'unknown-pillar';
@@ -94,6 +97,8 @@ export interface ProductPatch {
 	descriptionMd?: string;
 	/** Integer bani; never a float. */
 	priceCents?: number;
+	/** VAT rate in bp from the RO allowlist; null = the standard rate (FIX-12). */
+	vatRateBp?: number | null;
 	status?: ProductStatus;
 	coverMediaId?: string | null;
 	gallery?: string[];
@@ -153,6 +158,12 @@ export async function updateProduct(
 			return { ok: false, error: 'invalid-price' };
 		}
 		set.priceCents = patch.priceCents;
+	}
+	if (patch.vatRateBp !== undefined) {
+		if (patch.vatRateBp !== null && !isAllowedVatRateBp(patch.vatRateBp)) {
+			return { ok: false, error: 'invalid-vat-rate', detail: String(patch.vatRateBp) };
+		}
+		set.vatRateBp = patch.vatRateBp;
 	}
 	if (patch.stockDelta !== undefined) {
 		if (!Number.isInteger(patch.stockDelta) || patch.stockDelta <= 0) {

@@ -10,7 +10,13 @@
  * `pnpm launch:check` refuses to launch while any launch-required field is in
  * that state.
  */
+import { displayCui } from '../../util/cui.ts';
 import { isSettingsPlaceholder, type PublicSiteSettings } from './registry.ts';
+
+// The CUI display rule lives with the checksum in $lib/util/cui.ts since
+// FIX-12 (the invoice snapshot applies the same rule); re-exported so the
+// module barrel keeps its shape.
+export { displayCui };
 
 export interface LegalIdentity {
 	legalName: string | null;
@@ -23,16 +29,6 @@ export interface LegalIdentity {
 	anpcSalUrl: string | null;
 	anpcSolUrl: string | null;
 	extraNotices: string | null;
-}
-
-/**
- * The stored CUI may or may not carry the `RO` prefix (both pass validation);
- * display normalizes it: the prefix appears exactly when the company is
- * VAT-registered (the prefix IS the VAT registration marker in Romania).
- */
-export function displayCui(cui: string, vatRegistered: boolean): string {
-	const bare = cui.trim().replace(/^ro/i, '');
-	return vatRegistered ? `RO${bare}` : bare;
 }
 
 function publicText(value: string): string | null {

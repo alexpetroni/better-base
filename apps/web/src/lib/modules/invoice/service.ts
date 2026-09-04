@@ -1,14 +1,22 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import type { DbTx } from '../../server/event-ledger/core.ts';
+import { displayCui, isValidCui } from '../../util/cui.ts';
 import type { Result } from '../../util/result.ts';
-import { isSettingsPlaceholder, loadSettings } from '$lib/modules/settings/server';
+import { parseVatRateSchedule, standardVatRateAt } from '../../util/vat-rates.ts';
+import {
+	isSettingsPlaceholder,
+	loadSettings,
+	settingsConsistencyProblems
+} from '$lib/modules/settings/server';
 import type { SettingKey, SiteSettings } from '../settings/registry.ts';
 import { orderEvents, orderItems, orders, type OrderRow } from '../shop/schema.ts';
+import { invoiceDateIso } from './model.ts';
 import { invoiceLines, invoices, invoiceSeries, type InvoiceRow } from './schema.ts';
 import {
 	computeLineAmounts,
 	partialStornoLineAmounts,
+	splitAmountByGross,
 	sumAmounts,
 	type VatAmounts
 } from './vat.ts';
@@ -51,6 +59,8 @@ export interface InvoiceItemInput {
 	name: string;
 	qty: number;
 	priceCents: number;
+	/** The product's VAT rate (bp) at checkout; null/absent = the standard rate on the order date. */
+	vatRateBp?: number | null;
 }
 
 /** Issuer settings that must be genuinely filled in before issuing. */
@@ -69,8 +79,34 @@ function settingText(settings: SiteSettings, key: SettingKey): string {
 	return value.trim();
 }
 
-export function missingIssuerSettings(settings: SiteSettings): SettingKey[] {
-	return REQUIRED_ISSUER_SETTINGS.filter((key) => settingText(settings, key) === '');
+/**
+ * A reason issuance must refuse: a required key that is unset/placeholder
+ * (the bare key), or a key whose value cannot go on an invoice, written as
+ * `key (reason)` — the CUI failing its checksum, the RO prefix contradicting
+ * `company.vatRegistered` (the same cross-key rule launch:check applies),
+ * an unparseable standard-rate schedule. Joined into the `settings-incomplete`
+ * detail, so the order's trail names exactly what to fix.
+ */
+export type IssuerSettingsProblem = SettingKey | `${SettingKey} (${string})`;
+
+export function missingIssuerSettings(settings: SiteSettings): IssuerSettingsProblem[] {
+	const problems: IssuerSettingsProblem[] = REQUIRED_ISSUER_SETTINGS.filter(
+		(key) => settingText(settings, key) === ''
+	);
+	const cui = settingText(settings, 'company.cui');
+	if (cui && !isValidCui(cui)) problems.push('company.cui (invalid checksum)');
+	for (const problem of settingsConsistencyProblems(settings)) {
+		problems.push(`${problem.key} (${problem.code})`);
+	}
+	// The schedule is only consulted for a VAT-registered issuer; an
+	// unregistered one invoices at 0 % whatever it says.
+	if (
+		settings['company.vatRegistered'] &&
+		!parseVatRateSchedule(settings['invoice.vatStandardRates'])
+	) {
+		problems.push('invoice.vatStandardRates (invalid schedule)');
+	}
+	return problems;
 }
 
 /**
@@ -90,6 +126,13 @@ async function appendFiscalOrderEvent(
 /** `BSL`, 42 → `BSL-0042` (numbers past 9999 simply stop padding). */
 export function composeDisplayNumber(series: string, number: number): string {
 	return `${series}-${String(number).padStart(4, '0')}`;
+}
+
+/** 2100 → `21%`, 1950 → `19,5%` — the label of a storno line's rate. */
+function bpToPercentLabel(rateBp: number): string {
+	const whole = Math.trunc(rateBp / 100);
+	const frac = rateBp % 100;
+	return frac === 0 ? `${whole}%` : `${whole},${String(frac).padStart(2, '0').replace(/0$/, '')}%`;
 }
 
 /**
@@ -169,10 +212,18 @@ export async function issueInvoiceForOrderInTx(
 	}
 
 	const vatRegistered = settings['company.vatRegistered'];
-	const vatRateBp = vatRegistered ? settings['invoice.vatRateBp'] : 0;
-	// Shipping is its own VAT-bearing line (same rate as the goods — transport
-	// follows the main supply), so the invoice gross equals EXACTLY what Stripe
-	// charged: goods + shipping. Free shipping (0) adds no line.
+	// The standard rate in force on the ORDER date (chargeability), never
+	// "today": a retry after a rate change invoices the order at its own rate.
+	// `missingIssuerSettings` already refused an unparseable schedule.
+	const standardRateBp = vatRegistered
+		? standardVatRateAt(
+				parseVatRateSchedule(settings['invoice.vatStandardRates'])!,
+				invoiceDateIso(order.createdAt)
+			)
+		: 0;
+	// Shipping is its own VAT-bearing line at the standard rate (transport
+	// follows the main supply), so the invoice gross equals EXACTLY what
+	// Stripe charged: goods + shipping. Free shipping (0) adds no line.
 	const invoiceItems: InvoiceItemInput[] =
 		order.shippingCents > 0
 			? [
@@ -180,8 +231,13 @@ export async function issueInvoiceForOrderInTx(
 					{ name: shippingLineDescription(order), qty: 1, priceCents: order.shippingCents }
 				]
 			: [...items];
-	const lineAmounts = invoiceItems.map((item) =>
-		computeLineAmounts({ qty: item.qty, unitPriceCents: item.priceCents, vatRateBp })
+	// Per line: the product's snapshotted rate, else the standard one; an
+	// unregistered issuer is 0 % throughout.
+	const lineRates = invoiceItems.map((item) =>
+		vatRegistered ? (item.vatRateBp ?? standardRateBp) : 0
+	);
+	const lineAmounts = invoiceItems.map((item, i) =>
+		computeLineAmounts({ qty: item.qty, unitPriceCents: item.priceCents, vatRateBp: lineRates[i] })
 	);
 	const totals = sumAmounts(lineAmounts);
 
@@ -210,7 +266,8 @@ export async function issueInvoiceForOrderInTx(
 			dueAt: issuedAt,
 			currency: order.currency,
 			issuerName: settingText(settings, 'company.legalName'),
-			issuerCui: settingText(settings, 'company.cui'),
+			// Display form: uppercase, RO prefix exactly when registered.
+			issuerCui: displayCui(settingText(settings, 'company.cui'), vatRegistered),
 			issuerVatRegistered: vatRegistered,
 			issuerRegCom: settingText(settings, 'company.regCom'),
 			issuerAddress: settingText(settings, 'company.address'),
@@ -241,7 +298,7 @@ export async function issueInvoiceForOrderInTx(
 				description: item.name,
 				qty: item.qty,
 				unitPriceCents: item.priceCents,
-				vatRateBp,
+				vatRateBp: lineRates[i],
 				...lineAmounts[i]
 			}))
 		);
@@ -359,21 +416,32 @@ export async function issueStornoForOrderInTx(
 			grossCents: -original.grossTotalCents
 		};
 	} else {
-		// One rate per document (issuance applies a single rate to every
-		// line), so the highest stored line rate IS the original's rate.
-		const vatRateBp = originalLines.reduce((max, line) => Math.max(max, line.vatRateBp), 0);
-		const amounts = partialStornoLineAmounts(grossCents, vatRateBp);
-		lines = [
-			{
-				position: 1,
-				description: `Storno parțial — factura ${original.displayNumber}`,
-				qty: -1,
-				unitPriceCents: grossCents,
-				vatRateBp,
-				...amounts
-			}
-		];
-		totals = amounts;
+		// A refund is money, not lines: reverse it per VAT rate present on the
+		// original, each rate taking its share of the amount in proportion to
+		// that rate's gross (integer bani, exact sum — `splitAmountByGross`),
+		// extracted at its own rate. A single-rate invoice yields one line.
+		const rateGroups = new Map<number, number>();
+		for (const line of originalLines) {
+			rateGroups.set(line.vatRateBp, (rateGroups.get(line.vatRateBp) ?? 0) + line.grossCents);
+		}
+		const shares = splitAmountByGross(
+			grossCents,
+			[...rateGroups].map(([rateBp, gross]) => ({ key: rateBp, grossCents: gross }))
+		);
+		lines = shares.map((share, i) => ({
+			position: i + 1,
+			description:
+				shares.length === 1
+					? `Storno parțial — factura ${original.displayNumber}`
+					: `Storno parțial — factura ${original.displayNumber} (TVA ${bpToPercentLabel(share.key)})`,
+			qty: -1,
+			unitPriceCents: share.amountCents,
+			vatRateBp: share.key,
+			...partialStornoLineAmounts(share.amountCents, share.key)
+		}));
+		totals = sumAmounts(
+			lines.map(({ netCents, vatCents, grossCents: g }) => ({ netCents, vatCents, grossCents: g }))
+		);
 	}
 
 	// The series row must exist (the original was numbered through it); the
