@@ -2821,3 +2821,36 @@ plus a plain `shipments_order_id_idx`). No new env vars, no new settings.
 courier `trackFailures`; admin action `updateShippingAddress`, dashboard
 `+page.server.ts`; messages for the editor, statuses, events and banner;
 `CheckoutSession` created with `phone_number_collection`.
+
+**Verification (builder run 2026-09-04):** `pnpm lint && pnpm check &&
+pnpm test:unit` green from the repo root (apps/web 99 files, 923 passed, 4
+skipped — the pre-existing `driver-parity` suite gated on `NEON_WS_PROXY`;
++37 new tests across `shipment.spec.ts`, `courier.spec.ts`,
+`fulfillment.spec.ts`, `stripe-gateway.spec.ts`, `shop.spec.ts`,
+`orders-page.spec.ts`, `shipment-sync-route.spec.ts`,
+`dashboard-page.spec.ts`, `admin-authz.spec.ts`); `pnpm test:neon` 99 files,
+927 passed, 0 skipped (the two-phase claim, the NOWAIT probe, the gated
+courier race and the partial index all run through the WebSocket driver);
+`pnpm db:migrate` + `db:status` clean on a FRESH scratch database (24
+applied) and on one brought to 0022 through a trimmed journal copy and
+seeded with 400 orders / 133 shipments (45 registered, 44 in-transit, 44
+cancelled) before 0023 ran — every row kept, `error_count` 0 / `last_error`
+and `next_sync_at` null everywhere, `awb` nullable, `shipments_order_id_uq`
+gone, `shipments_order_id_active_uq` (partial) + `shipments_order_id_idx`
+present, a `creating` claim next to a cancelled row accepted, a second live
+row next to a registered one refused (23505), a `failed` row next to a live
+one accepted; `DEPLOY_TARGET=vercel pnpm build` green; `pnpm test:e2e`
+(adapter-node build + both preview sites) 89 passed, 5 skipped, 0 failed
+across the sleep and life projects, the settings.e2e AWB flow included.
+Test-first proven, not just ordered: the T1 spec commit (0a140fd) run
+against the code before bfec952 fails 8 of 8 new tests (no typed error,
+phone dropped, county became the city, body discarded); the T2 commit
+(3a49dd7) before 7457711/fabfef7 fails 17 of 17 (no `creating` row within
+2 s, no `error_count` column, `nelivrat` read as delivered, no sync-actor
+edge, no `CourierAuthError`); the T3 commit (e8d3e4c) before 9fa407a fails 8
+of 9 (the retry-from-failed guard already passed on the F2 service).
+Sequence in `git log`: 0a140fd → bfec952; 3a49dd7 → 7457711 → fabfef7;
+e8d3e4c → 9fa407a; 515d319 docs.
+
+**New env vars:** none. **New tables:** none. **New migrations:**
+`0023_shipment_lifecycle.sql`.
