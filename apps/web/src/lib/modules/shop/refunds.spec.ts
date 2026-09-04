@@ -19,6 +19,7 @@ import { createMockCourierProvider, type MockCourierProvider } from './mock-cour
 import { orderEvents, orders, products, shipments } from './schema.ts';
 import { createShipmentForOrder } from './shipment-service.ts';
 import { processStripeEvent, verifyStripeEvent, type WebhookDeps } from './webhook.ts';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 
 // Money after the first payment (audit 2026-09-03 P0 #2 and #3), against the
 // compose Postgres. Stripe never leaves the process: payloads are signed with
@@ -59,6 +60,7 @@ beforeAll(async () => {
 			'company.vatRegistered': true,
 			'company.regCom': 'J40/1234/2024',
 			'company.address': 'Str. Exemplu 1, București',
+			...ISSUER_ADDRESS_SETTINGS,
 			'invoice.seriesPrefix': 'RFD',
 			'invoice.vatStandardRates': '2025-08-01 21'
 		}).map(([key, value]) => ({ key, value }))

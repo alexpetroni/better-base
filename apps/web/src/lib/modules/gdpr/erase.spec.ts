@@ -53,7 +53,8 @@ beforeAll(async () => {
 		amountTotalCents: 4990,
 		currency: 'ron',
 		status: 'paid',
-		shippingAddress: { name: 'Test Person', line1: 'Str. Exemplu 1', city: 'București' }
+		shippingAddress: { name: 'Test Person', line1: 'Str. Exemplu 1', city: 'București' },
+		customerName: 'Test Person'
 	});
 	await db.insert(emailLog).values({
 		id: 'gdpr-log',
@@ -105,6 +106,7 @@ describe('eraseSubscriberData', () => {
 		const [order] = await db.select().from(orders).where(eq(orders.id, 'gdpr-order'));
 		expect(order.email).toBe(ANONYMIZED_EMAIL);
 		expect(order.shippingAddress).toBeNull();
+		expect(order.customerName).toBe('');
 		expect(order.status).toBe('paid');
 
 		const [log] = await db.select().from(emailLog).where(eq(emailLog.id, 'gdpr-log'));

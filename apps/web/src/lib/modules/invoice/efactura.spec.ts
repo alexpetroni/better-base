@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { InvoiceLineRow, InvoiceRow } from './schema.ts';
 import type { InvoiceDocumentModel } from './model.ts';
 import { bpToPercent, renderEFacturaXml, taxGroups, vatCategoryFor } from './efactura.ts';
@@ -34,9 +36,21 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		issuerPhone: '+40 700 000 000',
 		issuerIban: 'RO49AAAA1B31007593840000',
 		issuerBank: 'Banca Transilvania',
+		// Structured seller address (FIX-12): a București seat → SECTORn city.
+		issuerStreet: 'Str. Somnului 10',
+		issuerCity: 'Sector 3',
+		issuerCounty: 'RO-B',
+		issuerPostalCode: '030167',
+		issuerCountry: 'RO',
+		issuerCapital: '200 lei',
 		buyerName: 'Ștefan Țăranu',
 		buyerEmail: 'stefan@example.ro',
-		buyerAddress: 'Str. Înțelepciunii 3\n400001 Cluj-Napoca\nCluj, RO',
+		buyerAddress: 'Str. Înțelepciunii 3\n400001 Cluj-Napoca\nCluj',
+		buyerStreet: 'Str. Înțelepciunii 3',
+		buyerCity: 'Cluj-Napoca',
+		buyerCounty: 'RO-CJ',
+		buyerPostalCode: '400001',
+		buyerCountry: 'RO',
 		buyerCompanyName: null,
 		buyerCompanyCui: null,
 		buyerCompanyRegCom: null,
@@ -44,8 +58,35 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		vatTotalCents: 866,
 		grossTotalCents: 4990,
 		mentions: '',
+		vatExemptionReason: '',
+		orderReference: 'order-1',
+		paymentReference: 'pi_test_order_1',
+		paymentMethod: 'card',
+		paidAt: new Date('2026-08-07T10:15:00Z'),
 		...overrides
 	};
+}
+
+function fixture(name: string): string {
+	return readFileSync(
+		path.resolve(import.meta.dirname, '../../../../tests/fixtures/efactura', name),
+		'utf8'
+	);
+}
+
+/** The customer party's PostalAddress block of a rendered document. */
+function customerAddress(xml: string): string {
+	return /<cac:AccountingCustomerParty>.*?<cac:PostalAddress>(.*?)<\/cac:PostalAddress>/s.exec(
+		xml
+	)![1];
+}
+function supplierAddress(xml: string): string {
+	return /<cac:AccountingSupplierParty>.*?<cac:PostalAddress>(.*?)<\/cac:PostalAddress>/s.exec(
+		xml
+	)![1];
+}
+function customerParty(xml: string): string {
+	return /<cac:AccountingCustomerParty>(.*?)<\/cac:AccountingCustomerParty>/s.exec(xml)![1];
 }
 
 /** Build a consistent model through the REAL VAT math from cart-style items. */
@@ -225,6 +266,221 @@ describe('renderEFacturaXml', () => {
 		expect(validateEFacturaXml(xml, wrongSnapshot)).toContain('gross total ≠ snapshot');
 
 		expect(validateEFacturaXml('<Invoice>not even close')).not.toEqual([]);
+	});
+});
+
+describe('CIUS-RO addresses (FIX-12)', () => {
+	it('emits CountrySubentity + PostalZone for both parties; a Cluj buyer keeps its city name', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		const buyer = customerAddress(xml);
+		expect(buyer).toContain('<cbc:StreetName>Str. Înțelepciunii 3</cbc:StreetName>');
+		expect(buyer).toContain('<cbc:CityName>Cluj-Napoca</cbc:CityName>');
+		expect(buyer).toContain('<cbc:PostalZone>400001</cbc:PostalZone>');
+		expect(buyer).toContain('<cbc:CountrySubentity>RO-CJ</cbc:CountrySubentity>');
+		expect(buyer).toContain('<cbc:IdentificationCode>RO</cbc:IdentificationCode>');
+		// UBL element order inside PostalAddress: Street, City, PostalZone, CountrySubentity, Country.
+		expect(buyer).toMatch(
+			/StreetName>.*<cbc:CityName>.*<cbc:PostalZone>.*<cbc:CountrySubentity>.*<cac:Country>/s
+		);
+	});
+
+	it('a București party carries SECTORn as its CityName under RO-B', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		const xml = renderEFacturaXml(model);
+		const seller = supplierAddress(xml);
+		expect(seller).toContain('<cbc:CityName>SECTOR3</cbc:CityName>');
+		expect(seller).toContain('<cbc:CountrySubentity>RO-B</cbc:CountrySubentity>');
+		expect(seller).toContain('<cbc:PostalZone>030167</cbc:PostalZone>');
+		expect(seller).not.toContain('Sector 3<');
+
+		// The sector may also sit in the street text (Stripe's free-form input).
+		const inStreet = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		inStreet.invoice.buyerStreet = 'Bd. Unirii 5, sector 4';
+		inStreet.invoice.buyerCity = 'București';
+		inStreet.invoice.buyerCounty = 'RO-B';
+		inStreet.invoice.buyerPostalCode = '040001';
+		const buyerXml = renderEFacturaXml(inStreet);
+		expect(validateEFacturaXml(buyerXml, inStreet)).toEqual([]);
+		expect(customerAddress(buyerXml)).toContain('<cbc:CityName>SECTOR4</cbc:CityName>');
+	});
+
+	it('a B2B buyer with a RO-prefixed CUI carries its VAT id under category S', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		model.invoice.buyerCompanyName = 'Client SRL';
+		model.invoice.buyerCompanyCui = 'RO999885';
+		model.invoice.buyerCompanyRegCom = 'J12/99/2020';
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		const party = customerParty(xml);
+		expect(party).toContain('<cac:PartyTaxScheme><cbc:CompanyID>RO999885</cbc:CompanyID>');
+		expect(party).toContain('<cbc:RegistrationName>Client SRL</cbc:RegistrationName>');
+		expect(party).toContain('<cbc:CompanyID>RO999885</cbc:CompanyID></cac:PartyLegalEntity>');
+	});
+
+	it('under category O (neplătitor issuer) the buyer VAT id is suppressed too (BR-O-2)', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }], {
+			vatRegistered: false
+		});
+		model.invoice.issuerCui = '12345676';
+		model.invoice.buyerCompanyName = 'Client SRL';
+		model.invoice.buyerCompanyCui = 'RO999885';
+		model.invoice.vatExemptionReason = 'Neplătitor de TVA';
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).not.toContain('cac:PartyTaxScheme');
+		// The buyer's legal identifier (BT-47) stays: only the VAT scheme goes.
+		expect(customerParty(xml)).toContain('<cbc:CompanyID>RO999885</cbc:CompanyID>');
+	});
+
+	it('legacy rows without structured fields still render from the flattened address', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		Object.assign(model.invoice, {
+			buyerStreet: '',
+			buyerCity: '',
+			buyerCounty: '',
+			buyerPostalCode: '',
+			buyerCountry: ''
+		});
+		const xml = renderEFacturaXml(model);
+		expect(customerAddress(xml)).toContain('<cbc:StreetName>Str. Înțelepciunii 3</cbc:StreetName>');
+		// …and the extended validator says exactly what ANAF would miss.
+		expect(validateEFacturaXml(xml, model).join('\n')).toMatch(/customer.*CountrySubentity/);
+	});
+
+	it('the extended validator bites: missing county, wrong București city, buyer VAT id under O', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+
+		const noCounty = xml.replace('<cbc:CountrySubentity>RO-CJ</cbc:CountrySubentity>', '');
+		expect(validateEFacturaXml(noCounty, model).join('\n')).toMatch(/customer.*CountrySubentity/);
+
+		const badSector = xml.replace('<cbc:CityName>SECTOR3</cbc:CityName>', '<cbc:CityName>București</cbc:CityName>');
+		expect(validateEFacturaXml(badSector, model).join('\n')).toMatch(/supplier.*SECTOR/);
+
+		const noPostal = xml.replace('<cbc:PostalZone>400001</cbc:PostalZone>', '');
+		expect(validateEFacturaXml(noPostal, model).join('\n')).toMatch(/customer.*PostalZone/);
+
+		const unregistered = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }], {
+			vatRegistered: false
+		});
+		unregistered.invoice.issuerCui = '12345676';
+		unregistered.invoice.vatExemptionReason = 'Neplătitor de TVA';
+		const oXml = renderEFacturaXml(unregistered);
+		const injected = oXml.replace(
+			'<cac:PartyLegalEntity><cbc:RegistrationName>Ștefan Țăranu',
+			'<cac:PartyTaxScheme><cbc:CompanyID>RO999885</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme><cac:PartyLegalEntity><cbc:RegistrationName>Ștefan Țăranu'
+		);
+		expect(injected).not.toBe(oXml);
+		expect(validateEFacturaXml(injected, unregistered).join('\n')).toMatch(/BR-O-2/);
+	});
+});
+
+describe('payment, order reference and the exemption column (FIX-12)', () => {
+	it('a card-paid invoice is PREPAID: means code 48, PaymentID, PrepaidAmount = total, PayableAmount 0', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).toContain('<cac:OrderReference><cbc:ID>order-1</cbc:ID></cac:OrderReference>');
+		expect(xml).toContain('<cbc:PaymentMeansCode>48</cbc:PaymentMeansCode>');
+		expect(xml).toContain('<cbc:PaymentID>pi_test_order_1</cbc:PaymentID>');
+		expect(xml).not.toContain('<cbc:PaymentMeansCode>42</cbc:PaymentMeansCode>');
+		expect(xml).toContain('<cbc:PrepaidAmount currencyID="RON">49.90</cbc:PrepaidAmount>');
+		expect(xml).toContain('<cbc:PayableAmount currencyID="RON">0.00</cbc:PayableAmount>');
+		// UBL order: OrderReference precedes the parties; PrepaidAmount precedes PayableAmount.
+		expect(xml).toMatch(/<cac:OrderReference>.*<cac:AccountingSupplierParty>/s);
+		expect(xml).toMatch(/<cbc:PrepaidAmount.*<cbc:PayableAmount/s);
+
+		// BR-CO-16 is enforced: a payable amount that ignores the prepayment is refused.
+		const tampered = xml.replace(
+			'<cbc:PayableAmount currencyID="RON">0.00</cbc:PayableAmount>',
+			'<cbc:PayableAmount currencyID="RON">49.90</cbc:PayableAmount>'
+		);
+		expect(validateEFacturaXml(tampered, model).join('\n')).toMatch(/PayableAmount/);
+	});
+
+	it('an unpaid document (no paidAt) stays payable, with the IBAN as means 42', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }]);
+		model.invoice.paidAt = null;
+		model.invoice.paymentMethod = '';
+		model.invoice.paymentReference = '';
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).not.toContain('cbc:PrepaidAmount');
+		expect(xml).toContain('<cbc:PayableAmount currencyID="RON">49.90</cbc:PayableAmount>');
+		expect(xml).toContain('<cbc:PaymentMeansCode>42</cbc:PaymentMeansCode>');
+	});
+
+	it('the exemption reason comes from its own column, never from the payment-terms note', () => {
+		const model = modelFromItems([{ name: 'Pernă', qty: 1, priceCents: 4990 }], {
+			vatRegistered: false
+		});
+		model.invoice.issuerCui = '12345676';
+		// A snapshot whose mentions start with the payment-terms note (the
+		// audit's hole): the dedicated column wins.
+		model.invoice.mentions = 'Plata s-a efectuat cu cardul.';
+		model.invoice.vatExemptionReason = 'Neplătitor de TVA';
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).toContain('<cbc:TaxExemptionReason>Neplătitor de TVA</cbc:TaxExemptionReason>');
+		expect(xml).not.toContain('<cbc:TaxExemptionReason>Plata');
+		// A pre-FIX-12 row (empty column) still falls back to its first mention line.
+		model.invoice.mentions = 'Neplătitor de TVA\nPlata s-a efectuat cu cardul.';
+		model.invoice.vatExemptionReason = '';
+		expect(renderEFacturaXml(model)).toContain(
+			'<cbc:TaxExemptionReason>Neplătitor de TVA</cbc:TaxExemptionReason>'
+		);
+	});
+});
+
+describe('golden fixtures (byte-stable; ANAF validation is a LAUNCH-CHECKLIST step)', () => {
+	// The two RO address shapes: a județ buyer and a București-sector B2B
+	// buyer. The files are what an operator uploads to ANAF's public validator
+	// (README § e-Factura); any renderer change that alters them must be a
+	// deliberate re-validation, never a silent drift.
+	function goldenCluj(): InvoiceDocumentModel {
+		return modelFromItems([
+			{ name: 'Pernă cu spumă cu memorie', qty: 1, priceCents: 8990 },
+			{ name: 'Ceai de seară cu mușețel', qty: 2, priceCents: 3450 }
+		]);
+	}
+	function goldenBucharestB2b(): InvoiceDocumentModel {
+		const model = modelFromItems([{ name: 'Mască de somn premium', qty: 3, priceCents: 8990 }]);
+		Object.assign(model.invoice, {
+			id: 'inv-2',
+			number: 43,
+			displayNumber: 'BSL-0043',
+			orderId: 'order-2',
+			orderReference: 'order-2',
+			paymentReference: 'pi_test_order_2',
+			buyerName: 'Client Exemplu SRL',
+			buyerEmail: 'facturi@client-exemplu.ro',
+			buyerAddress: 'Bd. Unirii 5\n040001 Sector 4\nBucurești',
+			buyerStreet: 'Bd. Unirii 5',
+			buyerCity: 'Sector 4',
+			buyerCounty: 'RO-B',
+			buyerPostalCode: '040001',
+			buyerCompanyName: 'Client Exemplu SRL',
+			buyerCompanyCui: 'RO999885',
+			buyerCompanyRegCom: 'J40/9999/2020'
+		});
+		return model;
+	}
+
+	it('renders the Cluj B2C invoice byte-for-byte as committed', () => {
+		const model = goldenCluj();
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).toBe(fixture('factura-cluj.xml'));
+	});
+
+	it('renders the București-sector B2B invoice byte-for-byte as committed', () => {
+		const model = goldenBucharestB2b();
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).toBe(fixture('factura-bucuresti-sector-b2b.xml'));
 	});
 });
 

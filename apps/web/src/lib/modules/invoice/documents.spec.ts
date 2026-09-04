@@ -23,6 +23,7 @@ import {
 	type InvoiceDocumentDeps
 } from './documents.ts';
 import { invoices } from './schema.ts';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 
 // Integration for the document layer: write-once storage semantics, the
 // e-Factura seam firing exactly once, the confirmation email carrying the
@@ -64,6 +65,7 @@ const ISSUER_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
 	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2025',
 	'company.address': 'Str. Somnului 10, București',
+	...ISSUER_ADDRESS_SETTINGS,
 	'invoice.seriesPrefix': 'BSL',
 	'invoice.nextNumber': 101,
 	'invoice.issuerPlace': 'București',

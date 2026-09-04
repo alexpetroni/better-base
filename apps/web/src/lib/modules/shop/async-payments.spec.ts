@@ -24,6 +24,7 @@ import {
 	verifyStripeEvent,
 	type WebhookDeps
 } from './webhook.ts';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 
 // Delayed payment methods (audit 2026-09-03 P1 "pending orders are a dead
 // end"): a Checkout session can complete with `payment_status: 'unpaid'`
@@ -59,6 +60,7 @@ beforeAll(async () => {
 			'company.vatRegistered': true,
 			'company.regCom': 'J40/1234/2024',
 			'company.address': 'Str. Exemplu 1, București',
+			...ISSUER_ADDRESS_SETTINGS,
 			'invoice.seriesPrefix': 'ASY',
 			'invoice.vatStandardRates': '2025-08-01 21'
 		}).map(([key, value]) => ({ key, value }))

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 import { createDb, type Db } from '../../db/client.ts';
 import { seedPlaceholderSettings } from '../../db/seed.ts';
 import { users } from '../auth/schema.ts';
@@ -37,6 +38,9 @@ describe('settings registry validation', () => {
 		expect(validateSettingValue('company.vatRegistered', true)).toBeNull();
 		expect(validateSettingValue('company.contactEmail', 'contact@exemplu.ro')).toBeNull();
 		expect(validateSettingValue('legal.anpcSalUrl', 'https://anpc.ro/ce-este-sal/')).toBeNull();
+		expect(validateSettingValue('company.county', 'RO-CJ')).toBeNull();
+		expect(validateSettingValue('company.postalCode', '400001')).toBeNull();
+		expect(validateSettingValue('company.shareCapital', '200 lei')).toBeNull();
 		expect(validateSettingValue('invoice.vatStandardRates', '2025-08-01 21')).toBeNull();
 		expect(
 			validateSettingValue('invoice.vatStandardRates', '2017-01-01 19\n2025-08-01 21')
@@ -69,6 +73,10 @@ describe('settings registry validation', () => {
 			'invalid-vat-rate'
 		);
 		expect(validateSettingValue('invoice.vatStandardRates', '21')).toBe('invalid-vat-rate');
+		// The county is an ISO 3166-2:RO code — CIUS-RO wants exactly that.
+		expect(validateSettingValue('company.county', 'Cluj')).toBe('invalid-county');
+		expect(validateSettingValue('company.county', 'CJ')).toBe('invalid-county');
+		expect(validateSettingValue('company.postalCode', 'a')).toBe('invalid-value');
 		expect(validateSettingValue('invoice.vatStandardRates', 2100)).toBe('invalid-value');
 		// Non-integers and wrong primitive types never validate.
 		expect(validateSettingValue('invoice.nextNumber', 0)).toBe('invalid-number');
@@ -203,6 +211,7 @@ const VALID_LAUNCH_VALUES: Partial<SiteSettings> = {
 	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2024',
 	'company.address': 'Str. Exemplu 1, București',
+	...ISSUER_ADDRESS_SETTINGS,
 	'company.contactEmail': 'contact@exemplu.ro',
 	'company.contactPhone': '+40 700 000 000',
 	'legal.anpcSalUrl': 'https://anpc.ro/ce-este-sal/',
@@ -349,5 +358,15 @@ describe('settings launch rule (integration)', () => {
 
 		await saveSettings({ db }, { 'company.vatRegistered': true }, STAFF.id);
 		expect(await settingsLaunchProblems({ db })).toHaveLength(1);
+	});
+
+	it('flags a București seat whose city names no sector (CIUS-RO wants SECTORn)', async () => {
+		await seedPlaceholderSettings(db);
+		await saveSettings({ db }, { ...VALID_LAUNCH_VALUES, 'company.city': 'București' }, STAFF.id);
+		const problems = await settingsLaunchProblems({ db });
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toMatch(/"company\.city".*sector/i);
+		await saveSettings({ db }, { 'company.city': 'Sector 2' }, STAFF.id);
+		expect(await settingsLaunchProblems({ db })).toEqual([]);
 	});
 });

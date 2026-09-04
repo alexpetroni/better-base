@@ -425,6 +425,10 @@ interface SessionOverrides {
 	email?: string;
 	/** Stripe `customer_details.phone` (collected by Checkout since FIX-11). */
 	phone?: string;
+	/** Stripe `customer_details.name` — the payer, whom the B2C invoice names (FIX-12). */
+	customerName?: string;
+	/** Stripe `payment_method_types` of the session; absent = the card-pinned default. */
+	paymentMethodTypes?: string[];
 	/** Provider event id; defaults to one derived from the session id. */
 	eventId?: string;
 }
@@ -446,9 +450,12 @@ function completedSessionEvent(overrides: SessionOverrides): string {
 				payment_status: 'paid',
 				customer_details: {
 					email: overrides.email ?? 'client@example.ro',
-					name: 'Ana Pop',
+					name: overrides.customerName ?? 'Ana Pop',
 					...(overrides.phone ? { phone: overrides.phone } : {})
 				},
+				...(overrides.paymentMethodTypes
+					? { payment_method_types: overrides.paymentMethodTypes }
+					: {}),
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
@@ -519,6 +526,36 @@ describe('webhook: checkout.session.completed', () => {
 		const [order] = await db.select().from(orders).where(eq(orders.id, outcome.orderId));
 		expect(order.shippingAddress?.phone).toBe('+40 723 000 111');
 		expect(order.shippingAddress?.city).toBe('Cluj-Napoca');
+	});
+
+	it('stores the payer name and the payment method for the invoice (FIX-12)', async () => {
+		const product = await makeProduct({ name: 'Comandă cu nume', priceCents: 1000 });
+		const payload = completedSessionEvent({
+			id: 'cs_customer_name',
+			cart: [{ productId: product.id, qty: 1, priceCents: 1000 }],
+			amountTotal: 1000,
+			customerName: 'Ana-Maria Popescu',
+			paymentMethodTypes: ['card']
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+		const outcome = await processStripeEvent(webhookDeps, event);
+		if (outcome.kind !== 'order-created') throw new Error(`unexpected ${outcome.kind}`);
+		const [order] = await db.select().from(orders).where(eq(orders.id, outcome.orderId));
+		expect(order.customerName).toBe('Ana-Maria Popescu');
+		expect(order.paymentMethod).toBe('card');
+
+		// A session opened to every method the dashboard enables is "online".
+		const open = completedSessionEvent({
+			id: 'cs_open_methods',
+			cart: [{ productId: product.id, qty: 1, priceCents: 1000 }],
+			amountTotal: 1000,
+			paymentMethodTypes: ['card', 'link', 'paypal']
+		});
+		const openEvent = await verifyStripeEvent(open, signedHeader(open), WEBHOOK_SECRET);
+		const openOutcome = await processStripeEvent(webhookDeps, openEvent);
+		if (openOutcome.kind !== 'order-created') throw new Error(`unexpected ${openOutcome.kind}`);
+		const [openOrder] = await db.select().from(orders).where(eq(orders.id, openOutcome.orderId));
+		expect(openOrder.paymentMethod).toBe('online');
 	});
 
 	it('creates the order + item snapshots, decrements stock and logs ONE email', async () => {

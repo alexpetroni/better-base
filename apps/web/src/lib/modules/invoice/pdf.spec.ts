@@ -33,9 +33,20 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		issuerPhone: '+40 700 000 000',
 		issuerIban: 'RO49AAAA1B31007593840000',
 		issuerBank: 'Banca Transilvania',
+		issuerStreet: 'Str. Somnului 10',
+		issuerCity: 'Sector 3',
+		issuerCounty: 'RO-B',
+		issuerPostalCode: '030167',
+		issuerCountry: 'RO',
+		issuerCapital: '200 lei',
 		buyerName: 'Ștefan Țăranu',
 		buyerEmail: 'stefan@example.ro',
-		buyerAddress: 'Str. Înțelepciunii 3\n400001 Cluj-Napoca\nCluj, RO',
+		buyerAddress: 'Str. Înțelepciunii 3\n400001 Cluj-Napoca\nCluj',
+		buyerStreet: 'Str. Înțelepciunii 3',
+		buyerCity: 'Cluj-Napoca',
+		buyerCounty: 'RO-CJ',
+		buyerPostalCode: '400001',
+		buyerCountry: 'RO',
 		buyerCompanyName: null,
 		buyerCompanyCui: null,
 		buyerCompanyRegCom: null,
@@ -43,6 +54,11 @@ function makeInvoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 		vatTotalCents: 866,
 		grossTotalCents: 4990,
 		mentions: '',
+		vatExemptionReason: '',
+		orderReference: 'order-1',
+		paymentReference: 'pi_test_order_1',
+		paymentMethod: 'card',
+		paidAt: new Date('2026-08-07T10:15:00Z'),
 		...overrides
 	};
 }
@@ -183,6 +199,34 @@ describe('renderInvoicePdf', () => {
 		expect(text).toContain('Neplătitor de TVA');
 		expect(text).toContain('0%');
 		expect(text).toContain('0,00 lei');
+	});
+});
+
+describe('share capital, payment and order reference (FIX-12)', () => {
+	it('prints the share capital under Reg. Com. and "Achitat cu cardul la <data>" with the order reference', async () => {
+		const text = await pdfText(await renderInvoicePdf(makeModel()));
+		expect(text).toContain('Capital social: 200 lei');
+		// The capital follows the Reg. Com. line in the issuer block.
+		expect(text.indexOf('Capital social')).toBeGreaterThan(text.indexOf('J40/1234/2025'));
+		expect(text).toContain('Achitat cu cardul la 07.08.2026');
+		expect(text).toContain('pi_test_order_1');
+		expect(text).toContain('Comandă: order-1');
+	});
+
+	it('a PFA without share capital and an unpaid document print neither line', async () => {
+		const text = await pdfText(
+			await renderInvoicePdf(
+				makeModel({ issuerCapital: '', paidAt: null, paymentMethod: '', paymentReference: '' })
+			)
+		);
+		expect(text).not.toContain('Capital social');
+		expect(text).not.toContain('Achitat');
+		expect(text).toContain('Comandă: order-1');
+	});
+
+	it('an online (non-card) payment prints "Achitat online"', async () => {
+		const text = await pdfText(await renderInvoicePdf(makeModel({ paymentMethod: 'online' })));
+		expect(text).toContain('Achitat online la 07.08.2026');
 	});
 });
 

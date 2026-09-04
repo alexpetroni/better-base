@@ -24,6 +24,12 @@ test('admin saves company identification; values persist after reload', async ({
 	await page.getByTestId('settings-field-company.cui').fill('RO12345676');
 	await page.getByTestId('settings-field-company.regCom').fill('J40/1234/2024');
 	await page.getByTestId('settings-field-company.address').fill('Str. Exemplu 1, București');
+	// The structured seat CIUS-RO wants + the share capital (FIX-12).
+	await page.getByTestId('settings-field-company.street').fill('Str. Exemplu 1');
+	await page.getByTestId('settings-field-company.city').fill('Sector 3');
+	await page.getByTestId('settings-field-company.county').fill('RO-B');
+	await page.getByTestId('settings-field-company.postalCode').fill('030167');
+	await page.getByTestId('settings-field-company.shareCapital').fill('200 lei');
 	await page.getByTestId('settings-field-company.contactEmail').fill('contact@exemplu.ro');
 	await page.getByTestId('settings-field-company.contactPhone').fill('+40 700 000 000');
 	await page.getByTestId('settings-field-company.vatRegistered').check();

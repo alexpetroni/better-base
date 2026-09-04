@@ -3,6 +3,7 @@ import path from 'node:path';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import Stripe from 'stripe';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 import { createDb, type Db } from '../../db/client.ts';
 import { eraseSubscriberData, ANONYMIZED_EMAIL } from '../gdpr/erase.ts';
 import { createEmailSender } from '../email/service.ts';
@@ -45,6 +46,7 @@ const ISSUER_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
 	'company.vatRegistered': true,
 	'company.regCom': 'J40/1234/2025',
 	'company.address': 'Str. Somnului 10, București',
+	...ISSUER_ADDRESS_SETTINGS,
 	'company.contactEmail': 'contact@better-sleep.ro',
 	'company.iban': 'RO49AAAA1B31007593840000',
 	'invoice.seriesPrefix': 'BSL',
@@ -72,6 +74,10 @@ async function insertPaidOrder(input?: {
 	/** The order (= chargeability) date; defaults to now. */
 	createdAt?: Date;
 	refundedCents?: number;
+	shippingAddress?: Record<string, string>;
+	customerName?: string;
+	billingCompany?: Record<string, unknown>;
+	paymentMethod?: string;
 }) {
 	const id = `inv-order-${++seq}`;
 	const items = input?.items ?? [{ name: 'Pernă memory foam', qty: 1, priceCents: 4990 }];
@@ -85,7 +91,14 @@ async function insertPaidOrder(input?: {
 			amountTotalCents: items.reduce((sum, item) => sum + item.qty * item.priceCents, 0),
 			currency: 'ron',
 			status: input?.status ?? 'paid',
-			shippingAddress: { name: 'Ana Pop', line1: 'Str. Exemplu 1', city: 'Cluj-Napoca' },
+			shippingAddress: input?.shippingAddress ?? {
+				name: 'Ana Pop',
+				line1: 'Str. Exemplu 1',
+				city: 'Cluj-Napoca'
+			},
+			...(input?.customerName !== undefined ? { customerName: input.customerName } : {}),
+			...(input?.billingCompany ? { billingCompany: input.billingCompany } : {}),
+			...(input?.paymentMethod !== undefined ? { paymentMethod: input.paymentMethod } : {}),
 			...(input?.createdAt ? { createdAt: input.createdAt } : {}),
 			...(input?.refundedCents !== undefined ? { refundedCents: input.refundedCents } : {})
 		})
@@ -775,5 +788,111 @@ describe('issuer CUI (FIX-12): display form and the prefix/registration rule', (
 		const result = await ensureInvoicesForOrder({ db }, order.id, 'cui-mismatch-test');
 		expect(!result.ok && result.error).toBe('settings-incomplete');
 		expect(!result.ok && result.detail).toContain('company.cui');
+	});
+});
+
+describe('address model, share capital and payment references (FIX-12)', () => {
+	it('snapshots the structured issuer address + capital from settings and the buyer address from Stripe, county mapped to its ISO code', async () => {
+		const order = await insertPaidOrder({
+			shippingAddress: {
+				name: 'Ana Pop',
+				line1: 'Str. Înțelepciunii 3',
+				line2: 'ap. 7',
+				city: 'Cluj-Napoca',
+				state: 'Județul Cluj',
+				postalCode: '400001',
+				country: 'RO'
+			},
+			customerName: 'Ana-Maria Popescu',
+			paymentMethod: 'card',
+			paymentIntent: 'pi_address_test'
+		});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'address-test');
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.invoice).toMatchObject({
+			issuerStreet: 'Str. Somnului 10',
+			issuerCity: 'Sector 3',
+			issuerCounty: 'RO-B',
+			issuerPostalCode: '030167',
+			issuerCountry: 'RO',
+			issuerCapital: '200 lei',
+			issuerAddress: 'Str. Somnului 10\n030167 Sector 3\nBucurești',
+			// B2C: the buyer is the PAYER (customer_details.name), not the parcel recipient.
+			buyerName: 'Ana-Maria Popescu',
+			buyerStreet: 'Str. Înțelepciunii 3, ap. 7',
+			buyerCity: 'Cluj-Napoca',
+			buyerCounty: 'RO-CJ',
+			buyerPostalCode: '400001',
+			buyerCountry: 'RO',
+			buyerAddress: 'Str. Înțelepciunii 3, ap. 7\n400001 Cluj-Napoca\nCluj',
+			orderReference: order.id,
+			paymentReference: 'pi_address_test',
+			paymentMethod: 'card',
+			vatExemptionReason: ''
+		});
+		// Paid at order time (the webhook issues in the payment's own transaction).
+		expect(result.value.invoice.paidAt?.getTime()).toBe(order.createdAt.getTime());
+		const model = (await loadInvoiceModel({ db }, result.value.invoice.id))!;
+		expect(validateEFacturaXml(renderEFacturaXml(model), model)).toEqual([]);
+	});
+
+	it('falls back to the parcel recipient, then the email, when Stripe sent no customer name', async () => {
+		const noName = await insertPaidOrder({ customerName: '' });
+		const first = await ensureInvoicesForOrder({ db }, noName.id, 'name-test');
+		expect(first.ok && first.value.invoice.buyerName).toBe('Ana Pop');
+		const nothing = await insertPaidOrder({ customerName: '', shippingAddress: {} });
+		const second = await ensureInvoicesForOrder({ db }, nothing.id, 'name-test');
+		expect(second.ok && second.value.invoice.buyerName).toBe(nothing.email);
+	});
+
+	it('a B2B buyer uses the company address (not the parcel address) and the company name', async () => {
+		const order = await insertPaidOrder({
+			customerName: 'Ana Pop',
+			billingCompany: {
+				name: 'Client SRL',
+				cui: 'RO999885',
+				regCom: 'J40/9999/2020',
+				address: { street: 'Bd. Unirii 5', city: 'Sector 4', county: 'RO-B', postalCode: '040001' }
+			}
+		});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'b2b-address-test');
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.invoice).toMatchObject({
+			buyerName: 'Client SRL',
+			buyerCompanyCui: 'RO999885',
+			buyerStreet: 'Bd. Unirii 5',
+			buyerCity: 'Sector 4',
+			buyerCounty: 'RO-B',
+			buyerPostalCode: '040001',
+			buyerCountry: 'RO',
+			buyerAddress: 'Bd. Unirii 5\n040001 Sector 4\nBucurești'
+		});
+		const model = (await loadInvoiceModel({ db }, result.value.invoice.id))!;
+		const xml = renderEFacturaXml(model);
+		expect(validateEFacturaXml(xml, model)).toEqual([]);
+		expect(xml).toContain('<cbc:CityName>SECTOR4</cbc:CityName>');
+	});
+
+	it('a neplătitor issuer snapshots the exemption reason in its own column', async () => {
+		await setSettings({
+			'company.vatRegistered': false,
+			'company.cui': '12345676',
+			'invoice.paymentTermsNote': 'Plata s-a efectuat cu cardul.'
+		});
+		const result = await ensureInvoicesForOrder({ db }, (await insertPaidOrder({})).id, 'o-test');
+		expect(result.ok && result.value.invoice.vatExemptionReason).toBe('Neplătitor de TVA');
+		expect(result.ok && result.value.invoice.mentions).toBe(
+			'Neplătitor de TVA\nPlata s-a efectuat cu cardul.'
+		);
+	});
+
+	it('the structured issuer address is required for issuance, like the rest of the identification', async () => {
+		await setSettings({ 'company.county': '' });
+		const order = await insertPaidOrder({});
+		const result = await ensureInvoicesForOrder({ db }, order.id, 'county-required-test');
+		expect(!result.ok && result.error).toBe('settings-incomplete');
+		expect(!result.ok && result.detail).toContain('company.county');
 	});
 });

@@ -34,6 +34,7 @@ import {
 } from './shipment-service.ts';
 import { buildShippingMetadata } from './shipping.ts';
 import { processStripeEvent, verifyStripeEvent, type WebhookDeps } from './webhook.ts';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 
 // Shipping end-to-end at the service level, against the compose Postgres:
 // checkout metadata → webhook order (goods + shipping + grand total
@@ -75,6 +76,7 @@ beforeAll(async () => {
 			'company.vatRegistered': true,
 			'company.regCom': 'J40/1234/2024',
 			'company.address': 'Str. Exemplu 1, București',
+			...ISSUER_ADDRESS_SETTINGS,
 			'invoice.seriesPrefix': 'SHP',
 			'invoice.vatStandardRates': '2025-08-01 21'
 		}).map(([key, value]) => ({ key, value }))

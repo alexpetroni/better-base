@@ -22,6 +22,7 @@ import {
 	type ShippingAddress
 } from '../../../../lib/modules/shop/schema.ts';
 import { listOrders } from '../../../../lib/modules/shop/webhook.ts';
+import { ISSUER_ADDRESS_SETTINGS } from '../../../../../tests/helpers/issuer-settings.ts';
 
 // Route-level integration: the REAL /admin/orders work queue and the REAL
 // /admin/orders/[id] transition action, invoked the way SvelteKit invokes
@@ -410,6 +411,7 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 					'company.vatRegistered': true,
 					'company.regCom': 'J40/1234/2025',
 					'company.address': 'Str. Somnului 10, București',
+					...ISSUER_ADDRESS_SETTINGS,
 					'invoice.seriesPrefix': 'QUE'
 				}).map(([key, value]) => ({ key, value }))
 			)
@@ -678,6 +680,7 @@ describe('/admin/orders/[id] ?/stornoPartial — the fiscal side of a partial re
 					'company.vatRegistered': true,
 					'company.regCom': 'J40/1234/2025',
 					'company.address': 'Str. Somnului 10, București',
+					...ISSUER_ADDRESS_SETTINGS,
 					'invoice.seriesPrefix': 'QUE',
 					'invoice.vatStandardRates': '2025-08-01 21'
 				}).map(([key, value]) => ({ key, value }))
