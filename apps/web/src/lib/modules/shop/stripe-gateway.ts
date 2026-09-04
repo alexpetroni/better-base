@@ -92,6 +92,9 @@ export function createStripeGateway(
 				})),
 				success_url: input.successUrl,
 				cancel_url: input.cancelUrl,
+				// The courier (Sameday) refuses an AWB without a recipient phone;
+				// Checkout is the only place the customer is asked for one.
+				phone_number_collection: { enabled: true },
 				shipping_address_collection: {
 					// Site config lists plain ISO country codes; Stripe's type is a
 					// closed enum union of the same codes.

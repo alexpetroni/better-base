@@ -80,6 +80,12 @@ export interface BuyerCompany {
 /** Postal address as collected by Stripe Checkout (subset we care about). */
 export interface ShippingAddress {
 	name?: string;
+	/**
+	 * Recipient phone from Stripe's `customer_details` (Checkout collects it
+	 * since FIX-11) — the courier refuses an AWB without one. Erased with the
+	 * rest of the address by GDPR erasure.
+	 */
+	phone?: string;
 	line1?: string;
 	line2?: string;
 	city?: string;

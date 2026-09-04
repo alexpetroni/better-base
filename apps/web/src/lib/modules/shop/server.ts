@@ -69,12 +69,15 @@ export {
 	createShipmentForOrder,
 	ensureShipmentLabel,
 	getShipmentForOrder,
+	missingRecipientFields,
+	REQUIRED_RECIPIENT_FIELDS,
 	SHIPMENT_SYNC_ACTOR,
 	SHIPMENT_SYNC_BATCH,
 	shipmentLabelKey,
 	syncShipmentStatuses,
 	type CreateShipmentDeps,
 	type CreateShipmentError,
+	type RecipientField,
 	type ShipmentDeps,
 	type ShipmentSyncResult
 } from './shipment-service.ts';

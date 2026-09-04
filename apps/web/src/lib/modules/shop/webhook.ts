@@ -134,6 +134,8 @@ function extractShipping(session: Stripe.Checkout.Session): ShippingAddress | nu
 	const a = details.address;
 	return {
 		name: details.name ?? undefined,
+		// Collected by Checkout (`phone_number_collection`); the courier needs it.
+		phone: session.customer_details?.phone ?? undefined,
 		line1: a.line1 ?? undefined,
 		line2: a.line2 ?? undefined,
 		city: a.city ?? undefined,

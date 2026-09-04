@@ -24,6 +24,21 @@
 
 	const transitions = $derived(legalTransitions(data.order.fulfillmentStatus));
 
+	// `missing-recipient-data` names fields as language-neutral tokens.
+	const recipientFieldLabels: Record<string, () => string> = {
+		phone: m.admin_order_recipient_phone,
+		county: m.admin_order_recipient_county,
+		city: m.admin_order_recipient_city,
+		line1: m.admin_order_recipient_line1
+	};
+	function recipientFields(detail: string): string {
+		return detail
+			.split(', ')
+			.filter(Boolean)
+			.map((field) => (recipientFieldLabels[field] ?? (() => field))())
+			.join(', ');
+	}
+
 	const shipmentStatusLabels: Record<string, () => string> = {
 		registered: m.admin_order_shipment_status_registered,
 		'in-transit': m.admin_order_shipment_status_in_transit,
@@ -72,6 +87,7 @@
 		shipping
 			? [
 					shipping.name,
+					shipping.phone,
 					shipping.line1,
 					shipping.line2,
 					[shipping.postalCode, shipping.city].filter(Boolean).join(' '),
@@ -401,7 +417,16 @@
 						? m.admin_order_shipment_err_not_paid()
 						: form.awbError === 'order-not-shippable'
 							? m.admin_order_shipment_err_not_shippable()
-							: m.admin_order_shipment_err_courier({ detail: form.awbDetail ?? '' })}
+							: form.awbError === 'missing-recipient-data'
+								? m.admin_order_shipment_err_missing_recipient({
+										fields: recipientFields(form.awbDetail ?? '')
+									})
+								: m.admin_order_shipment_err_courier({ detail: form.awbDetail ?? '' })}
+					{#if form.awbError === 'missing-recipient-data'}
+						<a href="#shipping-address" class="underline" data-testid="order-shipment-edit-address">
+							{m.admin_order_shipment_edit_address()}
+						</a>
+					{/if}
 				</p>
 			{/if}
 		</div>
@@ -423,7 +448,7 @@
 				</p>
 			{/if}
 		</div>
-		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
+		<div id="shipping-address" class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
 			<p class="mb-1 text-(--color-ink)/60">{m.admin_order_shipping()}</p>
 			{#if shippingLines.length > 0}
 				<address class="not-italic" data-testid="order-detail-shipping">

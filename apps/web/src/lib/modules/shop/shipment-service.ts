@@ -8,7 +8,13 @@ import type { CourierProvider, CourierTrackingStatus } from './courier.ts';
 import { canTransition, type FulfillmentStatus } from './fulfillment.ts';
 import { appendOrderEvent, applyFulfillmentTransitionInTx } from './fulfillment-service.ts';
 import { orderLookupUrl } from './order-link.ts';
-import { orders, shipments, type OrderRow, type ShipmentRow } from './schema.ts';
+import {
+	orders,
+	shipments,
+	type OrderRow,
+	type ShipmentRow,
+	type ShippingAddress
+} from './schema.ts';
 
 /**
  * Shipments: the operational record of one courier AWB per order, created by
@@ -47,8 +53,33 @@ export type CreateShipmentError =
 	| 'order-not-paid'
 	/** Fulfillment already past packing (shipped/delivered/returned/cancelled). */
 	| 'order-not-shippable'
+	/**
+	 * The stored address lacks what the courier requires; detail lists the
+	 * missing `RecipientField`s comma-separated. Raised BEFORE any courier call.
+	 */
+	| 'missing-recipient-data'
 	/** The courier API refused or failed; detail carries the message. */
 	| 'courier';
+
+/**
+ * Recipient fields no AWB can be registered without (Sameday validates all
+ * four; `county` is the address `state` as Stripe collects it).
+ */
+export const REQUIRED_RECIPIENT_FIELDS = ['phone', 'county', 'city', 'line1'] as const;
+export type RecipientField = (typeof REQUIRED_RECIPIENT_FIELDS)[number];
+
+/** Which required recipient fields the stored address lacks. Pure. */
+export function missingRecipientFields(
+	address: ShippingAddress | null | undefined
+): RecipientField[] {
+	const present = (value: string | undefined) => !!value && value.trim().length > 0;
+	const missing: RecipientField[] = [];
+	if (!present(address?.phone)) missing.push('phone');
+	if (!present(address?.state)) missing.push('county');
+	if (!present(address?.city)) missing.push('city');
+	if (!present(address?.line1)) missing.push('line1');
+	return missing;
+}
 
 export interface CreatedShipmentRecord {
 	shipment: ShipmentRow;
@@ -100,6 +131,13 @@ export async function createShipmentForOrder(
 			if (!SHIPPABLE_STATES.includes(order.fulfillmentStatus)) {
 				return { ok: false, error: 'order-not-shippable', detail: order.fulfillmentStatus };
 			}
+			// Refused HERE, before the courier: Sameday rejects an AWB without a
+			// phone or county, and its refusal used to be the only signal. The
+			// operator gets the missing fields and an address editor instead.
+			const missing = missingRecipientFields(order.shippingAddress);
+			if (missing.length > 0) {
+				return { ok: false, error: 'missing-recipient-data', detail: missing.join(', ') };
+			}
 
 			// The courier call sits inside the lock on purpose: it is bounded by
 			// the adapter's timeout, and holding the lock is what makes a racing
@@ -112,6 +150,7 @@ export async function createShipmentForOrder(
 					recipient: {
 						name: order.shippingAddress?.name || order.email,
 						email: order.email,
+						phone: order.shippingAddress?.phone,
 						address: order.shippingAddress ?? {}
 					}
 				}));

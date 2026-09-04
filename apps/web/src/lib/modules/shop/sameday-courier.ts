@@ -7,6 +7,25 @@ export const SAMEDAY_BASE_URL_DEFAULT = 'https://api.sameday.ro';
 export const SAMEDAY_SERVICE_ID_DEFAULT = 7;
 /** Declared parcel weight (kg) — the shop does not track physical weights. */
 export const SAMEDAY_PACKAGE_WEIGHT_KG = 1;
+/** Response-body characters copied into an error — enough for Sameday's validation JSON. */
+export const SAMEDAY_ERROR_BODY_MAX = 600;
+
+/**
+ * An error that names the HTTP status AND what Sameday answered: their 400s
+ * carry the validation reason (which recipient field is blank, an unknown
+ * county…), and that is what the operator needs to read on the order page.
+ * The body is whitespace-collapsed and bounded, never echoed whole.
+ */
+export async function samedayFailure(what: string, response: Response): Promise<Error> {
+	let body = '';
+	try {
+		body = (await response.text()).replace(/\s+/g, ' ').trim();
+	} catch {
+		// An unreadable body leaves the status as the only reason.
+	}
+	if (body.length > SAMEDAY_ERROR_BODY_MAX) body = `${body.slice(0, SAMEDAY_ERROR_BODY_MAX)}…`;
+	return new Error(`${what} (HTTP ${response.status})${body ? `: ${body}` : ''}`);
+}
 
 export interface SamedayCourierOptions {
 	username: string;
@@ -124,15 +143,15 @@ export function createSamedayCourier(options: SamedayCourierOptions): CourierPro
 				'awbRecipient[personType]': '0',
 				'awbRecipient[phoneNumber]': shipment.recipient.phone ?? '',
 				'awbRecipient[email]': shipment.recipient.email,
-				'awbRecipient[countyString]': a.state ?? a.city ?? '',
+				// The county is the address `state` and nothing else: a city name
+				// in its place is a mis-routed parcel, not a fallback (FIX-11).
+				'awbRecipient[countyString]': a.state ?? '',
 				'awbRecipient[cityString]': a.city ?? '',
 				'awbRecipient[address]': [a.line1, a.line2].filter(Boolean).join(', '),
 				'awbRecipient[postalCode]': a.postalCode ?? ''
 			});
 			const response = await api('/api/awb', { method: 'POST', body });
-			if (!response.ok) {
-				throw new Error(`Sameday AWB creation failed (HTTP ${response.status})`);
-			}
+			if (!response.ok) throw await samedayFailure('Sameday AWB creation failed', response);
 			const data = (await response.json()) as { awbNumber?: string };
 			if (!data.awbNumber) throw new Error('Sameday AWB creation returned no awbNumber');
 			return { awb: data.awbNumber, trackingUrl: samedayTrackingUrl(data.awbNumber) };
@@ -143,9 +162,7 @@ export function createSamedayCourier(options: SamedayCourierOptions): CourierPro
 				method: 'GET'
 			});
 			if (response.status === 404) return null;
-			if (!response.ok) {
-				throw new Error(`Sameday label download failed (HTTP ${response.status})`);
-			}
+			if (!response.ok) throw await samedayFailure('Sameday label download failed', response);
 			return new Uint8Array(await response.arrayBuffer());
 		},
 
@@ -154,9 +171,7 @@ export function createSamedayCourier(options: SamedayCourierOptions): CourierPro
 				method: 'GET'
 			});
 			if (response.status === 404) return null;
-			if (!response.ok) {
-				throw new Error(`Sameday status lookup failed (HTTP ${response.status})`);
-			}
+			if (!response.ok) throw await samedayFailure('Sameday status lookup failed', response);
 			const data = (await response.json()) as {
 				expeditionStatus?: { status?: string; statusState?: string };
 			};
@@ -166,9 +181,7 @@ export function createSamedayCourier(options: SamedayCourierOptions): CourierPro
 
 		async cancelShipment(awb) {
 			const response = await api(`/api/awb/${encodeURIComponent(awb)}`, { method: 'DELETE' });
-			if (!response.ok) {
-				throw new Error(`Sameday AWB cancellation failed (HTTP ${response.status})`);
-			}
+			if (!response.ok) throw await samedayFailure('Sameday AWB cancellation failed', response);
 		}
 	};
 }
