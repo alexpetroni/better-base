@@ -47,5 +47,24 @@ Products, cart, Stripe Checkout and orders (Phase 5).
   `failed`, restores the reserved stock (unless the order was oversold — the
   clamp lost the exact count; the trail says so) and cancels fulfillment.
   Sessions are created card-only unless `shop.allowAllPaymentMethods` is on.
+- **Shipping (NEXT-8 + FIX-11)**: `CourierProvider` seam (`courier.ts`;
+  mock default, Sameday behind `COURIER_PROVIDER=sameday`). Checkout collects
+  the recipient phone; `createShipmentForOrder` refuses with a typed
+  `missing-recipient-data` (phone/county/city/line1) BEFORE any courier call
+  and the admin fills the address in (`updateOrderShippingAddress`, trail
+  names the changed fields only). AWB creation is two-phase: a `creating`
+  claim row committed under the order lock → courier call with no lock held
+  (`clientInternalReference` = order id) → `registered` + fulfillment walk,
+  or `failed` with the courier's reason (retry = fresh claim; a claim older
+  than 5 min is failed and replaced; a refund mid-call cancels the fresh
+  AWB). One LIVE row per order (partial unique index; cancelled/failed rows
+  may be replaced). The hourly sync polls only DUE rows, backs a throwing
+  row off (15 min doubling, 24 h cap, `error_count`/`last_error`,
+  `shipment-sync-error` event), aborts the run on `CourierAuthError`
+  (`aborted: 'auth'`), and on a courier-side `cancelled` closes the row and
+  steps the order `shipped → packed` — an edge only `SHIPMENT_SYNC_ACTOR`
+  may take. Sameday statuses classify by `SAMEDAY_STATUS_BY_ID` (maintained
+  from captured fixtures), then anchored text rules with explicit negatives
+  (`nelivrat` ≠ `livrat`), unknown text → warn + in-transit.
 - Public visibility rule (like blog/quiz): product is `active` AND tagged to
   a pillar in the active site's config.

@@ -356,6 +356,12 @@ brand — a shared account also works):
    turn on `/admin/settings` → Magazin → "Permite toate metodele de plată";
    the two async events above are handled either way, but the decision is the
    operator's, not the dashboard's.
+6. **The recipient phone is collected at Checkout** (`phone_number_collection`
+   is on) and stored on the order's shipping address next to the county
+   Stripe collects — the courier refuses an AWB without either. Orders placed
+   before this existed, or whose Stripe address came without a county, are
+   refused on the order page with the missing fields named; "Editează adresa"
+   there fills them in (admin-only, the trail records which fields changed).
 
 The product catalog syncs to Stripe on admin save (product + price objects);
 checkout itself snapshots prices from our database, so an unsynced catalog
@@ -422,10 +428,55 @@ live account from this codebase — human launch steps:
    contract says otherwise).
 3. Set `COURIER_PROVIDER=sameday` and redeploy — a half-set config refuses
    to boot.
-4. **Verify with one real AWB**: generate it from a (test) paid order in
-   `/admin/orders/[id]`, download the label, confirm the shipment appears in
-   the eAWB dashboard, then cancel it there. Until this step passes, treat
-   the adapter as unverified against the live API.
+4. **Verify with one real AWB**: pick a (test) paid order whose address has
+   a phone and a county (the page refuses otherwise — see §7 "Stripe" 6),
+   generate the AWB from `/admin/orders/[id]`, download the label, confirm
+   the shipment appears in the eAWB dashboard with our order id as its
+   client reference. Then cancel it IN eAWB (not from our side) and run the
+   sync once by hand (§9 curl): the order must step back from `expediată` to
+   `împachetată` with an "AWB anulat de curier" event and the page must
+   offer a new AWB. Until this passes, treat the adapter as unverified.
+5. **Capture the status payloads as fixtures** while that AWB exists — the
+   status table is maintained from real answers, never from memory:
+
+   ```bash
+   TOKEN=$(curl -sS -X POST 'https://api.sameday.ro/api/authenticate?remember_me=1' \
+     -H "X-Auth-Username: $SAMEDAY_USERNAME" -H "X-Auth-Password: $SAMEDAY_PASSWORD" | jq -r .token)
+   curl -sS "https://api.sameday.ro/api/client/awb/<AWB>/status" -H "X-Auth-Token: $TOKEN" \
+     > apps/web/tests/fixtures/sameday/status-<state>.json
+   ```
+
+   Save one file per state you observe (emis, ridicat / în tranzit, livrat,
+   anulat, and any "nelivrat" attempt). Each `expeditionStatus.statusId` +
+   text pair goes into `SAMEDAY_STATUS_BY_ID`
+   (`apps/web/src/lib/modules/shop/sameday-courier.ts`), which ships seeded
+   with id 1 = "AWB Emis" only: until the table is filled in, the anchored
+   text rules (explicit negatives first — "nelivrat" is NOT "livrat") do the
+   classifying, and any text they do not know is logged at warn level with
+   the raw payload and mapped to "în tranzit". Treat every such log line as
+   a fixture to capture and a table row to add.
+
+**How an AWB is created (FIX-11).** Generation is two-phase: a `creating`
+claim row is committed first, the courier is called with no database lock
+held, then the row becomes `registered` (AWB, tracking link) or `failed`
+with the courier's own reason (Sameday's validation text is shown on the
+order page; "Reîncearcă AWB" starts over with a fresh claim). The AWB is
+registered with `clientInternalReference` = our order id, so a process that
+dies mid-call (the claim is failed and replaced after 5 minutes) leaves an
+AWB you can find in eAWB by order id. A courier-side cancellation (seen by
+the hourly sync) closes the row, moves the order back to `împachetată` and
+allows a replacement; a refund landing while the courier is registering
+cancels the fresh AWB again.
+
+**Sync health.** The hourly sync (§9) answers
+`{"polled":…,"updated":…,"errors":…}` plus `"aborted":"auth"` when the
+courier rejected the credentials (the run stops at once and logs at error
+level — fix `SAMEDAY_*` and re-run). A row whose lookup throws is retried
+with backoff (15 min, doubling, capped at 24 h) instead of blocking the
+batch, keeps `error_count` / `last_error` and writes a "shipment-sync-error"
+event on its order; while any in-flight row has `error_count > 0` the admin
+dashboard (`/admin`) shows a "sincronizarea eșuează" banner with the latest
+error text. A successful poll clears the flag.
 
 Until then `COURIER_PROVIDER=mock` keeps everything working end-to-end with
 deterministic fake AWBs (dev/test default) — usable for staging, never for a
@@ -448,7 +499,7 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 | Schedule | Command | Purpose |
 | --- | --- | --- |
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
-| hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every in-flight AWB (bounded batch per run, oldest first), updates shipment + fulfillment state (`delivered`/`returned`) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
+| hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every DUE in-flight AWB (bounded batch per run, oldest-synced first), updates shipment + fulfillment state (`delivered`/`returned`; a courier-side `cancelled` steps the order back to packed) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. A row whose lookup throws is backed off (15 min, doubling, 24 h cap) and flagged on `/admin`; the JSON answer carries `errors` and, on a credentials failure, `"aborted":"auth"` — alert on either (§7 "Sync health"). Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
 | every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: claims a bounded batch of due sends (25/run), re-checks the marketing consent per send, mails through the idempotent email wrapper, retries failures with backoff and parks them after 5 attempts (visible in `/admin/nurture`). Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. Design notes: `src/lib/modules/nurture/README.md`. |
 
 Where no machine can run scripts (Vercel), the retention job is also

@@ -2693,3 +2693,131 @@ after a full refund — while the session-first control passes on both.
 
 **New env vars:** none. **New tables:** `pending_refunds`. **New
 migrations:** `0022_damp_santa_claus.sql`.
+
+## Remediation FIX-11 (audit 2026-09-03 P1 shop & shipping, P2 courier call in the transaction — batch 2, phase 3)
+
+A deliverable AWB, a self-healing sync, no dead ends. Closes the four
+shipping P1s (Sameday adapter, shipment-sync starvation, courier-cancelled
+AWB, status classification by substring) and the P2 "courier call inside the
+shipment transaction" of `docs/AUDIT-2026-09-03.md`. Migration
+`0023_shipment_lifecycle` (additive: `shipments.awb` nullable, new
+`next_sync_at` / `error_count` (default 0) / `last_error`; the one-row-per-
+order `shipments_order_id_uq` replaced by the PARTIAL
+`shipments_order_id_active_uq` on `status not in ('cancelled','failed')`
+plus a plain `shipments_order_id_idx`). No new env vars, no new settings.
+
+**Closed by FIX-11:**
+
+- **P1 Sameday adapter cannot produce a deliverable AWB** — Checkout
+  sessions enable `phone_number_collection`; the webhook persists
+  `customer_details.phone` into `shippingAddress.phone` (erasure already
+  nulls the jsonb); `createShipmentForOrder` returns a typed
+  `missing-recipient-data` (detail = the missing fields among phone, county
+  = Stripe `state`, city, line1) BEFORE any courier call; the adapter sends
+  the phone, takes the county from the address `state` only (no city
+  fallback), sends `clientInternalReference` = order id, and every failure
+  carries Sameday's bounded response body (`samedayFailure`, 600 chars) so
+  the operator reads the actual reason on the order page. Admin: the error
+  names the fields (localized) and links to a new address editor
+  (`?/updateShippingAddress`, admin-only, in the authz manifest): trimmed,
+  bounded fields, the courier's four required, and a `shipping-address-
+  updated` event that names the CHANGED FIELDS only (never values — the
+  trail outlives GDPR erasure). The stored phone shows in the address box.
+- **P2 courier call inside the transaction** — creation is two-phase:
+  (1) claim under the order lock — validate, insert a `creating` row,
+  commit; (2) courier call with NO lock held (a NOWAIT lock on the order
+  succeeds meanwhile — pinned by test); (3) record under the lock again:
+  `registered` (awb, tracking) + the fulfillment walk, or `failed` with the
+  courier's reason and an `awb-failed` event (a retry inserts a fresh
+  claim; the failed row stays as history). A racing second click finds the
+  claim (`created: false`); a claim older than
+  `SHIPMENT_CREATING_STALE_MS` (5 min) with no outcome is failed with a
+  "check the courier portal by order id" text and replaced. A refund that
+  lands while the courier is registering (the claim counts as "nothing left
+  the warehouse", fulfillment → cancelled) makes phase 3 cancel the fresh
+  AWB with the courier and answer `order-not-shippable` — raced by test
+  with a gated courier. `getShipmentForOrder` prefers the live row, else
+  the latest replaced one; `applyRefundShipmentInTx` acts on the live row.
+- **P1 shipment-sync starvation** — the sync polls only DUE rows
+  (`next_sync_at is null or <= now`), oldest-synced first. A throwing
+  lookup bumps `last_synced_at`, backs the row off exponentially
+  (`syncBackoffMs`: 15 min × 2^(n−1), capped at 24 h), increments
+  `error_count`, stores the bounded `last_error`, and writes a
+  `shipment-sync-error` event on the order; a successful poll heals the
+  row. Pinned with a batch of ONE: the throwing row no longer blocks the
+  next one (the pre-fix code re-polled the same row forever). A
+  `CourierAuthError` (Sameday login refused, or a 401/403 on a call — the
+  adapter forgets its token) flags the row it hit (event + `error_count`,
+  no backoff — the credentials are at fault) and ABORTS the run at error
+  level; the result and the cron JSON carry `aborted: 'auth'`. The admin
+  dashboard (`/admin`, new `+page.server.ts`) shows a "sincronizarea
+  eșuează" banner with the count and the latest error text while any
+  in-flight row has `error_count > 0` (`shipmentSyncHealth`).
+- **P1 courier-cancelled AWB is a dead end** — a courier `cancelled` seen
+  by the sync (the refund path closes its row in-tx, so it never reaches
+  here) marks the row `cancelled`, writes `awb-cancelled-externally`, and
+  steps a `shipped` order back to `packed` — a NEW edge that only
+  `SHIPMENT_SYNC_ACTOR` may take (`canTransition(from, to, actor)`;
+  `legalTransitions` and the admin transition action stay unchanged, pinned
+  in `fulfillment.spec` and `orders-page.spec`). The partial unique index
+  lets `createShipmentForOrder` register a replacement (new row, new AWB,
+  its own shipping email); the refund rule then cancels the replacement,
+  not the old row.
+- **P1 status classification by substring** — `classifySamedayStatus`
+  classifies on the numeric `statusId` through `SAMEDAY_STATUS_BY_ID`
+  first, then on `statusState`/`status`/`statusLabel` through ANCHORED,
+  diacritics-folded text rules with explicit negatives first (`nelivrat` →
+  in-transit, never delivered; `anulat`, `retur`, `livrat`, `emis|creat`,
+  the movement vocabulary), and logs any unknown text at warn level WITH
+  the raw payload before mapping it to `in-transit`. `normalizeSamedayStatus`
+  keeps its text-only shape. DEPLOYMENT §7 "Shipping" step 5 and the
+  LAUNCH-CHECKLIST live-AWB box carry the capture-real-payload procedure
+  (token + status curl → `tests/fixtures/sameday/`, extend the table).
+
+**Deferred / noted:**
+
+- `SAMEDAY_STATUS_BY_ID` ships with ONE row (1 = "AWB Emis"): no captured
+  Sameday payload exists in this repo and the author would not invent ids.
+  The text rules do the classifying until the live-AWB launch step fills
+  the table from real answers; the warn line is the cue for each missing
+  row.
+- The stale-claim takeover can, when the process died AFTER Sameday
+  registered the AWB, produce a second AWB at Sameday on the retry. The
+  failed row's text and the DEPLOYMENT paragraph say to check eAWB by order
+  id (`clientInternalReference`) first; the adapter has no "find by
+  reference" call. Accepted for this phase.
+- Trail growth is bounded, not zero: a poisoned AWB writes a
+  `shipment-sync-error` per retry (≈ 10 in the first week, then daily);
+  broken credentials flag one row per hourly run (the batch head) until
+  fixed.
+- Migrations note (for FIX-16): 0023 drops and creates its indexes
+  in-transaction on `shipments` (small today); adopt the out-of-transaction
+  path if the table grows before it lands.
+- No new e2e (the phase lists none). The existing `settings.e2e` shipping
+  flow now carries phone + county, as do every AWB-generating fixture
+  (`orders-page.spec`, `shipment-label-route.spec`, `refunds.spec`,
+  `shipment.spec`). The audit's e2e gap for a phone-less order stays open.
+- `shipment.spec`'s old "a courier failure writes nothing" asserted the
+  single-phase design the audit replaced; it now asserts the `failed` row,
+  its reason, no transition, no email, and that the retry registers exactly
+  one AWB (said so in the commit). Its parking helper touches only in-flight
+  rows — setting a replaced row to `delivered` would create a second live
+  row under the partial index.
+
+**New:** columns `shipments.next_sync_at`, `error_count`, `last_error`
+(`awb` nullable); shipment statuses `creating`, `failed`; order-event kinds
+`awb-failed`, `awb-cancelled-externally`, `shipment-sync-error`,
+`shipping-address-updated`; `ShippingAddress.phone`; services
+`missingRecipientFields`, `REQUIRED_RECIPIENT_FIELDS`,
+`updateOrderShippingAddress`, `shipmentSyncHealth`, `syncBackoffMs`,
+`SHIPMENT_SYNC_BACKOFF_BASE_MS/MAX_MS`, `SHIPMENT_CREATING_STALE_MS`,
+`SHIPMENT_REPLACEABLE_STATUSES`, `classifySamedayStatus`,
+`matchSamedayStatusText`, `SAMEDAY_STATUS_BY_ID`, `samedayFailure`
+/`samedayFailureMessage`, `CourierAuthError` / `isCourierAuthError`,
+`canTransition(from, to, actor?)`, `SHIPMENT_SYNC_ACTOR` now lives in
+`fulfillment.ts` (re-exported), `createShipmentForOrder(…, { now })`,
+`syncShipmentStatuses(…, { now })`, `ShipmentSyncResult.aborted`,
+`cancelShipmentBestEffort` returns the outcome and can close a row; mock
+courier `trackFailures`; admin action `updateShippingAddress`, dashboard
+`+page.server.ts`; messages for the editor, statuses, events and banner;
+`CheckoutSession` created with `phone_number_collection`.

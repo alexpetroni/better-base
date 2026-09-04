@@ -139,6 +139,9 @@ list applies later to better-life (with its own domain/accounts).
       `checkout.session.async_payment_succeeded`,
       `checkout.session.async_payment_failed`, `charge.refunded`
       (DEPLOYMENT.md §7); its `whsec_…` set.
+- [ ] Checkout asks for a **phone number** on the test-mode purchase (it lands
+      on the order's shipping address next to the county; the courier refuses
+      an AWB without either — DEPLOYMENT.md §7 "Stripe" 6).
 - [ ] Payment methods: sessions are card-only by default; only enable
       "Permite toate metodele de plată" in `/admin/settings` → Magazin if a
       delayed method (bank debit, voucher) is wanted — then a pending order
@@ -203,7 +206,9 @@ in the split boxes.
 - [ ] Shipment-status sync, per target (§9): Vercel — `vercel.json` already
       schedules `GET /api/cron/shipment-sync` hourly (same `CRON_SECRET`);
       adapter-node — machine cron curls the same route hourly. Verified once
-      by hand: the authorized curl answers `{"polled":…}`.
+      by hand: the authorized curl answers `{"polled":…,"errors":0}` with no
+      `"aborted"` key; someone is alerted when `errors` > 0 or `aborted`
+      appears, and `/admin` shows no "sincronizarea eșuează" banner.
 - [ ] Nurture email queue, per target (§9): Vercel — `vercel.json` already
       schedules `GET /api/cron/nurture-send` every 15 minutes (same
       `CRON_SECRET`); adapter-node — machine cron curls the same route.
@@ -211,10 +216,17 @@ in the split boxes.
       The seeded sequences are live-checked in `/admin/nurture` (deactivate
       any you do not want sending at launch — sends only leave while
       `EMAIL_DRYRUN=false`).
-- [ ] One real AWB generated and cancelled against the live Sameday account
-      (DEPLOYMENT.md §7 "Shipping" step 4) — the adapter follows the public
-      API but is unverified against a live account until this passes; the
-      shipping email (with tracking link) arrives.
+- [ ] One real AWB generated against the live Sameday account from an order
+      with phone + county (DEPLOYMENT.md §7 "Shipping" step 4) — the adapter
+      follows the public API but is unverified against a live account until
+      this passes; the shipping email (with tracking link) arrives; the AWB
+      shows in eAWB with our order id as client reference; cancelled IN eAWB,
+      one hand-run sync moves the order back to `împachetată` ("AWB anulat de
+      curier" on the trail) and the page offers a new AWB.
+- [ ] Sameday status payloads captured as fixtures during that step
+      (DEPLOYMENT.md §7 "Shipping" step 5) and every observed `statusId`
+      added to `SAMEDAY_STATUS_BY_ID`; no "Sameday status unknown" warn line
+      in the logs afterwards.
 - [ ] Uptime monitor pointed at `https://bettersleep.ro/api/health`
       (alert on non-200).
 - [ ] Log collection captures the app's stderr JSON lines (Vercel: a log
