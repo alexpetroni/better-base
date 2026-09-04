@@ -207,12 +207,17 @@ export const orderItems = pgTable(
 );
 
 /**
- * One courier shipment (AWB) per order, created by the admin "generate AWB"
- * action through the CourierProvider seam. The unique order id is the
- * idempotency backstop — pressing the button twice can never register two
- * shipments. `status` mirrors the courier's tracking state (normalized by the
- * provider adapter); the cron sync polls rows still in flight
- * (`registered`/`in-transit`) and stops once a terminal state is reached.
+ * Courier shipments (AWBs) of an order, created by the admin "generate AWB"
+ * action through the CourierProvider seam in two phases (FIX-11): a
+ * `creating` claim row is committed first, the courier is called outside any
+ * row lock, then the row becomes `registered` (awb, tracking) or `failed`
+ * (last_error). ONE live row per order: the partial unique index excludes
+ * `cancelled` and `failed`, so a courier-side cancellation or a refused AWB
+ * can be followed by a replacement, while a double click can never register
+ * two. `status` mirrors the courier's tracking state (normalized by the
+ * adapter); the cron sync polls rows still in flight (`registered`/
+ * `in-transit`) that are due (`next_sync_at`), backs a throwing row off
+ * exponentially (`error_count`, `last_error`) and stops at a terminal state.
  */
 export const shipments = pgTable(
 	'shipments',
@@ -223,20 +228,38 @@ export const shipments = pgTable(
 			.references(() => orders.id, { onDelete: 'cascade' }),
 		/** Courier adapter that registered the AWB (`mock` | `sameday`). */
 		provider: text('provider').notNull(),
-		awb: text('awb').notNull(),
+		/** The courier's AWB number; null while `creating` and on a `failed` claim. */
+		awb: text('awb'),
 		trackingUrl: text('tracking_url').notNull().default(''),
 		status: text('status', {
-			enum: ['registered', 'in-transit', 'delivered', 'returned', 'cancelled']
+			enum: ['creating', 'registered', 'in-transit', 'delivered', 'returned', 'cancelled', 'failed']
 		})
 			.notNull()
 			.default('registered'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 		/** When the cron sync last polled this AWB; orders the per-run batch. */
-		lastSyncedAt: timestamp('last_synced_at', { withTimezone: true })
+		lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+		/**
+		 * Earliest next poll after a tracking failure (exponential backoff);
+		 * null = due whenever the batch reaches the row.
+		 */
+		nextSyncAt: timestamp('next_sync_at', { withTimezone: true }),
+		/** Consecutive tracking failures; reset by the first successful poll. */
+		errorCount: integer('error_count').notNull().default(0),
+		/**
+		 * Bounded text of the last failure: the courier's AWB refusal on a
+		 * `failed` row, the last tracking error on an in-flight one.
+		 */
+		lastError: text('last_error')
 	},
 	(table) => [
-		uniqueIndex('shipments_order_id_uq').on(table.orderId),
+		// One LIVE shipment per order — mirrors SHIPMENT_REPLACEABLE_STATUSES
+		// in shipment-service.ts: a cancelled or failed row may be replaced.
+		uniqueIndex('shipments_order_id_active_uq')
+			.on(table.orderId)
+			.where(sql`${table.status} not in ('cancelled', 'failed')`),
+		index('shipments_order_id_idx').on(table.orderId),
 		// The cron sync selects in-flight rows by status.
 		index('shipments_status_idx').on(table.status)
 	]
