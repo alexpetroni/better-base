@@ -2672,5 +2672,24 @@ life projects. Test-first order in `git log`: d2c92f9 (P0 #2/#3 specs) →
 91596a1 (fix); 7a7f553 (partial storno amounts) → dad5e28; 2bd9c0b (admin
 storno action) → 281f569; d91b0f9 (card-only, stock, race, caps) → 8a0d9cc.
 
+**Re-verification (builder run 2026-09-04, fresh context):** gate green from
+the repo root (apps/web 98 files, 886 passed, 4 skipped — the `driver-parity`
+suite gated on `NEON_WS_PROXY`); `pnpm test:neon` 98 files, 890 passed, 0
+skipped; `pnpm db:migrate` + `db:status` clean on a FRESH scratch database
+(23 applied) and on one brought to 0021 through a trimmed journal copy and
+seeded with 503 orders (72 refunded), an invoice + full storno pair and a lone
+invoice before 0022 ran — all 72 refunded orders backfilled to their total, no
+other row touched, `invoices_storno_of_uq` gone, `invoices_storno_of_idx` +
+`invoices_storno_bounded` present, and the trigger refused a raw storno past
+the original, a one-ban overshoot after two partial stornos that exactly reach
+the invoice, and a second full storno of an already reversed invoice;
+`DEPLOY_TARGET=vercel pnpm build` green; `pnpm test:e2e` (build + both
+preview sites) 89 passed, 5 skipped, 0 failed. Test-first proven, not just
+ordered: the P0 spec exactly as committed in d2c92f9, run against the code at
+102bfd7 (schema and migration in, webhook fix 91596a1 not yet applied), fails
+6 of 7 tests — `refund-marked` where `refund-partial` is expected,
+`refund-unmatched` where `refund-pending` is expected, `refundedCents` 0
+after a full refund — while the session-first control passes on both.
+
 **New env vars:** none. **New tables:** `pending_refunds`. **New
 migrations:** `0022_damp_santa_claus.sql`.
