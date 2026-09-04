@@ -17,7 +17,8 @@ import {
 	getShipmentForOrder,
 	listOrderEvents,
 	orderLookupUrl,
-	transitionFulfillment
+	transitionFulfillment,
+	updateOrderShippingAddress
 } from '$lib/modules/shop/server';
 import { formStr, requireAdmin } from '$lib/server/forms';
 import { getSite } from '$lib/server/site';
@@ -131,6 +132,37 @@ export const actions: Actions = {
 			return fail(400, { awbError: result.error, awbDetail: result.detail ?? '' });
 		}
 		return { awbGenerated: true, awbExisting: !result.value.created };
+	},
+
+	/**
+	 * Operator-typed recipient data (FIX-11): the way out of the
+	 * `missing-recipient-data` refusal — the service bounds and validates the
+	 * fields and records which ones changed. Same defense-in-depth admin check.
+	 */
+	updateShippingAddress: async ({ request, params, locals }) => {
+		const user = requireAdmin(locals);
+
+		const form = await request.formData();
+		const result = await updateOrderShippingAddress(
+			{ db: getDb() },
+			params.id,
+			{
+				name: formStr(form, 'name'),
+				phone: formStr(form, 'phone'),
+				line1: formStr(form, 'line1'),
+				line2: formStr(form, 'line2'),
+				city: formStr(form, 'city'),
+				state: formStr(form, 'state'),
+				postalCode: formStr(form, 'postalCode'),
+				country: formStr(form, 'country')
+			},
+			user.email
+		);
+		if (!result.ok) {
+			if (result.error === 'order-not-found') error(404);
+			return fail(400, { addressError: result.error, addressDetail: result.detail ?? '' });
+		}
+		return { addressUpdated: true };
 	},
 
 	/**

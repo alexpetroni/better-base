@@ -101,6 +101,75 @@ export function missingRecipientFields(
 	return missing;
 }
 
+export type UpdateShippingAddressError = 'order-not-found' | 'missing-recipient-data';
+
+const ADDRESS_FIELD_MAX = 120;
+const ADDRESS_PHONE_MAX = 40;
+const ADDRESS_POSTAL_MAX = 20;
+const ADDRESS_KEYS: ReadonlyArray<keyof ShippingAddress> = [
+	'name',
+	'phone',
+	'line1',
+	'line2',
+	'city',
+	'state',
+	'postalCode',
+	'country'
+];
+
+/**
+ * Operator-typed recipient data (FIX-11): the way out of
+ * `missing-recipient-data` for orders placed before Checkout collected a
+ * phone, or whose Stripe address lacks a county. Every field is trimmed and
+ * bounded, the courier's four are required, and the trail records WHICH
+ * fields changed — never their values (order_events are retained after
+ * GDPR erasure nulls the address).
+ */
+export async function updateOrderShippingAddress(
+	deps: Pick<ShipmentDeps, 'db'>,
+	orderId: string,
+	input: Partial<Record<keyof ShippingAddress, string>>,
+	actor: string
+): Promise<Result<ShippingAddress, UpdateShippingAddressError>> {
+	const clean = (value: string | undefined, max: number) => (value ?? '').trim().slice(0, max);
+	const address: ShippingAddress = {};
+	const put = (key: keyof ShippingAddress, value: string) => {
+		if (value) address[key] = value;
+	};
+	put('name', clean(input.name, ADDRESS_FIELD_MAX));
+	put('phone', clean(input.phone, ADDRESS_PHONE_MAX));
+	put('line1', clean(input.line1, ADDRESS_FIELD_MAX));
+	put('line2', clean(input.line2, ADDRESS_FIELD_MAX));
+	put('city', clean(input.city, ADDRESS_FIELD_MAX));
+	put('state', clean(input.state, ADDRESS_FIELD_MAX));
+	put('postalCode', clean(input.postalCode, ADDRESS_POSTAL_MAX));
+	address.country = clean(input.country, 2).toUpperCase() || 'RO';
+
+	const missing = missingRecipientFields(address);
+	if (missing.length > 0) {
+		return { ok: false, error: 'missing-recipient-data', detail: missing.join(', ') };
+	}
+
+	return deps.db.transaction(
+		async (tx): Promise<Result<ShippingAddress, UpdateShippingAddressError>> => {
+			const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for('update');
+			if (!order) return { ok: false, error: 'order-not-found' };
+			const before = order.shippingAddress ?? {};
+			const changed = ADDRESS_KEYS.filter((key) => (before[key] ?? '') !== (address[key] ?? ''));
+			if (changed.length > 0) {
+				await tx.update(orders).set({ shippingAddress: address }).where(eq(orders.id, orderId));
+				await appendOrderEvent(tx, {
+					orderId,
+					kind: 'shipping-address-updated',
+					actor,
+					note: changed.join(', ')
+				});
+			}
+			return { ok: true, value: address };
+		}
+	);
+}
+
 export interface CreatedShipmentRecord {
 	shipment: ShipmentRow;
 	/** False when a live shipment already existed (idempotent re-request). */

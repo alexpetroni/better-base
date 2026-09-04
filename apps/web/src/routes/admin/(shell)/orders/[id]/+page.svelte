@@ -39,7 +39,21 @@
 			.join(', ');
 	}
 
+	// The address editor's fields, in form order; `state` is the county.
+	const ADDRESS_FIELDS: Array<{ name: keyof NonNullable<typeof shipping>; label: () => string }> = [
+		{ name: 'name', label: m.admin_order_address_name },
+		{ name: 'phone', label: m.admin_order_address_phone },
+		{ name: 'line1', label: m.admin_order_address_line1 },
+		{ name: 'line2', label: m.admin_order_address_line2 },
+		{ name: 'city', label: m.admin_order_address_city },
+		{ name: 'state', label: m.admin_order_address_state },
+		{ name: 'postalCode', label: m.admin_order_address_postal_code },
+		{ name: 'country', label: m.admin_order_address_country }
+	];
+
 	const shipmentStatusLabels: Record<string, () => string> = {
+		creating: m.admin_order_shipment_status_creating,
+		failed: m.admin_order_shipment_status_failed,
 		registered: m.admin_order_shipment_status_registered,
 		'in-transit': m.admin_order_shipment_status_in_transit,
 		delivered: m.admin_order_shipment_status_delivered,
@@ -62,6 +76,12 @@
 		if (event.kind === 'shipment-cancelled') return m.admin_order_event_shipment_cancelled();
 		if (event.kind === 'shipment-cancel-failed')
 			return m.admin_order_event_shipment_cancel_failed();
+		if (event.kind === 'awb-failed') return m.admin_order_event_awb_failed();
+		if (event.kind === 'awb-cancelled-externally')
+			return m.admin_order_event_awb_cancelled_externally();
+		if (event.kind === 'shipment-sync-error') return m.admin_order_event_shipment_sync_error();
+		if (event.kind === 'shipping-address-updated')
+			return m.admin_order_event_shipping_address_updated();
 		if (event.kind === 'fulfillment-transition' && event.fromStatus && event.toStatus) {
 			return m.admin_order_event_fulfillment({
 				from: fulfillmentLabels[event.fromStatus](),
@@ -83,6 +103,17 @@
 	);
 
 	const shipping = $derived(data.order.shippingAddress);
+	// A cancelled or failed row (or a stale claim) no longer holds an AWB: the
+	// button offers a (re)generation while the order is still shippable.
+	const canGenerateAwb = $derived(
+		data.order.status === 'paid' &&
+			(data.order.fulfillmentStatus === 'unfulfilled' ||
+				data.order.fulfillmentStatus === 'packed') &&
+			(!data.shipment || ['cancelled', 'failed', 'creating'].includes(data.shipment.status))
+	);
+	const addressEditorOpen = $derived(
+		form?.awbError === 'missing-recipient-data' || !!form?.addressError
+	);
 	const shippingLines = $derived(
 		shipping
 			? [
@@ -370,46 +401,58 @@
 			{#if data.shipment}
 				<div data-testid="order-shipment" data-status={data.shipment.status}>
 					<p class="font-mono font-semibold" data-testid="order-shipment-awb">
-						{data.shipment.awb}
+						{data.shipment.awb ?? '—'}
 					</p>
 					<p class="text-xs text-(--color-ink)/60" data-testid="order-shipment-status">
 						{(shipmentStatusLabels[data.shipment.status] ?? (() => data.shipment?.status ?? ''))()}
 						· {formatDate(data.shipment.createdAt, 'medium-time')}
 					</p>
-					<p class="mt-1 flex gap-3 text-xs">
-						<a
-							href={data.shipment.trackingUrl}
-							target="_blank"
-							rel="noopener"
-							data-testid="order-shipment-tracking"
-							class="text-(--color-brand) hover:underline"
+					{#if data.shipment.lastError}
+						<p
+							class="mt-1 text-xs break-words text-red-700"
+							data-testid="order-shipment-last-error"
 						>
-							{m.admin_order_shipment_tracking()}
-						</a>
-						<a
-							href={resolve('/api/shipments/[id]/label', { id: data.shipment.id })}
-							data-testid="order-shipment-label"
-							class="text-(--color-brand) hover:underline"
-						>
-							{m.admin_order_shipment_label()}
-						</a>
-					</p>
+							{data.shipment.lastError}
+						</p>
+					{/if}
+					{#if data.shipment.awb}
+						<p class="mt-1 flex gap-3 text-xs">
+							<a
+								href={data.shipment.trackingUrl}
+								target="_blank"
+								rel="noopener"
+								data-testid="order-shipment-tracking"
+								class="text-(--color-brand) hover:underline"
+							>
+								{m.admin_order_shipment_tracking()}
+							</a>
+							<a
+								href={resolve('/api/shipments/[id]/label', { id: data.shipment.id })}
+								data-testid="order-shipment-label"
+								class="text-(--color-brand) hover:underline"
+							>
+								{m.admin_order_shipment_label()}
+							</a>
+						</p>
+					{/if}
 				</div>
 			{:else}
 				<p class="text-(--color-ink)/70" data-testid="order-shipment-none">
 					{m.admin_order_shipment_none()}
 				</p>
-				{#if data.order.status === 'paid' && (data.order.fulfillmentStatus === 'unfulfilled' || data.order.fulfillmentStatus === 'packed')}
-					<form method="POST" action="?/generateAwb" class="mt-3">
-						<button
-							type="submit"
-							data-testid="order-shipment-generate"
-							class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
-						>
-							{m.admin_order_shipment_generate()}
-						</button>
-					</form>
-				{/if}
+			{/if}
+			{#if canGenerateAwb}
+				<form method="POST" action="?/generateAwb" class="mt-3">
+					<button
+						type="submit"
+						data-testid="order-shipment-generate"
+						class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+					>
+						{data.shipment && data.shipment.status !== 'creating'
+							? m.admin_order_shipment_retry()
+							: m.admin_order_shipment_generate()}
+					</button>
+				</form>
 			{/if}
 			{#if form?.awbError}
 				<p class="mt-2 text-xs text-red-700" data-testid="order-shipment-error">
@@ -459,6 +502,43 @@
 			{:else}
 				<p>{m.admin_order_no_shipping()}</p>
 			{/if}
+			<details class="mt-3" open={addressEditorOpen} data-testid="order-address-editor">
+				<summary class="cursor-pointer text-xs text-(--color-brand)">
+					{m.admin_order_address_edit()}
+				</summary>
+				<form method="POST" action="?/updateShippingAddress" class="mt-2 space-y-2">
+					{#each ADDRESS_FIELDS as field (field.name)}
+						<label class="block">
+							<span class="mb-1 block text-xs text-(--color-ink)/60">{field.label()}</span>
+							<input
+								name={field.name}
+								value={shipping?.[field.name] ?? (field.name === 'country' ? 'RO' : '')}
+								data-testid={`order-address-${field.name}`}
+								class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+							/>
+						</label>
+					{/each}
+					<button
+						type="submit"
+						data-testid="order-address-save"
+						class="rounded bg-(--color-brand) px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+					>
+						{m.admin_order_address_save()}
+					</button>
+				</form>
+				{#if form?.addressUpdated}
+					<p class="mt-2 text-xs text-green-700" data-testid="order-address-saved">
+						{m.admin_order_address_saved()}
+					</p>
+				{/if}
+				{#if form?.addressError}
+					<p class="mt-2 text-xs text-red-700" data-testid="order-address-error">
+						{m.admin_order_shipment_err_missing_recipient({
+							fields: recipientFields(form.addressDetail ?? '')
+						})}
+					</p>
+				{/if}
+			</details>
 		</div>
 		<div class="rounded-lg border border-(--color-brand-soft) bg-white p-4">
 			<p class="mb-1 text-(--color-ink)/60">{m.admin_order_session()}</p>

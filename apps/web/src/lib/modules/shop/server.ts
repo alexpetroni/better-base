@@ -87,12 +87,14 @@ export {
 	shipmentSyncHealth,
 	syncBackoffMs,
 	syncShipmentStatuses,
+	updateOrderShippingAddress,
 	type CreateShipmentDeps,
 	type CreateShipmentError,
 	type RecipientField,
 	type ShipmentDeps,
 	type ShipmentSyncHealth,
-	type ShipmentSyncResult
+	type ShipmentSyncResult,
+	type UpdateShippingAddressError
 } from './shipment-service.ts';
 export {
 	buildShippingMetadata,
