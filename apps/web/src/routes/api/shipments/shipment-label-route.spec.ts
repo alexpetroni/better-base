@@ -85,7 +85,17 @@ beforeAll(async () => {
 			stripeSessionId: 'cs_lbl_1',
 			amountTotalCents: 4990,
 			currency: 'ron',
-			status: 'paid'
+			status: 'paid',
+			// The courier needs phone + county (FIX-11) before it registers an AWB.
+			shippingAddress: {
+				name: 'Ana Pop',
+				phone: '+40723000111',
+				line1: 'Str. Somnului 10',
+				city: 'Cluj-Napoca',
+				state: 'Cluj',
+				postalCode: '400001',
+				country: 'RO'
+			}
 		})
 		.returning();
 

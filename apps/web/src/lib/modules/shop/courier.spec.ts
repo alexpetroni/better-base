@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { selectCourierProvider } from './courier.ts';
 import { createMockCourierProvider, MOCK_TRACKING_URL_BASE } from './mock-courier.ts';
-import { normalizeSamedayStatus, samedayTrackingUrl } from './sameday-courier.ts';
+import {
+	createSamedayCourier,
+	normalizeSamedayStatus,
+	samedayTrackingUrl
+} from './sameday-courier.ts';
 
 // Provider selection is pure and mirrors the chat-provider rules: mock is the
 // default, ambient credentials never activate the live adapter, a half-set
@@ -106,6 +110,104 @@ describe('mock courier provider', () => {
 		courier.setTrackingStatus(second.awb, 'in-transit');
 		await expect(courier.cancelShipment(second.awb)).rejects.toThrow(/already picked up/);
 		await expect(courier.cancelShipment('AWB-UNKNOWN')).rejects.toThrow(/no shipment/);
+	});
+});
+
+/**
+ * The Sameday adapter against a scripted fetch: never a network call. The
+ * responder answers /api/authenticate with a token and everything else with
+ * what the test scripted; every request body is recorded for inspection.
+ */
+function samedayHarness(respond: (path: string, init: RequestInit) => Response) {
+	const requests: Array<{ path: string; body: URLSearchParams }> = [];
+	const fetchFn: typeof fetch = async (url, init) => {
+		const path = new URL(String(url)).pathname;
+		requests.push({ path, body: new URLSearchParams(String(init?.body ?? '')) });
+		if (path === '/api/authenticate') {
+			return Response.json({ token: 'tok', expire_at_utc: '2099-01-01T00:00:00Z' });
+		}
+		return respond(path, init ?? {});
+	};
+	const courier = createSamedayCourier({
+		username: 'user',
+		password: 'secret',
+		pickupPoint: '42',
+		fetchFn
+	});
+	return { courier, requests };
+}
+
+const RECIPIENT = {
+	name: 'Ana Pop',
+	email: 'ana@example.ro',
+	phone: '+40723000111',
+	address: {
+		name: 'Ana Pop',
+		line1: 'Str. Somnului 10',
+		city: 'Cluj-Napoca',
+		state: 'Cluj',
+		postalCode: '400001',
+		country: 'RO'
+	}
+};
+
+// Audit 2026-09-03 P1 "Sameday adapter": the 400 body — Sameday's actual
+// reason — was discarded, and a missing county silently became the city.
+describe('sameday adapter (offline, through the fetch seam)', () => {
+	it('an AWB refusal carries the response body so the operator sees the reason', async () => {
+		const { courier } = samedayHarness(
+			() =>
+				new Response(
+					JSON.stringify({
+						errors: {
+							children: {
+								awbRecipient: {
+									children: { phoneNumber: { errors: ['This value should not be blank.'] } }
+								}
+							}
+						}
+					}),
+					{ status: 400, headers: { 'content-type': 'application/json' } }
+				)
+		);
+		await expect(
+			courier.createShipment({ orderId: 'o1', reference: 'o1', recipient: RECIPIENT })
+		).rejects.toThrow(/HTTP 400.*phoneNumber.*should not be blank/s);
+	});
+
+	it('bounds a huge error body instead of echoing it whole', async () => {
+		const { courier } = samedayHarness(() => new Response('x'.repeat(10_000), { status: 500 }));
+		await expect(
+			courier.createShipment({ orderId: 'o1', reference: 'o1', recipient: RECIPIENT })
+		).rejects.toSatisfy((err: unknown) => err instanceof Error && err.message.length < 1_000);
+	});
+
+	it('sends phone, county (from the address state) and the order id as the client reference', async () => {
+		const { courier, requests } = samedayHarness(() => Response.json({ awbNumber: '1SD42' }));
+		const created = await courier.createShipment({
+			orderId: 'order-77',
+			reference: 'order-77',
+			recipient: RECIPIENT
+		});
+		expect(created.awb).toBe('1SD42');
+		const awb = requests.find((r) => r.path === '/api/awb');
+		expect(awb).toBeDefined();
+		expect(awb!.body.get('awbRecipient[phoneNumber]')).toBe('+40723000111');
+		expect(awb!.body.get('awbRecipient[countyString]')).toBe('Cluj');
+		expect(awb!.body.get('awbRecipient[cityString]')).toBe('Cluj-Napoca');
+		expect(awb!.body.get('clientInternalReference')).toBe('order-77');
+	});
+
+	it('never substitutes the city for a missing county', async () => {
+		const { courier, requests } = samedayHarness(() => Response.json({ awbNumber: '1SD43' }));
+		await courier.createShipment({
+			orderId: 'order-78',
+			reference: 'order-78',
+			recipient: { ...RECIPIENT, address: { ...RECIPIENT.address, state: undefined } }
+		});
+		const awb = requests.find((r) => r.path === '/api/awb');
+		expect(awb!.body.get('awbRecipient[countyString]')).toBe('');
+		expect(awb!.body.get('awbRecipient[cityString]')).toBe('Cluj-Napoca');
 	});
 });
 

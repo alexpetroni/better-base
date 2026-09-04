@@ -309,13 +309,19 @@ test('shipping is priced from settings, charged, invoiced and shipped with an AW
 					currency: 'ron',
 					payment_intent: `pi_e2e_shipping_${siteId}`,
 					payment_status: 'paid',
-					customer_details: { email: 'livrare-client@example.com', name: 'Ana Pop' },
+					// Phone + county: what the courier needs for a deliverable AWB (FIX-11).
+					customer_details: {
+						email: 'livrare-client@example.com',
+						name: 'Ana Pop',
+						phone: '+40723000111'
+					},
 					collected_information: {
 						shipping_details: {
 							name: 'Ana Pop',
 							address: {
 								line1: 'Str. Somnului 10',
 								city: 'Cluj-Napoca',
+								state: 'Cluj',
 								postal_code: '400001',
 								country: 'RO'
 							}

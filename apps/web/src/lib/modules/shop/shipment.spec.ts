@@ -91,6 +91,10 @@ async function orderViaWebhook(input: {
 	shippingName?: string;
 	/** Omit shipping_cost from the session to exercise the metadata fallback. */
 	omitShippingCost?: boolean;
+	/** Recipient phone as Stripe's `customer_details.phone`; null = never collected. */
+	phone?: string | null;
+	/** County as Stripe's address `state`; null = Stripe sent none. */
+	county?: string | null;
 }): Promise<OrderRow> {
 	seq += 1;
 	const goods = input.goodsCents ?? 9980;
@@ -119,13 +123,18 @@ async function orderViaWebhook(input: {
 				currency: 'ron',
 				payment_intent: `pi_ship_${seq}`,
 				payment_status: 'paid',
-				customer_details: { email: `client${seq}@example.ro`, name: 'Ana Pop' },
+				customer_details: {
+					email: `client${seq}@example.ro`,
+					name: 'Ana Pop',
+					...(input.phone === null ? {} : { phone: input.phone ?? '+40712345678' })
+				},
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
 						address: {
 							line1: 'Str. Somnului 10',
 							city: 'Cluj-Napoca',
+							...(input.county === null ? {} : { state: input.county ?? 'Cluj' }),
 							postal_code: '400001',
 							country: 'RO'
 						}
@@ -346,6 +355,53 @@ describe('AWB generation (admin action service)', () => {
 		// The retry after the courier recovers succeeds normally.
 		const retry = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
 		expect(retry.ok && retry.value.created).toBe(true);
+	});
+});
+
+// Audit 2026-09-03 P1 "Sameday adapter cannot produce a deliverable AWB":
+// Sameday requires a recipient phone and county. Before FIX-11 the phone was
+// never collected, the county silently fell back to the city name and the
+// courier's 400 was discarded — every live "Generează AWB" would fail
+// opaquely. The service must refuse BEFORE calling the courier, naming the
+// missing fields, and pass both through when present.
+describe('recipient data is checked before the courier is called', () => {
+	it('an order without a recipient phone is refused and the courier is never called', async () => {
+		const order = await orderViaWebhook({ phone: null });
+		const before = courier.shipments.size;
+
+		const result = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
+		expect(!result.ok && result.error).toBe('missing-recipient-data');
+		expect(!result.ok && result.detail).toContain('phone');
+
+		expect(courier.shipments.size).toBe(before);
+		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toHaveLength(
+			0
+		);
+		const [after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.fulfillmentStatus).toBe('unfulfilled');
+		expect((await eventKinds(order.id)).includes('awb-generated')).toBe(false);
+	});
+
+	it('names every missing field — phone and county together, never the city as county', async () => {
+		const order = await orderViaWebhook({ phone: null, county: null });
+		const result = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
+		expect(!result.ok && result.error).toBe('missing-recipient-data');
+		expect(!result.ok && result.detail?.split(', ').sort()).toEqual(['county', 'phone']);
+	});
+
+	it('with phone and county the courier request carries both, keyed on the order id', async () => {
+		const order = await orderViaWebhook({ phone: '+40 723 000 111', county: 'Cluj' });
+		// The webhook persisted Stripe's customer_details.phone into the address.
+		expect(order.shippingAddress?.phone).toBe('+40 723 000 111');
+
+		const result = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const recorded = courier.shipments.get(result.value.shipment.awb ?? '');
+		expect(recorded?.request.recipient.phone).toBe('+40 723 000 111');
+		expect(recorded?.request.recipient.address.state).toBe('Cluj');
+		expect(recorded?.request.recipient.address.city).toBe('Cluj-Napoca');
+		expect(recorded?.request.reference).toBe(order.id);
 	});
 });
 

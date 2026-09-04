@@ -18,7 +18,8 @@ import {
 	orderItems,
 	orders,
 	shipments,
-	type OrderRow
+	type OrderRow,
+	type ShippingAddress
 } from '../../../../lib/modules/shop/schema.ts';
 import { listOrders } from '../../../../lib/modules/shop/webhook.ts';
 
@@ -100,6 +101,8 @@ async function insertOrder(input: {
 	refundedCents?: number;
 	/** Item snapshots (the invoice lines derive from them); none by default. */
 	items?: Array<{ name: string; qty: number; priceCents: number }>;
+	/** Delivery address as the webhook stored it; none by default. */
+	shippingAddress?: ShippingAddress;
 }): Promise<OrderRow> {
 	orderSeq += 1;
 	const items = input.items ?? [];
@@ -116,7 +119,8 @@ async function insertOrder(input: {
 			status: input.status ?? 'paid',
 			fulfillmentStatus: input.fulfillment ?? 'unfulfilled',
 			oversold: input.oversold ?? false,
-			refundedCents: input.refundedCents ?? 0
+			refundedCents: input.refundedCents ?? 0,
+			shippingAddress: input.shippingAddress ?? null
 		})
 		.returning();
 	if (items.length) {
@@ -419,9 +423,20 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 	});
 });
 
+/** Everything the courier needs: phone and county included (FIX-11). */
+const RECIPIENT: ShippingAddress = {
+	name: 'Ana Pop',
+	phone: '+40723000111',
+	line1: 'Str. Somnului 10',
+	city: 'Cluj-Napoca',
+	state: 'Cluj',
+	postalCode: '400001',
+	country: 'RO'
+};
+
 describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page', () => {
 	it('editor: 403 before anything is written', async () => {
-		const order = await insertOrder({});
+		const order = await insertOrder({ shippingAddress: RECIPIENT });
 		try {
 			await generateAwbAction({ params: { id: order.id }, locals: locals(EDITOR) });
 			expect.unreachable('the action must throw');
@@ -435,7 +450,7 @@ describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page'
 	});
 
 	it('admin: registers the AWB via the (mock) courier, ships the order, and a re-click is a no-op', async () => {
-		const order = await insertOrder({});
+		const order = await insertOrder({ shippingAddress: RECIPIENT });
 		const result = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
 		expect(result).toEqual({ awbGenerated: true, awbExisting: false });
 
@@ -460,12 +475,32 @@ describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page'
 	});
 
 	it('an unpaid order is a 400, not a shipment', async () => {
-		const order = await insertOrder({ status: 'pending' });
+		const order = await insertOrder({ status: 'pending', shippingAddress: RECIPIENT });
 		const result = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
 		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
 		expect(result.status).toBe(400);
 		expect(result.data).toMatchObject({ awbError: 'order-not-paid' });
 		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
+	});
+
+	// Audit 2026-09-03 P1 "Sameday adapter": an order without a phone or
+	// county must be refused with the fields named, not sent to the courier.
+	it('missing recipient data is a 400 naming the fields — no courier call, no shipment', async () => {
+		const order = await insertOrder({
+			shippingAddress: { name: 'Ana Pop', line1: 'Str. Somnului 10', city: 'Cluj-Napoca' }
+		});
+		const result = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		expect(result.data).toMatchObject({ awbError: 'missing-recipient-data' });
+		expect(
+			String((result.data as { awbDetail: string }).awbDetail)
+				.split(', ')
+				.sort()
+		).toEqual(['county', 'phone']);
+		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.fulfillmentStatus).toBe('unfulfilled');
 	});
 });
 

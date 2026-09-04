@@ -69,4 +69,13 @@ describe('createStripeGateway payment method types', () => {
 		await gateway.createCheckoutSession(input);
 		expect(decodeURIComponent(requests[0].body)).not.toContain('payment_method_types');
 	});
+
+	// FIX-11 (audit P1 "Sameday adapter"): the courier needs a recipient phone,
+	// so Checkout must collect one — otherwise no order can ever get an AWB.
+	it('asks Checkout to collect the recipient phone number', async () => {
+		const { fetchFn, requests } = capturingFetch();
+		const gateway = createStripeGateway('sk_test_not_real', { maxNetworkRetries: 0, fetchFn });
+		await gateway.createCheckoutSession(input);
+		expect(decodeURIComponent(requests[0].body)).toContain('phone_number_collection[enabled]=true');
+	});
 });

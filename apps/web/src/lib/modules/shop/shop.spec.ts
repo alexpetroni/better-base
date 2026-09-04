@@ -357,6 +357,8 @@ interface SessionOverrides {
 	amountTotal: number;
 	paymentIntent?: string;
 	email?: string;
+	/** Stripe `customer_details.phone` (collected by Checkout since FIX-11). */
+	phone?: string;
 	/** Provider event id; defaults to one derived from the session id. */
 	eventId?: string;
 }
@@ -376,7 +378,11 @@ function completedSessionEvent(overrides: SessionOverrides): string {
 				currency: 'ron',
 				payment_intent: overrides.paymentIntent ?? 'pi_test_1',
 				payment_status: 'paid',
-				customer_details: { email: overrides.email ?? 'client@example.ro', name: 'Ana Pop' },
+				customer_details: {
+					email: overrides.email ?? 'client@example.ro',
+					name: 'Ana Pop',
+					...(overrides.phone ? { phone: overrides.phone } : {})
+				},
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
@@ -431,6 +437,22 @@ describe('webhook: checkout.session.completed', () => {
 		if (outcome.kind !== 'order-created') return;
 		const [order] = await db.select().from(orders).where(eq(orders.id, outcome.orderId));
 		expect(order.email).toBe('ion.popescu@gmail.com');
+	});
+
+	it('persists the recipient phone from customer_details into the shipping address', async () => {
+		const product = await makeProduct({ name: 'Comandă cu telefon', priceCents: 1000 });
+		const payload = completedSessionEvent({
+			id: 'cs_phone',
+			cart: [{ productId: product.id, qty: 1, priceCents: 1000 }],
+			amountTotal: 1000,
+			phone: '+40 723 000 111'
+		});
+		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
+		const outcome = await processStripeEvent(webhookDeps, event);
+		if (outcome.kind !== 'order-created') throw new Error(`unexpected ${outcome.kind}`);
+		const [order] = await db.select().from(orders).where(eq(orders.id, outcome.orderId));
+		expect(order.shippingAddress?.phone).toBe('+40 723 000 111');
+		expect(order.shippingAddress?.city).toBe('Cluj-Napoca');
 	});
 
 	it('creates the order + item snapshots, decrements stock and logs ONE email', async () => {
