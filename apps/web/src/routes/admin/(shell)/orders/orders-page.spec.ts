@@ -70,6 +70,11 @@ let stornoPartialAction: (event: {
 	params: { id: string };
 	locals: App.Locals;
 }) => Promise<unknown>;
+let updateShippingAddressAction: (event: {
+	request: Request;
+	params: { id: string };
+	locals: App.Locals;
+}) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
 	return { user, settings: createSettingsLoader(() => db) };
@@ -166,6 +171,8 @@ beforeAll(async () => {
 	issueInvoiceAction = detailPage.actions.issueInvoice as unknown as typeof issueInvoiceAction;
 	generateAwbAction = detailPage.actions.generateAwb as unknown as typeof generateAwbAction;
 	stornoPartialAction = detailPage.actions.stornoPartial as unknown as typeof stornoPartialAction;
+	updateShippingAddressAction = detailPage.actions
+		.updateShippingAddress as unknown as typeof updateShippingAddressAction;
 });
 
 afterAll(async () => {
@@ -517,6 +524,145 @@ describe('/admin/orders/[id] ?/generateAwb — courier AWB from the detail page'
 		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toEqual([]);
 		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
 		expect(row.fulfillmentStatus).toBe('unfulfilled');
+	});
+
+	// FIX-11: a refused AWB is not a dead end — the row is `failed` with the
+	// courier's reason, the page shows it, and the next click retries.
+	it('a courier refusal is a 400 with the reason; the re-click registers the AWB', async () => {
+		const order = await insertOrder({ shippingAddress: RECIPIENT });
+		const { getCourierProvider } = await import('../../../../lib/modules/shop/server.ts');
+		const courier =
+			getCourierProvider() as import('../../../../lib/modules/shop/mock-courier.ts').MockCourierProvider;
+		courier.failNextCreate = new Error('Sameday AWB creation failed (HTTP 400): county unknown');
+
+		const refused = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		if (!isActionFailure(refused)) throw new Error('expected an ActionFailure');
+		expect(refused.status).toBe(400);
+		expect(refused.data).toMatchObject({ awbError: 'courier' });
+		expect(String((refused.data as unknown as { awbDetail: string }).awbDetail)).toContain(
+			'county unknown'
+		);
+		let data = (await detailLoad({
+			params: { id: order.id }
+		} as Parameters<DetailPage['load']>[0])) as {
+			order: OrderRow;
+			shipment: { status: string; awb: string | null; lastError: string | null } | null;
+		};
+		expect(data.order.fulfillmentStatus).toBe('unfulfilled');
+		expect(data.shipment).toMatchObject({ status: 'failed', awb: null });
+		expect(data.shipment!.lastError).toContain('county unknown');
+
+		const retry = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(retry).toEqual({ awbGenerated: true, awbExisting: false });
+		data = (await detailLoad({
+			params: { id: order.id }
+		} as Parameters<DetailPage['load']>[0])) as typeof data;
+		expect(data.order.fulfillmentStatus).toBe('shipped');
+		expect(data.shipment!.status).toBe('registered');
+		expect(data.shipment!.awb).toMatch(/^MOCKAWB/);
+	});
+});
+
+function addressEvent(
+	orderId: string,
+	user: typeof ADMIN | typeof EDITOR | null,
+	fields: Record<string, string>
+): { request: Request; params: { id: string }; locals: App.Locals } {
+	const body = new FormData();
+	for (const [key, value] of Object.entries(fields)) body.set(key, value);
+	return {
+		request: new Request(`http://localhost/admin/orders/${orderId}?/updateShippingAddress`, {
+			method: 'POST',
+			body
+		}),
+		params: { id: orderId },
+		locals: locals(user)
+	};
+}
+
+// FIX-11: the way out of `missing-recipient-data` — orders placed before phone
+// collection existed, or whose Stripe address lacks a county, get the data
+// typed in by the operator (admin-only, trail event without the values).
+describe('/admin/orders/[id] ?/updateShippingAddress — recipient data for the courier', () => {
+	const FORM = {
+		name: 'Ana Pop',
+		phone: '+40 723 000 111',
+		line1: 'Str. Somnului 10',
+		line2: '',
+		city: 'Cluj-Napoca',
+		state: 'Cluj',
+		postalCode: '400001',
+		country: 'ro'
+	};
+
+	it('editor: 403 before anything is written', async () => {
+		const order = await insertOrder({
+			shippingAddress: { name: 'Ana Pop', line1: 'Str. Somnului 10', city: 'Cluj-Napoca' }
+		});
+		try {
+			await updateShippingAddressAction(addressEvent(order.id, EDITOR, FORM));
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(403);
+		}
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.shippingAddress?.phone).toBeUndefined();
+	});
+
+	it('admin: fills in phone and county, the trail names the changed fields only, and the AWB then succeeds', async () => {
+		const order = await insertOrder({
+			shippingAddress: { name: 'Ana Pop', line1: 'Str. Somnului 10', city: 'Cluj-Napoca' }
+		});
+		const result = await updateShippingAddressAction(addressEvent(order.id, ADMIN, FORM));
+		expect(result).toEqual({ addressUpdated: true });
+
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.shippingAddress).toEqual({
+			name: 'Ana Pop',
+			phone: '+40 723 000 111',
+			line1: 'Str. Somnului 10',
+			city: 'Cluj-Napoca',
+			state: 'Cluj',
+			postalCode: '400001',
+			country: 'RO'
+		});
+		const events = await listOrderEvents({ db }, order.id);
+		const edit = events.find((e) => e.kind === 'shipping-address-updated');
+		expect(edit?.actor).toBe(ADMIN.email);
+		expect(edit?.note.split(', ').sort()).toEqual(['country', 'phone', 'postalCode', 'state']);
+		expect(edit?.note).not.toContain('723');
+
+		const awb = await generateAwbAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect(awb).toEqual({ awbGenerated: true, awbExisting: false });
+	});
+
+	it('refuses an address the courier still could not use, naming the fields', async () => {
+		const order = await insertOrder({ shippingAddress: RECIPIENT });
+		const result = await updateShippingAddressAction(
+			addressEvent(order.id, ADMIN, { ...FORM, phone: '   ', state: '' })
+		);
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		expect(result.data).toMatchObject({ addressError: 'missing-recipient-data' });
+		expect(
+			String((result.data as unknown as { addressDetail: string }).addressDetail)
+				.split(', ')
+				.sort()
+		).toEqual(['county', 'phone']);
+		// Nothing written.
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.shippingAddress).toEqual(RECIPIENT);
+	});
+
+	it('unknown order is a 404', async () => {
+		try {
+			await updateShippingAddressAction(addressEvent('no-such-order', ADMIN, FORM));
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(404);
+		}
 	});
 });
 

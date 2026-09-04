@@ -45,6 +45,8 @@ interface ManifestRow {
 }
 
 const MANIFEST: Record<string, ManifestRow> = {
+	// The dashboard load (sync-health banner, FIX-11) exports no actions.
+	'./admin/(shell)/+page.server.ts': {},
 	'./admin/(shell)/articles/+page.server.ts': { actions: { create: 'staff' } },
 	'./admin/(shell)/articles/[id]/+page.server.ts': {
 		actions: { save: 'staff', publish: 'staff', unpublish: 'staff', preview: 'staff' }
@@ -61,6 +63,7 @@ const MANIFEST: Record<string, ManifestRow> = {
 			issueInvoice: 'admin',
 			stornoPartial: 'admin',
 			generateAwb: 'admin',
+			updateShippingAddress: 'admin',
 			resendInvoice: 'admin'
 		}
 	},
