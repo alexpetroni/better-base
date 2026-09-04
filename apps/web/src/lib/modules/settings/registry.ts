@@ -1,5 +1,6 @@
 import { cuiPrefixMismatch, isValidCui } from '../../util/cui.ts';
 import { parseLeiToCents } from '../../util/money.ts';
+import { BUCHAREST_COUNTY_CODE, bucharestSector, isRoCountyCode } from '../../util/ro-counties.ts';
 import { parseVatRateSchedule } from '../../util/vat-rates.ts';
 
 /**
@@ -31,6 +32,7 @@ export type SettingErrorCode =
 	| 'invalid-number'
 	| 'invalid-cui'
 	| 'invalid-vat-rate'
+	| 'invalid-county'
 	| 'too-long';
 
 /**
@@ -121,12 +123,56 @@ export const SETTINGS_REGISTRY = {
 		clientSafe: true,
 		placeholder: ph('nr. Registrul Comerțului (ex. J40/1234/2024)')
 	},
+	// The public display form of the seat (footer, legal pages)…
 	'company.address': {
 		kind: 'multiline',
 		default: '',
 		launchRequired: true,
 		clientSafe: true,
 		placeholder: ph('adresa sediului social')
+	},
+	// …and its STRUCTURED fiscal form (FIX-12): CIUS-RO wants street, city,
+	// the ISO 3166-2:RO county code and the postal code on the seller party;
+	// for a București seat the city is the sector (cross-key rule below).
+	'company.street': {
+		kind: 'text',
+		default: '',
+		launchRequired: true,
+		clientSafe: false,
+		placeholder: ph('strada și numărul sediului social (ex. Str. Exemplu nr. 1)')
+	},
+	'company.city': {
+		kind: 'text',
+		default: '',
+		launchRequired: true,
+		clientSafe: false,
+		placeholder: ph('localitatea sediului (pentru București: Sector 1…6)')
+	},
+	'company.county': {
+		kind: 'text',
+		default: '',
+		launchRequired: true,
+		clientSafe: false,
+		validate: (value) => (isRoCountyCode(value) ? null : 'invalid-county'),
+		placeholder: ph('județul sediului ca și cod ISO 3166-2:RO (ex. RO-B, RO-CJ)')
+	},
+	'company.postalCode': {
+		kind: 'text',
+		default: '',
+		launchRequired: true,
+		clientSafe: false,
+		pattern: /^[0-9A-Za-z][0-9A-Za-z -]{2,11}$/,
+		patternCode: 'invalid-value',
+		placeholder: ph('codul poștal al sediului (ex. 010101)')
+	},
+	// Legea 31/1990 art. 74: an SRL/SA states its share capital on every
+	// document. Printed under Reg. Com.; a PFA/II states that it does not apply.
+	'company.shareCapital': {
+		kind: 'text',
+		default: '',
+		launchRequired: true,
+		clientSafe: false,
+		placeholder: ph('capitalul social subscris și vărsat (ex. 200 lei; PFA/II: „nu se aplică”)')
 	},
 	'company.contactEmail': {
 		kind: 'email',
@@ -393,7 +439,7 @@ export function validateSettingValue(key: SettingKey, value: unknown): SettingEr
 
 export interface SettingConsistencyProblem {
 	key: SettingKey;
-	code: 'cui-prefix-mismatch';
+	code: 'cui-prefix-mismatch' | 'bucharest-sector';
 	/** Operator-facing explanation, appended after the key by launch:check. */
 	message: string;
 }
@@ -407,7 +453,10 @@ export interface SettingConsistencyProblem {
  * own flag contradicts (audit 2026-09-03 P1).
  */
 export function settingsConsistencyProblems(
-	settings: Pick<SiteSettings, 'company.cui' | 'company.vatRegistered'>
+	settings: Pick<
+		SiteSettings,
+		'company.cui' | 'company.vatRegistered' | 'company.city' | 'company.county'
+	>
 ): SettingConsistencyProblem[] {
 	const problems: SettingConsistencyProblem[] = [];
 	if (cuiPrefixMismatch(settings['company.cui'], settings['company.vatRegistered'])) {
@@ -417,6 +466,18 @@ export function settingsConsistencyProblems(
 			message: settings['company.vatRegistered']
 				? 'lacks the RO prefix while "company.vatRegistered" is on — the prefix is the VAT registration marker; add it, or untick the flag'
 				: 'carries the RO prefix while "company.vatRegistered" is off — the prefix is the VAT registration marker; remove it, or tick the flag'
+		});
+	}
+	// CIUS-RO BR-RO-A20: under RO-B the city IS the sector.
+	if (
+		settings['company.county'] === BUCHAREST_COUNTY_CODE &&
+		bucharestSector(settings['company.city']) === null
+	) {
+		problems.push({
+			key: 'company.city',
+			code: 'bucharest-sector',
+			message:
+				'names no sector while "company.county" is RO-B — e-Factura wants "Sector 1"…"Sector 6" as the București city'
 		});
 	}
 	return problems;

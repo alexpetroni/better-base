@@ -315,8 +315,10 @@ describe('CIUS-RO addresses (FIX-12)', () => {
 		expect(validateEFacturaXml(xml, model)).toEqual([]);
 		const party = customerParty(xml);
 		expect(party).toContain('<cac:PartyTaxScheme><cbc:CompanyID>RO999885</cbc:CompanyID>');
-		expect(party).toContain('<cbc:RegistrationName>Client SRL</cbc:RegistrationName>');
-		expect(party).toContain('<cbc:CompanyID>RO999885</cbc:CompanyID></cac:PartyLegalEntity>');
+		// The legal identifier (BT-47) sits in PartyLegalEntity next to the name.
+		expect(party).toContain(
+			'<cac:PartyLegalEntity><cbc:RegistrationName>Client SRL</cbc:RegistrationName><cbc:CompanyID>RO999885</cbc:CompanyID>'
+		);
 	});
 
 	it('under category O (neplătitor issuer) the buyer VAT id is suppressed too (BR-O-2)', () => {
@@ -357,7 +359,10 @@ describe('CIUS-RO addresses (FIX-12)', () => {
 		const noCounty = xml.replace('<cbc:CountrySubentity>RO-CJ</cbc:CountrySubentity>', '');
 		expect(validateEFacturaXml(noCounty, model).join('\n')).toMatch(/customer.*CountrySubentity/);
 
-		const badSector = xml.replace('<cbc:CityName>SECTOR3</cbc:CityName>', '<cbc:CityName>București</cbc:CityName>');
+		const badSector = xml.replace(
+			'<cbc:CityName>SECTOR3</cbc:CityName>',
+			'<cbc:CityName>București</cbc:CityName>'
+		);
 		expect(validateEFacturaXml(badSector, model).join('\n')).toMatch(/supplier.*SECTOR/);
 
 		const noPostal = xml.replace('<cbc:PostalZone>400001</cbc:PostalZone>', '');

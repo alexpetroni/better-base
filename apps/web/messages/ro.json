@@ -486,5 +486,19 @@
 	"admin_settings_err_vat_rate": "Listă de cote invalidă — o linie per cotă, „AAAA-LL-ZZ procent”, cu una dintre cotele legale (5, 9, 11, 19, 21).",
 	"admin_product_vat_rate": "Cota TVA",
 	"admin_product_vat_rate_standard": "standard (conform setărilor de facturare)",
-	"admin_product_err_vat_rate": "Cotă TVA invalidă."
+	"admin_product_err_vat_rate": "Cotă TVA invalidă.",
+	"admin_settings_company_street": "Sediul social — strada și numărul",
+	"admin_settings_company_city": "Sediul social — localitatea (pentru București: „Sector 1”…„Sector 6”)",
+	"admin_settings_company_county": "Sediul social — județul, cod ISO 3166-2:RO (ex. RO-B, RO-CJ)",
+	"admin_settings_company_postal_code": "Sediul social — cod poștal",
+	"admin_settings_company_share_capital": "Capital social (ex. 200 lei; PFA/II: „nu se aplică”)",
+	"admin_settings_err_county": "Județ invalid — folosește codul ISO 3166-2:RO (ex. RO-B, RO-CJ).",
+	"cart_company_address_hint": "Sediul firmei (opțional — dacă îl completezi, factura îl va purta în locul adresei de livrare):",
+	"cart_company_street": "Strada și numărul",
+	"cart_company_city": "Localitatea (București: „Sector n”)",
+	"cart_company_postal_code": "Cod poștal",
+	"cart_company_county": "Județul",
+	"cart_err_company_address": "Completează toate câmpurile sediului firmei (stradă, localitate, județ, cod poștal) sau lasă-le goale.",
+	"cart_err_company_county": "Alege județul sediului firmei din listă.",
+	"cart_err_company_sector": "Pentru un sediu în București, localitatea trebuie să fie „Sector 1”…„Sector 6”."
 }

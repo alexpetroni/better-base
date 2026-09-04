@@ -3,6 +3,12 @@ import type { Db } from '../../db/client.ts';
 import type { DbTx } from '../../server/event-ledger/core.ts';
 import { displayCui, isValidCui } from '../../util/cui.ts';
 import type { Result } from '../../util/result.ts';
+import {
+	BUCHAREST_COUNTY_CODE,
+	ROMANIA_COUNTRY_CODE,
+	roCountyCodeFor,
+	roCountyName
+} from '../../util/ro-counties.ts';
 import { parseVatRateSchedule, standardVatRateAt } from '../../util/vat-rates.ts';
 import {
 	isSettingsPlaceholder,
@@ -63,12 +69,21 @@ export interface InvoiceItemInput {
 	vatRateBp?: number | null;
 }
 
-/** Issuer settings that must be genuinely filled in before issuing. */
+/**
+ * Issuer settings that must be genuinely filled in before issuing: the
+ * legal identification and the STRUCTURED seat (CIUS-RO refuses a Romanian
+ * seller address without street / city / county code / postal code). The
+ * public display address (`company.address`) and the share capital are
+ * launch-required but not issuance-required — a PFA has no capital.
+ */
 export const REQUIRED_ISSUER_SETTINGS: readonly SettingKey[] = [
 	'company.legalName',
 	'company.cui',
 	'company.regCom',
-	'company.address',
+	'company.street',
+	'company.city',
+	'company.county',
+	'company.postalCode',
 	'invoice.seriesPrefix'
 ];
 
@@ -166,18 +181,78 @@ export function shippingLineDescription(order: Pick<OrderRow, 'shippingName'>): 
 	return order.shippingName ? `Transport — ${order.shippingName}` : 'Transport';
 }
 
-/** The order's shipping snapshot flattened to one printable address string. */
-function buyerAddressFromOrder(order: OrderRow): string {
-	const a = order.shippingAddress;
-	if (!a) return '';
+/** The structured postal address the snapshot stores for each party. */
+export interface PostalAddressSnapshot {
+	street: string;
+	city: string;
+	/** ISO 3166-2:RO code, or '' when unknown. */
+	county: string;
+	postalCode: string;
+	/** ISO 3166-1 alpha-2. */
+	country: string;
+}
+
+/**
+ * The printable form of a structured address (the `issuer_address` /
+ * `buyer_address` columns, what the PDF prints): street, then postal code +
+ * city, then the county's name. Country omitted — the platform sells
+ * domestically and the XML carries the code separately.
+ */
+export function composePostalAddress(address: PostalAddressSnapshot): string {
 	return [
-		a.line1,
-		a.line2,
-		[a.postalCode, a.city].filter(Boolean).join(' '),
-		[a.state, a.country].filter(Boolean).join(', ')
+		address.street,
+		[address.postalCode, address.city].filter(Boolean).join(' '),
+		roCountyName(address.county) ?? address.county
 	]
-		.filter((part): part is string => !!part && part.length > 0)
+		.filter((part) => part.length > 0)
 		.join('\n');
+}
+
+/**
+ * The buyer's address: the company seat entered at checkout for B2B (the
+ * invoice names the company, not the parcel), else the Stripe shipping
+ * address with the free-text county mapped to its ISO code — a București
+ * city implies RO-B when Stripe sent no county at all.
+ */
+export function buyerAddressFromOrder(order: OrderRow): PostalAddressSnapshot {
+	const seat = order.billingCompany?.address;
+	if (seat) {
+		return {
+			street: seat.street,
+			city: seat.city,
+			county: seat.county,
+			postalCode: seat.postalCode,
+			country: ROMANIA_COUNTRY_CODE
+		};
+	}
+	const a = order.shippingAddress;
+	if (!a) return { street: '', city: '', county: '', postalCode: '', country: '' };
+	const county =
+		roCountyCodeFor(a.state ?? '') ??
+		(roCountyCodeFor(a.city ?? '') === BUCHAREST_COUNTY_CODE ? BUCHAREST_COUNTY_CODE : '');
+	return {
+		street: [a.line1, a.line2].filter((part): part is string => !!part).join(', '),
+		city: a.city ?? '',
+		county,
+		postalCode: a.postalCode ?? '',
+		country: (a.country ?? ROMANIA_COUNTRY_CODE).toUpperCase()
+	};
+}
+
+/**
+ * When the order was settled: the `payment-succeeded` event for a delayed
+ * method, else the order's creation (a card session is paid when it
+ * completes). Null while the order is not paid.
+ */
+async function paymentDateFor(tx: DbTx, order: OrderRow): Promise<Date | null> {
+	if (order.status !== 'paid' && order.status !== 'refunded') return null;
+	const [settled] = await tx
+		.select({ createdAt: orderEvents.createdAt })
+		.from(orderEvents)
+		.where(and(eq(orderEvents.orderId, order.id), eq(orderEvents.kind, 'payment-succeeded')))
+		.orderBy(desc(orderEvents.createdAt))
+		.limit(1);
+	return settled?.createdAt ?? order.createdAt;
 }
 
 /**
@@ -244,12 +319,24 @@ export async function issueInvoiceForOrderInTx(
 	const series = settingText(settings, 'invoice.seriesPrefix');
 	const number = await allocateInvoiceNumber(tx, series, settings['invoice.nextNumber']);
 
-	const mentions = [
-		vatRegistered ? '' : settingText(settings, 'invoice.vatUnregisteredMention'),
-		settingText(settings, 'invoice.paymentTermsNote')
-	]
+	// BT-120 lives in its own column so the payment-terms note (also a
+	// mention) can never be mistaken for the exemption reason.
+	const vatExemptionReason = vatRegistered
+		? ''
+		: settingText(settings, 'invoice.vatUnregisteredMention') || 'Neplătitor de TVA';
+	const mentions = [vatExemptionReason, settingText(settings, 'invoice.paymentTermsNote')]
 		.filter(Boolean)
 		.join('\n');
+
+	const issuerAddress: PostalAddressSnapshot = {
+		street: settingText(settings, 'company.street'),
+		city: settingText(settings, 'company.city'),
+		county: settingText(settings, 'company.county'),
+		postalCode: settingText(settings, 'company.postalCode'),
+		country: ROMANIA_COUNTRY_CODE
+	};
+	const buyerAddress = buyerAddressFromOrder(order);
+	const paidAt = await paymentDateFor(tx, order);
 
 	const issuedAt = new Date();
 	const [invoice] = await tx
@@ -270,22 +357,45 @@ export async function issueInvoiceForOrderInTx(
 			issuerCui: displayCui(settingText(settings, 'company.cui'), vatRegistered),
 			issuerVatRegistered: vatRegistered,
 			issuerRegCom: settingText(settings, 'company.regCom'),
-			issuerAddress: settingText(settings, 'company.address'),
+			issuerAddress: composePostalAddress(issuerAddress),
+			issuerStreet: issuerAddress.street,
+			issuerCity: issuerAddress.city,
+			issuerCounty: issuerAddress.county,
+			issuerPostalCode: issuerAddress.postalCode,
+			issuerCountry: issuerAddress.country,
+			issuerCapital: settingText(settings, 'company.shareCapital'),
 			issuerPlace: settingText(settings, 'invoice.issuerPlace'),
 			issuerEmail: settingText(settings, 'company.contactEmail'),
 			issuerPhone: settingText(settings, 'company.contactPhone'),
 			issuerIban: settingText(settings, 'company.iban'),
 			issuerBank: settingText(settings, 'company.bank'),
-			buyerName: order.billingCompany?.name ?? order.shippingAddress?.name ?? order.email ?? '',
+			// B2C: the PAYER (Stripe's customer_details.name), then the parcel
+			// recipient, then the email — never the recipient over the payer.
+			buyerName:
+				order.billingCompany?.name ||
+				order.customerName ||
+				order.shippingAddress?.name ||
+				order.email ||
+				'',
 			buyerEmail: order.email,
-			buyerAddress: buyerAddressFromOrder(order),
+			buyerAddress: composePostalAddress(buyerAddress),
+			buyerStreet: buyerAddress.street,
+			buyerCity: buyerAddress.city,
+			buyerCounty: buyerAddress.county,
+			buyerPostalCode: buyerAddress.postalCode,
+			buyerCountry: buyerAddress.country,
 			buyerCompanyName: order.billingCompany?.name ?? null,
 			buyerCompanyCui: order.billingCompany?.cui ?? null,
 			buyerCompanyRegCom: order.billingCompany?.regCom ?? null,
 			netTotalCents: totals.netCents,
 			vatTotalCents: totals.vatCents,
 			grossTotalCents: totals.grossCents,
-			mentions
+			mentions,
+			vatExemptionReason,
+			orderReference: order.id,
+			paymentReference: order.stripePaymentIntent ?? '',
+			paymentMethod: order.paymentMethod,
+			paidAt
 		})
 		.returning();
 
@@ -459,6 +569,9 @@ export async function issueStornoForOrderInTx(
 			stornoOfInvoiceId: original.id,
 			issuedAt,
 			dueAt: issuedAt,
+			// A storno is settled by the refund it documents: the money went
+			// back through the same means when this document was issued.
+			paidAt: original.paidAt ? issuedAt : null,
 			netTotalCents: totals.netCents,
 			vatTotalCents: totals.vatCents,
 			grossTotalCents: totals.grossCents

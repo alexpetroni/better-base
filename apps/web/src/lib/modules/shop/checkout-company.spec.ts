@@ -63,7 +63,15 @@ describe('parseBuyerCompanyForm', () => {
 
 	it('a name alone is a company without an address (the parcel address is used)', () => {
 		expect(
-			parseBuyerCompanyForm({ ...FULL, cui: '', regCom: '', street: '', city: '', county: '', postalCode: '' })
+			parseBuyerCompanyForm({
+				...FULL,
+				cui: '',
+				regCom: '',
+				street: '',
+				city: '',
+				county: '',
+				postalCode: ''
+			})
 		).toEqual({ ok: true, value: { name: 'Client SRL' } });
 	});
 
@@ -111,9 +119,11 @@ describe('buyer company metadata', () => {
 		if (!parsed.ok || !parsed.value) throw new Error('fixture must parse');
 		const encoded = buildBuyerCompanyMetadata(parsed.value);
 		expect(parseBuyerCompanyMetadata(encoded)).toEqual(parsed.value);
-		expect(parseBuyerCompanyMetadata(buildBuyerCompanyMetadata({ name: 'Doar Nume SRL' }))).toEqual({
-			name: 'Doar Nume SRL'
-		});
+		expect(parseBuyerCompanyMetadata(buildBuyerCompanyMetadata({ name: 'Doar Nume SRL' }))).toEqual(
+			{
+				name: 'Doar Nume SRL'
+			}
+		);
 	});
 
 	it('stays inside the 500-char Stripe metadata value with every field at its cap', () => {
@@ -132,7 +142,9 @@ describe('buyer company metadata', () => {
 
 	it('drops a malformed address but keeps the company; garbage is null', () => {
 		expect(
-			parseBuyerCompanyMetadata(JSON.stringify({ n: 'X SRL', c: 'RO999885', a: { s: 'only street' } }))
+			parseBuyerCompanyMetadata(
+				JSON.stringify({ n: 'X SRL', c: 'RO999885', a: { s: 'only street' } })
+			)
 		).toEqual({ name: 'X SRL', cui: 'RO999885' });
 		expect(parseBuyerCompanyMetadata('garbage')).toBeNull();
 		expect(parseBuyerCompanyMetadata(JSON.stringify({ c: 'RO999885' }))).toBeNull();

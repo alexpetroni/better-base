@@ -1,4 +1,4 @@
-import type { SettingJsonValue, SettingKey } from '../../src/lib/modules/settings/registry.ts';
+import type { SiteSettings } from '../../src/lib/modules/settings/registry.ts';
 
 /**
  * The structured issuer address + share capital every invoice-issuing spec
@@ -7,7 +7,14 @@ import type { SettingJsonValue, SettingKey } from '../../src/lib/modules/setting
  * on an SRL's documents). A București seat, so the SECTORn city rule is
  * exercised on every issuer party. Test data — no real entity.
  */
-export const ISSUER_ADDRESS_SETTINGS: Partial<Record<SettingKey, SettingJsonValue>> = {
+export const ISSUER_ADDRESS_SETTINGS: Pick<
+	SiteSettings,
+	| 'company.street'
+	| 'company.city'
+	| 'company.county'
+	| 'company.postalCode'
+	| 'company.shareCapital'
+> = {
 	'company.street': 'Str. Somnului 10',
 	'company.city': 'Sector 3',
 	'company.county': 'RO-B',

@@ -486,5 +486,19 @@
 	"admin_settings_err_vat_rate": "Invalid rate list — one line per rate, “YYYY-MM-DD percent”, using a legal rate (5, 9, 11, 19, 21).",
 	"admin_product_vat_rate": "VAT rate",
 	"admin_product_vat_rate_standard": "standard (per the invoicing settings)",
-	"admin_product_err_vat_rate": "Invalid VAT rate."
+	"admin_product_err_vat_rate": "Invalid VAT rate.",
+	"admin_settings_company_street": "Registered seat — street and number",
+	"admin_settings_company_city": "Registered seat — city (for Bucharest: “Sector 1”…“Sector 6”)",
+	"admin_settings_company_county": "Registered seat — county, ISO 3166-2:RO code (e.g. RO-B, RO-CJ)",
+	"admin_settings_company_postal_code": "Registered seat — postal code",
+	"admin_settings_company_share_capital": "Share capital (e.g. 200 lei; sole traders: “not applicable”)",
+	"admin_settings_err_county": "Invalid county — use the ISO 3166-2:RO code (e.g. RO-B, RO-CJ).",
+	"cart_company_address_hint": "Company seat (optional — when filled in, the invoice carries it instead of the delivery address):",
+	"cart_company_street": "Street and number",
+	"cart_company_city": "City (Bucharest: “Sector n”)",
+	"cart_company_postal_code": "Postal code",
+	"cart_company_county": "County",
+	"cart_err_company_address": "Fill in every company seat field (street, city, county, postal code) or leave them all empty.",
+	"cart_err_company_county": "Pick the company's county from the list.",
+	"cart_err_company_sector": "For a Bucharest seat, the city must be “Sector 1”…“Sector 6”."
 }

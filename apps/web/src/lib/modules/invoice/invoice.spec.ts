@@ -10,7 +10,14 @@ import { createEmailSender } from '../email/service.ts';
 import { siteSettings } from '../settings/schema.ts';
 import type { SettingJsonValue, SettingKey } from '../settings/registry.ts';
 import { buildBuyerCompanyMetadata, buildCartMetadata } from '../shop/checkout.ts';
-import { orderEvents, orderItems, orders, products } from '../shop/schema.ts';
+import {
+	orderEvents,
+	orderItems,
+	orders,
+	products,
+	type BuyerCompany,
+	type ShippingAddress
+} from '../shop/schema.ts';
 import {
 	listOrders,
 	processStripeEvent,
@@ -74,9 +81,9 @@ async function insertPaidOrder(input?: {
 	/** The order (= chargeability) date; defaults to now. */
 	createdAt?: Date;
 	refundedCents?: number;
-	shippingAddress?: Record<string, string>;
+	shippingAddress?: ShippingAddress;
 	customerName?: string;
-	billingCompany?: Record<string, unknown>;
+	billingCompany?: BuyerCompany;
 	paymentMethod?: string;
 }) {
 	const id = `inv-order-${++seq}`;
@@ -91,10 +98,15 @@ async function insertPaidOrder(input?: {
 			amountTotalCents: items.reduce((sum, item) => sum + item.qty * item.priceCents, 0),
 			currency: 'ron',
 			status: input?.status ?? 'paid',
+			// A complete RO address by default: the e-Factura validator wants the
+			// county and the postal code on every Romanian buyer.
 			shippingAddress: input?.shippingAddress ?? {
 				name: 'Ana Pop',
 				line1: 'Str. Exemplu 1',
-				city: 'Cluj-Napoca'
+				city: 'Cluj-Napoca',
+				state: 'Cluj',
+				postalCode: '400001',
+				country: 'RO'
 			},
 			...(input?.customerName !== undefined ? { customerName: input.customerName } : {}),
 			...(input?.billingCompany ? { billingCompany: input.billingCompany } : {}),
@@ -281,7 +293,9 @@ describe('issuance snapshot', () => {
 			issuerCui: 'RO12345676',
 			issuerVatRegistered: true,
 			issuerRegCom: 'J40/1234/2025',
-			issuerAddress: 'Str. Somnului 10, București',
+			// Composed from the STRUCTURED seat settings (FIX-12), not the
+			// public display address.
+			issuerAddress: 'Str. Somnului 10\n030167 Sector 3\nBucurești',
 			issuerPlace: 'București',
 			issuerIban: 'RO49AAAA1B31007593840000',
 			buyerName: 'Ana Pop',

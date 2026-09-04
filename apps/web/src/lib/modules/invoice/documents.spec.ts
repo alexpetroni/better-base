@@ -102,7 +102,16 @@ async function orderViaWebhook(deps: WebhookDeps): Promise<string> {
 				collected_information: {
 					shipping_details: {
 						name: 'Ana Pop',
-						address: { line1: 'Str. Viselor 1', city: 'București', country: 'RO' }
+						// A complete RO address (the validator wants county + postal
+						// code); the sector sits in the street text, as Stripe's free-form
+						// input usually has it.
+						address: {
+							line1: 'Str. Viselor 1, Sector 2',
+							city: 'București',
+							state: 'București',
+							postal_code: '020001',
+							country: 'RO'
+						}
 					}
 				},
 				metadata: {

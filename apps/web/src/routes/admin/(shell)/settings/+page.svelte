@@ -18,6 +18,11 @@
 		'company.vatRegistered': m.admin_settings_company_vat_registered,
 		'company.regCom': m.admin_settings_company_reg_com,
 		'company.address': m.admin_settings_company_address,
+		'company.street': m.admin_settings_company_street,
+		'company.city': m.admin_settings_company_city,
+		'company.county': m.admin_settings_company_county,
+		'company.postalCode': m.admin_settings_company_postal_code,
+		'company.shareCapital': m.admin_settings_company_share_capital,
 		'company.contactEmail': m.admin_settings_company_contact_email,
 		'company.contactPhone': m.admin_settings_company_contact_phone,
 		'company.iban': m.admin_settings_company_iban,
@@ -49,6 +54,7 @@
 		'invalid-number': m.admin_settings_err_number,
 		'invalid-cui': m.admin_settings_err_cui,
 		'invalid-vat-rate': m.admin_settings_err_vat_rate,
+		'invalid-county': m.admin_settings_err_county,
 		'too-long': m.admin_settings_err_too_long
 	};
 

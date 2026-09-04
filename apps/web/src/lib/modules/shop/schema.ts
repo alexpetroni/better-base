@@ -83,6 +83,17 @@ export interface BuyerCompany {
 	name: string;
 	cui?: string;
 	regCom?: string;
+	/** The company's seat (FIX-12) — the invoice's buyer address for B2B; absent = the parcel address is used. */
+	address?: BuyerCompanyAddress;
+}
+
+export interface BuyerCompanyAddress {
+	street: string;
+	/** For București: `Sector n`. */
+	city: string;
+	/** ISO 3166-2:RO code. */
+	county: string;
+	postalCode: string;
 }
 
 /** Postal address as collected by Stripe Checkout (subset we care about). */
@@ -145,6 +156,18 @@ export const orders = pgTable(
 		/** Display name of the delivery option chosen at checkout ('' pre-NEXT-8). */
 		shippingName: text('shipping_name').notNull().default(''),
 		shippingAddress: jsonb('shipping_address').$type<ShippingAddress>(),
+		/**
+		 * The PAYER's name (Stripe `customer_details.name`, FIX-12) — whom a
+		 * B2C invoice names; the parcel recipient may differ. Erased with the
+		 * address by GDPR erasure.
+		 */
+		customerName: text('customer_name').notNull().default(''),
+		/**
+		 * How the session was paid, for the invoice's payment means: `card`
+		 * (the pinned default) or `online` (a session open to every method the
+		 * dashboard enables); '' for orders created before FIX-12.
+		 */
+		paymentMethod: text('payment_method').notNull().default(''),
 		/** Optional company details for a B2B invoice, as entered at checkout. */
 		billingCompany: jsonb('billing_company').$type<BuyerCompany>(),
 		/**

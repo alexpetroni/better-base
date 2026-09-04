@@ -1,4 +1,9 @@
 import { centsPerUnitToDecimal, centsToDecimal } from '../../util/money.ts';
+import {
+	BUCHAREST_COUNTY_CODE,
+	bucharestSector,
+	ROMANIA_COUNTRY_CODE
+} from '../../util/ro-counties.ts';
 import { invoiceDateIso, type InvoiceDocumentModel } from './model.ts';
 import type { InvoiceLineRow, InvoiceRow } from './schema.ts';
 
@@ -58,12 +63,89 @@ function amount(name: string, cents: number, currency: string): string {
 	return `<${name} currencyID="${esc(currency.toUpperCase())}">${centsToDecimal(cents)}</${name}>`;
 }
 
-/** The exemption reason for category O: the snapshotted mention. */
+/**
+ * The exemption reason (BT-120) for category O: the snapshot's dedicated
+ * column since FIX-12. Rows issued before it carry '' there and fall back
+ * to their first mention line (the service composed the neplătitor mention
+ * first); the generic legal term is the last resort for an emptied mention.
+ */
 export function vatExemptionReason(invoice: InvoiceRow): string {
-	// The service composes `mentions` with the `invoice.vatUnregisteredMention`
-	// setting FIRST whenever the issuer is unregistered; the generic legal
-	// term is only a fallback for a snapshot with an emptied mention.
+	if (invoice.vatExemptionReason) return invoice.vatExemptionReason;
 	return invoice.mentions.split('\n').find((line) => line.length > 0) ?? 'Neplătitor de TVA';
+}
+
+/**
+ * UNCL4461 payment means code for how the order was settled: 48 = bank
+ * card (the platform's pinned default), 68 = online payment service (a
+ * session open to whatever the Stripe dashboard enables).
+ */
+export function paymentMeansCodeFor(invoice: InvoiceRow): string | null {
+	if (!invoice.paidAt || !invoice.paymentMethod) return null;
+	return invoice.paymentMethod === 'card' ? '48' : '68';
+}
+
+/** A party's structured address, with the legacy fallback for pre-FIX-12 rows. */
+export interface PartyAddress {
+	street: string;
+	city: string;
+	postalZone: string;
+	countrySubentity: string;
+	countryCode: string;
+}
+
+/**
+ * BR-RO-A20: under RO-B the CityName is the sector (`SECTOR3`), which the
+ * customer may have typed in the city or in the street text. A București
+ * address naming no sector is emitted as given — and flagged by the
+ * validator, so the gap is visible rather than guessed.
+ */
+export function cityNameFor(address: Pick<PartyAddress, 'street' | 'city' | 'countrySubentity'>) {
+	if (address.countrySubentity !== BUCHAREST_COUNTY_CODE) return address.city;
+	const sector = bucharestSector(address.city) ?? bucharestSector(address.street);
+	return sector === null ? address.city : `SECTOR${sector}`;
+}
+
+export function supplierAddress(invoice: InvoiceRow): PartyAddress {
+	if (invoice.issuerStreet) {
+		return {
+			street: invoice.issuerStreet,
+			city: invoice.issuerCity,
+			postalZone: invoice.issuerPostalCode,
+			countrySubentity: invoice.issuerCounty,
+			countryCode: invoice.issuerCountry || ROMANIA_COUNTRY_CODE
+		};
+	}
+	// Pre-FIX-12 snapshot: one flattened string, no county — the validator
+	// reports the missing subentity for the operator.
+	return {
+		street: invoice.issuerAddress,
+		city: invoice.issuerPlace || invoice.issuerAddress,
+		postalZone: '',
+		countrySubentity: '',
+		countryCode: ROMANIA_COUNTRY_CODE
+	};
+}
+
+export function customerAddress(invoice: InvoiceRow): PartyAddress {
+	if (invoice.buyerStreet) {
+		return {
+			street: invoice.buyerStreet,
+			city: invoice.buyerCity,
+			postalZone: invoice.buyerPostalCode,
+			countrySubentity: invoice.buyerCounty,
+			countryCode: invoice.buyerCountry || ROMANIA_COUNTRY_CODE
+		};
+	}
+	// Pre-FIX-12 snapshot: printable lines — first = street, second = the
+	// postal/city line.
+	const lines = invoice.buyerAddress.split('\n').filter(Boolean);
+	return {
+		street: lines[0] ?? invoice.buyerName,
+		city: lines[1] ?? lines[0] ?? '',
+		postalZone: '',
+		countrySubentity: '',
+		countryCode: ROMANIA_COUNTRY_CODE
+	};
 }
 
 interface TaxGroup {
@@ -94,9 +176,7 @@ export function taxGroups(model: InvoiceDocumentModel): TaxGroup[] {
 
 function partyXml(opts: {
 	name: string;
-	street: string;
-	city: string;
-	countryCode: string;
+	address: PartyAddress;
 	vatId?: string;
 	legalId?: string;
 	legalForm?: string;
@@ -107,12 +187,15 @@ function partyXml(opts: {
 		opts.email || opts.phone
 			? `<cac:Contact>${el('cbc:Telephone', opts.phone)}${el('cbc:ElectronicMail', opts.email)}</cac:Contact>`
 			: '';
+	// UBL PostalAddress order: StreetName, CityName, PostalZone, CountrySubentity, Country.
 	return (
 		'<cac:Party>' +
 		'<cac:PostalAddress>' +
-		el('cbc:StreetName', opts.street) +
-		el('cbc:CityName', opts.city) +
-		`<cac:Country><cbc:IdentificationCode>${esc(opts.countryCode)}</cbc:IdentificationCode></cac:Country>` +
+		el('cbc:StreetName', opts.address.street) +
+		el('cbc:CityName', cityNameFor(opts.address)) +
+		el('cbc:PostalZone', opts.address.postalZone) +
+		el('cbc:CountrySubentity', opts.address.countrySubentity) +
+		`<cac:Country><cbc:IdentificationCode>${esc(opts.address.countryCode)}</cbc:IdentificationCode></cac:Country>` +
 		'</cac:PostalAddress>' +
 		(opts.vatId
 			? `<cac:PartyTaxScheme>${el('cbc:CompanyID', opts.vatId)}<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme>`
@@ -128,25 +211,19 @@ function partyXml(opts: {
 }
 
 /**
- * Render the snapshot as RO_CIUS UBL 2.1 XML. Addresses are emitted from the
- * flattened snapshot strings (street = the stored address blob); the ISO
- * 3166-2:RO county code ANAF additionally wants is not part of the NEXT-6
- * record — a documented gap of the pre-enrollment artifact (see README).
+ * Render the snapshot as RO_CIUS UBL 2.1 XML. Addresses come from the
+ * structured snapshot columns (street / city / PostalZone / the ISO
+ * 3166-2:RO CountrySubentity, SECTORn for București); a card-paid document
+ * is PREPAID (means 48 + PaymentID, PrepaidAmount = total, PayableAmount 0);
+ * the order id rides as OrderReference. Under category O the BUYER's VAT
+ * identifier is suppressed as well (BR-O-2).
  */
 export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 	const { invoice, lines, stornoOf } = model;
 	const currency = invoice.currency.toUpperCase();
 	const exemption = invoice.issuerVatRegistered ? '' : vatExemptionReason(invoice);
-
-	// Buyer address: the snapshot stores printable lines; UBL wants
-	// street/city. First line = street; the postal/city line follows it.
-	const buyerLines = invoice.buyerAddress.split('\n').filter(Boolean);
-	const buyerStreet = buyerLines[0] ?? invoice.buyerName;
-	const buyerCity = buyerLines[1] ?? buyerLines[0] ?? '';
-	// The shop ships domestically; the snapshot's flattened country (if any)
-	// sits inside the address text. RO is the only market sold to (data rule:
-	// the CODE stays generic — this is the sale-country of the platform).
-	const countryCode = 'RO';
+	const prepaid = invoice.paidAt !== null;
+	const meansCode = paymentMeansCodeFor(invoice);
 
 	const subtotals = taxGroups(model)
 		.map(
@@ -206,6 +283,9 @@ export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 		el('cbc:InvoiceTypeCode', '380') +
 		notes.map((note) => el('cbc:Note', note)).join('') +
 		el('cbc:DocumentCurrencyCode', currency) +
+		(invoice.orderReference
+			? `<cac:OrderReference>${el('cbc:ID', invoice.orderReference)}</cac:OrderReference>`
+			: '') +
 		(stornoOf
 			? '<cac:BillingReference><cac:InvoiceDocumentReference>' +
 				el('cbc:ID', stornoOf.displayNumber) +
@@ -215,12 +295,17 @@ export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 		'<cac:AccountingSupplierParty>' +
 		partyXml({
 			name: invoice.issuerName,
-			street: invoice.issuerAddress,
-			city: invoice.issuerPlace || invoice.issuerAddress,
-			countryCode,
+			address: supplierAddress(invoice),
 			vatId: invoice.issuerVatRegistered ? invoice.issuerCui : undefined,
 			legalId: invoice.issuerCui,
-			legalForm: invoice.issuerRegCom ? `Nr. Reg. Com.: ${invoice.issuerRegCom}` : undefined,
+			// BT-33: Reg. Com. and (Legea 31/1990 art. 74) the share capital.
+			legalForm:
+				[
+					invoice.issuerRegCom ? `Nr. Reg. Com.: ${invoice.issuerRegCom}` : '',
+					invoice.issuerCapital ? `Capital social: ${invoice.issuerCapital}` : ''
+				]
+					.filter(Boolean)
+					.join('; ') || undefined,
 			email: invoice.issuerEmail || undefined,
 			phone: invoice.issuerPhone || undefined
 		}) +
@@ -228,11 +313,12 @@ export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 		'<cac:AccountingCustomerParty>' +
 		partyXml({
 			name: invoice.buyerCompanyName ?? invoice.buyerName,
-			street: buyerStreet,
-			city: buyerCity,
-			countryCode,
+			address: customerAddress(invoice),
+			// BR-O-2: no VAT identifiers at all on a category-O document.
 			vatId:
-				invoice.buyerCompanyCui && /^RO\d+$/i.test(invoice.buyerCompanyCui)
+				invoice.issuerVatRegistered &&
+				invoice.buyerCompanyCui &&
+				/^RO\d+$/i.test(invoice.buyerCompanyCui)
 					? invoice.buyerCompanyCui
 					: undefined,
 			legalId: invoice.buyerCompanyCui ?? undefined,
@@ -242,13 +328,20 @@ export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 			email: invoice.buyerEmail || undefined
 		}) +
 		'</cac:AccountingCustomerParty>' +
-		(invoice.issuerIban
-			? '<cac:PaymentMeans><cbc:PaymentMeansCode>42</cbc:PaymentMeansCode>' +
-				`<cac:PayeeFinancialAccount>${el('cbc:ID', invoice.issuerIban)}${el(
-					'cbc:Name',
-					invoice.issuerBank || undefined
-				)}</cac:PayeeFinancialAccount></cac:PaymentMeans>`
-			: '') +
+		// Settled online: the means it was paid by, with the processor's
+		// reference; otherwise the account to pay into.
+		(meansCode
+			? `<cac:PaymentMeans>${el('cbc:PaymentMeansCode', meansCode)}${el(
+					'cbc:PaymentID',
+					invoice.paymentReference || undefined
+				)}</cac:PaymentMeans>`
+			: invoice.issuerIban
+				? '<cac:PaymentMeans><cbc:PaymentMeansCode>42</cbc:PaymentMeansCode>' +
+					`<cac:PayeeFinancialAccount>${el('cbc:ID', invoice.issuerIban)}${el(
+						'cbc:Name',
+						invoice.issuerBank || undefined
+					)}</cac:PayeeFinancialAccount></cac:PaymentMeans>`
+				: '') +
 		'<cac:TaxTotal>' +
 		amount('cbc:TaxAmount', invoice.vatTotalCents, currency) +
 		subtotals +
@@ -257,7 +350,9 @@ export function renderEFacturaXml(model: InvoiceDocumentModel): string {
 		amount('cbc:LineExtensionAmount', invoice.netTotalCents, currency) +
 		amount('cbc:TaxExclusiveAmount', invoice.netTotalCents, currency) +
 		amount('cbc:TaxInclusiveAmount', invoice.grossTotalCents, currency) +
-		amount('cbc:PayableAmount', invoice.grossTotalCents, currency) +
+		// BR-CO-16: payable = inclusive − prepaid. A settled document owes 0.
+		(prepaid ? amount('cbc:PrepaidAmount', invoice.grossTotalCents, currency) : '') +
+		amount('cbc:PayableAmount', prepaid ? 0 : invoice.grossTotalCents, currency) +
 		'</cac:LegalMonetaryTotal>' +
 		lineXml +
 		'</Invoice>'

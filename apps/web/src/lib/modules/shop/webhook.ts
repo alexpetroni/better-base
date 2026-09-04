@@ -147,6 +147,19 @@ function extractShipping(session: Stripe.Checkout.Session): ShippingAddress | nu
 
 export { orderLookupUrl } from './order-link.ts';
 
+/**
+ * How the session was paid, for the invoice's payment means: the platform
+ * pins sessions to `card` unless the operator opened every method the
+ * dashboard enables (`shop.allowAllPaymentMethods`), in which case the
+ * actual method is not on the session — recorded as `online`. An absent
+ * list (older payloads) is the pinned default.
+ */
+function sessionPaymentMethod(session: Stripe.Checkout.Session): string {
+	const types = session.payment_method_types;
+	if (!types || (types.length === 1 && types[0] === 'card')) return 'card';
+	return 'online';
+}
+
 function sessionPaymentIntent(session: Stripe.Checkout.Session): string | null {
 	return typeof session.payment_intent === 'string'
 		? session.payment_intent
@@ -272,6 +285,9 @@ async function createOrderFromSession(
 			currency: session.currency ?? 'ron',
 			status,
 			shippingAddress: extractShipping(session),
+			// The payer's name: whom a B2C invoice is made out to (FIX-12).
+			customerName: session.customer_details?.name ?? '',
+			paymentMethod: sessionPaymentMethod(session),
 			billingCompany: parseBuyerCompanyMetadata(session.metadata?.[BUYER_COMPANY_METADATA_KEY])
 		})
 		.onConflictDoNothing({ target: orders.stripeSessionId })

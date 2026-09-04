@@ -35,7 +35,9 @@ export {
 export { renderInvoicePdf } from './pdf.ts';
 export {
 	allocateInvoiceNumber,
+	buyerAddressFromOrder,
 	composeDisplayNumber,
+	composePostalAddress,
 	ensureInvoicesForOrder,
 	issueInvoiceForOrderInTx,
 	issuePartialStornoForOrder,
@@ -51,5 +53,6 @@ export {
 	type InvoiceItemInput,
 	type InvoiceResult,
 	type IssuedDocument,
-	type IssuerSettingsProblem
+	type IssuerSettingsProblem,
+	type PostalAddressSnapshot
 } from './service.ts';

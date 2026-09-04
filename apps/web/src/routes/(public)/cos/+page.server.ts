@@ -113,21 +113,19 @@ export const actions: Actions = {
 		const site = getSite();
 		// Optional B2B fields for the invoice; empty inputs mean a consumer sale.
 		const form = await request.formData();
-		const company = parseBuyerCompanyForm({
+		const companyValues = {
 			name: formStr(form, 'companyName'),
 			cui: formStr(form, 'companyCui'),
-			regCom: formStr(form, 'companyRegCom')
-		});
+			regCom: formStr(form, 'companyRegCom'),
+			// The company seat (FIX-12): the invoice's buyer address for B2B.
+			street: formStr(form, 'companyStreet'),
+			city: formStr(form, 'companyCity'),
+			county: formStr(form, 'companyCounty'),
+			postalCode: formStr(form, 'companyPostalCode')
+		};
+		const company = parseBuyerCompanyForm(companyValues);
 		if (!company.ok) {
-			return fail(400, {
-				checkoutError: company.error,
-				detail: '',
-				companyValues: {
-					name: formStr(form, 'companyName'),
-					cui: formStr(form, 'companyCui'),
-					regCom: formStr(form, 'companyRegCom')
-				}
-			});
+			return fail(400, { checkoutError: company.error, detail: '', companyValues });
 		}
 		const settings = await locals.settings();
 		const outcome = await createCheckoutFromCart(

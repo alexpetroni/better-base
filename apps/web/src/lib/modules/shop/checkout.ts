@@ -1,11 +1,23 @@
 import { eq, inArray } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
-import { CUI_PATTERN } from '../../util/cui.ts';
+import { isValidCui, normalizeCui } from '../../util/cui.ts';
+import {
+	BUCHAREST_COUNTY_CODE,
+	bucharestSector,
+	isRoCountyCode,
+	roCountyCodeFor
+} from '../../util/ro-counties.ts';
 import type { SiteSettings } from '../settings/registry.ts';
 import { cartTotalCents, type CartItem } from './cart.ts';
 import type { StripeGateway } from './gateway.ts';
-import { productPillars, products, type BuyerCompany, type ProductRow } from './schema.ts';
+import {
+	productPillars,
+	products,
+	type BuyerCompany,
+	type BuyerCompanyAddress,
+	type ProductRow
+} from './schema.ts';
 import { isOutOfStock } from './service.ts';
 import {
 	buildShippingMetadata,
@@ -82,40 +94,109 @@ export function parseCartMetadata(value: string | undefined): CartMetadataItem[]
 
 export const BUYER_COMPANY_METADATA_KEY = 'company';
 
-/** Stripe metadata values are capped at 500 chars; keep each field well under. */
-const COMPANY_FIELD_MAX = 120;
+/**
+ * Stripe metadata values are capped at 500 chars; every field is bounded so
+ * the whole company snapshot (name, CUI, Reg. Com., seat) fits with room.
+ */
+const COMPANY_FIELD_MAX = { name: 120, cui: 12, regCom: 30, street: 120, city: 60, postalCode: 12 };
 
 export type BuyerCompanyParse =
-	{ ok: true; value: BuyerCompany | null } | { ok: false; error: 'company-name' | 'company-cui' };
+	| { ok: true; value: BuyerCompany | null }
+	| {
+			ok: false;
+			error:
+				| 'company-name'
+				| 'company-cui'
+				/** Some seat fields typed, some not — the address is all-or-nothing. */
+				| 'company-address'
+				| 'company-county'
+				/** A București seat must name its sector (CIUS-RO: SECTORn is the city). */
+				| 'company-sector';
+	  };
+
+function clean(value: string, max: number): string {
+	return value.trim().slice(0, max);
+}
 
 /**
  * Validate the cart page's optional B2B fields. All empty → no company (null).
  * A CUI or Reg. Com. without a company name is rejected (an invoice cannot
- * name a company it does not know), as is a CUI that is not shaped like one.
+ * name a company it does not know); the CUI must pass the mod-11 checksum
+ * and is stored uppercase. The seat (FIX-12) is optional but all-or-
+ * nothing, the county is normalized to its ISO 3166-2:RO code, and a
+ * București seat must name its sector in the city or the street.
  */
 export function parseBuyerCompanyForm(input: {
 	name: string;
 	cui: string;
 	regCom: string;
+	street: string;
+	city: string;
+	county: string;
+	postalCode: string;
 }): BuyerCompanyParse {
-	const name = input.name.trim().slice(0, COMPANY_FIELD_MAX);
-	const cui = input.cui.trim().slice(0, COMPANY_FIELD_MAX);
-	const regCom = input.regCom.trim().slice(0, COMPANY_FIELD_MAX);
-	if (!name && !cui && !regCom) return { ok: true, value: null };
+	const name = clean(input.name, COMPANY_FIELD_MAX.name);
+	const cui = clean(input.cui, COMPANY_FIELD_MAX.cui);
+	const regCom = clean(input.regCom, COMPANY_FIELD_MAX.regCom);
+	const street = clean(input.street, COMPANY_FIELD_MAX.street);
+	const city = clean(input.city, COMPANY_FIELD_MAX.city);
+	const countyRaw = input.county.trim();
+	const postalCode = clean(input.postalCode, COMPANY_FIELD_MAX.postalCode);
+	const seatTyped = !!(street || city || countyRaw || postalCode);
+	if (!name && !cui && !regCom && !seatTyped) return { ok: true, value: null };
 	if (!name) return { ok: false, error: 'company-name' };
-	if (cui && !CUI_PATTERN.test(cui)) return { ok: false, error: 'company-cui' };
+	const normalizedCui = cui ? normalizeCui(cui) : null;
+	if (cui && (!normalizedCui || !isValidCui(cui))) return { ok: false, error: 'company-cui' };
+
+	let address: BuyerCompanyAddress | undefined;
+	if (seatTyped) {
+		if (!street || !city || !countyRaw || !postalCode) {
+			return { ok: false, error: 'company-address' };
+		}
+		const county = isRoCountyCode(countyRaw) ? countyRaw : roCountyCodeFor(countyRaw);
+		if (!county) return { ok: false, error: 'company-county' };
+		if (
+			county === BUCHAREST_COUNTY_CODE &&
+			bucharestSector(city) === null &&
+			bucharestSector(street) === null
+		) {
+			return { ok: false, error: 'company-sector' };
+		}
+		address = { street, city, county, postalCode };
+	}
 	return {
 		ok: true,
-		value: { name, ...(cui ? { cui } : {}), ...(regCom ? { regCom } : {}) }
+		value: {
+			name,
+			...(normalizedCui
+				? { cui: `${normalizedCui.prefixed ? 'RO' : ''}${normalizedCui.digits}` }
+				: {}),
+			...(regCom ? { regCom } : {}),
+			...(address ? { address } : {})
+		}
 	};
 }
 
-/** Compact company snapshot for session metadata: `{n, c, r}`. */
+/** Compact company snapshot for session metadata: `{n, c, r, a: {s, ci, co, pc}}`. */
 export function buildBuyerCompanyMetadata(company: BuyerCompany): string {
-	return JSON.stringify({ n: company.name, c: company.cui ?? '', r: company.regCom ?? '' });
+	return JSON.stringify({
+		n: company.name,
+		c: company.cui ?? '',
+		r: company.regCom ?? '',
+		...(company.address
+			? {
+					a: {
+						s: company.address.street,
+						ci: company.address.city,
+						co: company.address.county,
+						pc: company.address.postalCode
+					}
+				}
+			: {})
+	});
 }
 
-/** Parse it back from the webhook's session; anything malformed → null. */
+/** Parse it back from the webhook's session; a malformed seat is dropped, anything else malformed → null. */
 export function parseBuyerCompanyMetadata(value: string | undefined): BuyerCompany | null {
 	if (!value) return null;
 	let data: unknown;
@@ -125,12 +206,29 @@ export function parseBuyerCompanyMetadata(value: string | undefined): BuyerCompa
 		return null;
 	}
 	if (typeof data !== 'object' || data === null) return null;
-	const { n, c, r } = data as { n?: unknown; c?: unknown; r?: unknown };
+	const { n, c, r, a } = data as { n?: unknown; c?: unknown; r?: unknown; a?: unknown };
 	if (typeof n !== 'string' || !n) return null;
+	let address: BuyerCompanyAddress | undefined;
+	if (typeof a === 'object' && a !== null) {
+		const { s, ci, co, pc } = a as { s?: unknown; ci?: unknown; co?: unknown; pc?: unknown };
+		if (
+			typeof s === 'string' &&
+			s &&
+			typeof ci === 'string' &&
+			ci &&
+			typeof co === 'string' &&
+			isRoCountyCode(co) &&
+			typeof pc === 'string' &&
+			pc
+		) {
+			address = { street: s, city: ci, county: co, postalCode: pc };
+		}
+	}
 	return {
 		name: n,
 		...(typeof c === 'string' && c ? { cui: c } : {}),
-		...(typeof r === 'string' && r ? { regCom: r } : {})
+		...(typeof r === 'string' && r ? { regCom: r } : {}),
+		...(address ? { address } : {})
 	};
 }
 

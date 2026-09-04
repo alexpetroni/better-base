@@ -65,6 +65,15 @@ export const invoices = pgTable(
 		issuerPhone: text('issuer_phone').notNull().default(''),
 		issuerIban: text('issuer_iban').notNull().default(''),
 		issuerBank: text('issuer_bank').notNull().default(''),
+		// Structured seller address (FIX-12, CIUS-RO): `issuer_address` above
+		// stays the printable composition of these. County = ISO 3166-2:RO.
+		issuerStreet: text('issuer_street').notNull().default(''),
+		issuerCity: text('issuer_city').notNull().default(''),
+		issuerCounty: text('issuer_county').notNull().default(''),
+		issuerPostalCode: text('issuer_postal_code').notNull().default(''),
+		issuerCountry: text('issuer_country').notNull().default(''),
+		/** Share capital as stated on the document (Legea 31/1990 art. 74); '' for a PFA. */
+		issuerCapital: text('issuer_capital').notNull().default(''),
 
 		// Buyer snapshot, copied from the order at issue time. GDPR erasure
 		// leaves these untouched: accounting retention (see README) wins.
@@ -74,13 +83,38 @@ export const invoices = pgTable(
 		buyerCompanyName: text('buyer_company_name'),
 		buyerCompanyCui: text('buyer_company_cui'),
 		buyerCompanyRegCom: text('buyer_company_reg_com'),
+		// Structured buyer address (FIX-12): the company's seat for B2B, the
+		// Stripe shipping address (county mapped to its code) for B2C. Rows
+		// issued before FIX-12 carry '' here and render from `buyer_address`.
+		buyerStreet: text('buyer_street').notNull().default(''),
+		buyerCity: text('buyer_city').notNull().default(''),
+		buyerCounty: text('buyer_county').notNull().default(''),
+		buyerPostalCode: text('buyer_postal_code').notNull().default(''),
+		buyerCountry: text('buyer_country').notNull().default(''),
 
 		/** Sums of the line amounts (per-line VAT rounding — see vat.ts). */
 		netTotalCents: integer('net_total_cents').notNull(),
 		vatTotalCents: integer('vat_total_cents').notNull(),
 		grossTotalCents: integer('gross_total_cents').notNull(),
 		/** Legal mentions snapshot (VAT-unregistered mention, payment terms). */
-		mentions: text('mentions').notNull().default('')
+		mentions: text('mentions').notNull().default(''),
+		/**
+		 * BT-120 for a category-O (neplătitor) document, in its OWN column so a
+		 * payment-terms note can never become the exemption reason (FIX-12);
+		 * '' on a registered issuer's document and on pre-FIX-12 rows.
+		 */
+		vatExemptionReason: text('vat_exemption_reason').notNull().default(''),
+		/** The order id (UBL OrderReference / "Comandă" on the PDF). */
+		orderReference: text('order_reference').notNull().default(''),
+		/** The payment processor's reference (Stripe payment intent). */
+		paymentReference: text('payment_reference').notNull().default(''),
+		/** `card` | `online` as the order recorded it; '' when unknown. */
+		paymentMethod: text('payment_method').notNull().default(''),
+		/**
+		 * When the document was settled: the invoice is PREPAID (PrepaidAmount =
+		 * total, PayableAmount 0, "Achitat … la"); null = still payable.
+		 */
+		paidAt: timestamp('paid_at', { withTimezone: true })
 	},
 	(table) => [
 		// The gapless-numbering safety net: a duplicate (series, number) can

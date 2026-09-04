@@ -23,6 +23,7 @@ export {
 } from './fulfillment.ts';
 export type {
 	BuyerCompany,
+	BuyerCompanyAddress,
 	OrderEventRow,
 	OrderItemRow,
 	OrderRow,

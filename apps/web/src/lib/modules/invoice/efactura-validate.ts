@@ -1,13 +1,17 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { BUCHAREST_COUNTY_CODE, isRoCountyCode } from '../../util/ro-counties.ts';
 import { EFACTURA_CUSTOMIZATION_ID } from './efactura.ts';
 import type { InvoiceDocumentModel } from './model.ts';
 
 /**
  * Offline validation of a generated e-Factura document: everything that can
  * be checked without ANAF — well-formedness, the UBL/CIUS-RO structure, the
- * EN 16931 arithmetic rules (BR-CO-10/13/14/15, BR-CO-17 with a documented
- * per-line-rounding tolerance, BR-O for the VAT-unregistered case) and, given
- * the source snapshot, exact agreement with the stored record. This is NOT
+ * EN 16931 arithmetic rules (BR-CO-10/13/14/15/16, BR-CO-17 with a documented
+ * per-line-rounding tolerance, BR-O incl. BR-O-2 for the VAT-unregistered
+ * case), the CIUS-RO address rules (BR-RO-030: an ISO 3166-2:RO
+ * CountrySubentity and a PostalZone on every RO address; BR-RO-A20: SECTORn
+ * as the București city) and, given the source snapshot, exact agreement
+ * with the stored record. This is NOT
  * the official ANAF schematron (that runs at submission / in their web
  * validator, which needs their tooling); it is the tripwire that keeps our
  * generator from ever emitting a structurally or arithmetically broken file.
@@ -57,6 +61,30 @@ function text(node: XmlNode | undefined, name: string): string {
 		return String((value as XmlNode)['#text'] ?? '');
 	}
 	return String(Array.isArray(value) ? ((value[0] as XmlNode)?.['#text'] ?? value[0]) : value);
+}
+
+/**
+ * CIUS-RO address rules for a Romanian party: BR-RO-030 (CountrySubentity
+ * is an ISO 3166-2:RO code) plus a PostalZone, and BR-RO-A20 (under RO-B
+ * the CityName is SECTOR1…SECTOR6). Foreign addresses are left alone.
+ */
+function roAddressProblems(party: 'supplier' | 'customer', address: XmlNode | undefined): string[] {
+	if (!address) return [];
+	if (text(child(address, 'cac:Country'), 'cbc:IdentificationCode') !== 'RO') return [];
+	const problems: string[] = [];
+	const subentity = text(address, 'cbc:CountrySubentity');
+	if (!isRoCountyCode(subentity)) {
+		problems.push(
+			`${party}: a RO address needs an ISO 3166-2:RO CountrySubentity (BR-RO-030), got "${subentity}"`
+		);
+	}
+	if (!text(address, 'cbc:PostalZone')) problems.push(`${party}: a RO address needs a PostalZone`);
+	if (subentity === BUCHAREST_COUNTY_CODE && !/^SECTOR[1-6]$/.test(text(address, 'cbc:CityName'))) {
+		problems.push(
+			`${party}: a București address needs SECTOR1…SECTOR6 as CityName (BR-RO-A20), got "${text(address, 'cbc:CityName')}"`
+		);
+	}
+	return problems;
 }
 
 export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): string[] {
@@ -111,11 +139,16 @@ export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): 
 	if (!/^[A-Z]{2}$/.test(text(child(supplierAddress, 'cac:Country'), 'cbc:IdentificationCode'))) {
 		problems.push('missing supplier country code');
 	}
+	problems.push(...roAddressProblems('supplier', supplierAddress));
 	const customer = child(child(invoice, 'cac:AccountingCustomerParty'), 'cac:Party');
 	if (!text(child(customer, 'cac:PartyLegalEntity'), 'cbc:RegistrationName')) {
 		problems.push('missing customer name');
 	}
-	if (!child(customer, 'cac:PostalAddress')) problems.push('missing customer address');
+	const customerAddress = child(customer, 'cac:PostalAddress');
+	if (!customerAddress) problems.push('missing customer address');
+	problems.push(...roAddressProblems('customer', customerAddress));
+	const customerVatId = text(child(customer, 'cac:PartyTaxScheme'), 'cbc:CompanyID');
+	const orderReference = text(child(invoice, 'cac:OrderReference'), 'cbc:ID');
 
 	// --- Lines.
 	const lines = asArray(invoice['cac:InvoiceLine']);
@@ -186,6 +219,9 @@ export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): 
 			if (!text(category, 'cbc:TaxExemptionReason')) {
 				problems.push('category O subtotal must carry an exemption reason (BR-O)');
 			}
+			if (customerVatId) {
+				problems.push('buyer VAT identifier must not appear under category O (BR-O-2)');
+			}
 		} else {
 			// BR-CO-17, with tolerance: per-line half-up rounding lets the
 			// category tax differ from rate × taxable by up to 1 ban per line
@@ -212,11 +248,14 @@ export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): 
 	const lineExtension = parseAmountCents(text(monetary, 'cbc:LineExtensionAmount'));
 	const taxExclusive = parseAmountCents(text(monetary, 'cbc:TaxExclusiveAmount'));
 	const taxInclusive = parseAmountCents(text(monetary, 'cbc:TaxInclusiveAmount'));
+	const prepaidText = text(monetary, 'cbc:PrepaidAmount');
+	const prepaid = prepaidText === '' ? 0 : parseAmountCents(prepaidText);
 	const payable = parseAmountCents(text(monetary, 'cbc:PayableAmount'));
 	if (
 		lineExtension === null ||
 		taxExclusive === null ||
 		taxInclusive === null ||
+		prepaid === null ||
 		payable === null
 	) {
 		problems.push('LegalMonetaryTotal amounts missing or not 2-decimal');
@@ -226,7 +265,9 @@ export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): 
 		if (taxInclusive !== taxExclusive + taxAmount) {
 			problems.push('TaxInclusiveAmount ≠ TaxExclusiveAmount + tax');
 		}
-		if (payable !== taxInclusive) problems.push('PayableAmount ≠ TaxInclusiveAmount');
+		if (payable !== taxInclusive - prepaid) {
+			problems.push('PayableAmount ≠ TaxInclusiveAmount − PrepaidAmount (BR-CO-16)');
+		}
 		if (subtotalTaxSum !== taxAmount) problems.push('TaxTotal ≠ sum of subtotal taxes');
 		if (subtotalTaxableSum !== lineNetSum) problems.push('subtotal taxables ≠ sum of line nets');
 	}
@@ -238,7 +279,9 @@ export function validateEFacturaXml(xml: string, model?: InvoiceDocumentModel): 
 		if (lines.length !== rows.length) problems.push('line count ≠ snapshot');
 		if (lineExtension !== row.netTotalCents) problems.push('net total ≠ snapshot');
 		if (taxAmount !== row.vatTotalCents) problems.push('VAT total ≠ snapshot');
-		if (payable !== row.grossTotalCents) problems.push('gross total ≠ snapshot');
+		if (taxInclusive !== row.grossTotalCents) problems.push('gross total ≠ snapshot');
+		if (prepaid !== (row.paidAt ? row.grossTotalCents : 0)) problems.push('prepaid ≠ snapshot');
+		if (orderReference !== row.orderReference) problems.push('OrderReference ≠ snapshot');
 		if (currency !== row.currency.toUpperCase()) problems.push('currency ≠ snapshot');
 		const reference = child(child(invoice, 'cac:BillingReference'), 'cac:InvoiceDocumentReference');
 		if (row.kind === 'storno') {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
+	import { RO_COUNTIES } from '$lib/util/ro-counties';
 	import { singleSubmit } from '$lib/components/single-submit';
 	import { Img } from '$lib/modules/media';
 	import { formatCents } from '$lib/util/money';
@@ -182,6 +183,55 @@
 					/>
 				</label>
 			</div>
+			<p class="mt-3 text-xs text-(--color-ink)/60">{m.cart_company_address_hint()}</p>
+			<div class="mt-2 grid gap-3 sm:grid-cols-4">
+				<label class="block sm:col-span-2">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_street()}</span>
+					<input
+						type="text"
+						name="companyStreet"
+						value={form?.companyValues?.street ?? ''}
+						data-testid="cart-company-street"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+				<label class="block">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_city()}</span>
+					<input
+						type="text"
+						name="companyCity"
+						value={form?.companyValues?.city ?? ''}
+						data-testid="cart-company-city"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+				<label class="block">
+					<span class="mb-1 block text-xs text-(--color-ink)/60"
+						>{m.cart_company_postal_code()}</span
+					>
+					<input
+						type="text"
+						name="companyPostalCode"
+						value={form?.companyValues?.postalCode ?? ''}
+						data-testid="cart-company-postal-code"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					/>
+				</label>
+				<label class="block sm:col-span-2">
+					<span class="mb-1 block text-xs text-(--color-ink)/60">{m.cart_company_county()}</span>
+					<select
+						name="companyCounty"
+						value={form?.companyValues?.county ?? ''}
+						data-testid="cart-company-county"
+						class="w-full rounded border border-(--color-brand-soft) px-2 py-1"
+					>
+						<option value="">—</option>
+						{#each RO_COUNTIES as county (county.code)}
+							<option value={county.code}>{county.name}</option>
+						{/each}
+					</select>
+				</label>
+			</div>
 		</details>
 		<div class="flex flex-wrap items-center justify-end gap-4">
 			<span class="text-lg">
@@ -211,6 +261,12 @@
 				{m.cart_err_company_name()}
 			{:else if form.checkoutError === 'company-cui'}
 				{m.cart_err_company_cui()}
+			{:else if form.checkoutError === 'company-address'}
+				{m.cart_err_company_address()}
+			{:else if form.checkoutError === 'company-county'}
+				{m.cart_err_company_county()}
+			{:else if form.checkoutError === 'company-sector'}
+				{m.cart_err_company_sector()}
 			{:else if form.checkoutError === 'invalid-shipping'}
 				{m.cart_err_shipping()}
 			{:else}

@@ -176,6 +176,13 @@
 			"when": 1788543106936,
 			"tag": "0024_vat_model",
 			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1788544340840,
+			"tag": "0025_fiscal_content",
+			"breakpoints": true
 		}
 	]
 }

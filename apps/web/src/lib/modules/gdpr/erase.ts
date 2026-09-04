@@ -71,7 +71,12 @@ export async function eraseSubscriberData(
 		// expression indexes from migration 0021 keep this a range scan.
 		const anonymizedOrders = await tx
 			.update(orders)
-			.set({ email: ANONYMIZED_EMAIL, shippingAddress: null, billingCompany: null })
+			.set({
+				email: ANONYMIZED_EMAIL,
+				customerName: '',
+				shippingAddress: null,
+				billingCompany: null
+			})
 			.where(sql`lower(${orders.email}) = ${email}`)
 			.returning({ id: orders.id });
 
