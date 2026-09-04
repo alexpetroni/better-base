@@ -423,6 +423,22 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 	});
 });
 
+describe('/admin/orders/[id] ?/transition — the sync-only edge is not operator-reachable', () => {
+	it('shipped → packed by an admin is an illegal transition (400), the order stays shipped', async () => {
+		const order = await insertOrder({ fulfillment: 'shipped' });
+		const result = await transitionAction(transitionEvent(order.id, ADMIN, { to: 'packed' }));
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		expect(result.data).toMatchObject({
+			error: 'illegal-transition',
+			from: 'shipped',
+			to: 'packed'
+		});
+		const [row] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(row.fulfillmentStatus).toBe('shipped');
+	});
+});
+
 /** Everything the courier needs: phone and county included (FIX-11). */
 const RECIPIENT: ShippingAddress = {
 	name: 'Ana Pop',

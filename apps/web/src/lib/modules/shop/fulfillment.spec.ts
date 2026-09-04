@@ -7,6 +7,7 @@ import {
 	IllegalTransitionError,
 	isFulfillmentStatus,
 	legalTransitions,
+	SHIPMENT_SYNC_ACTOR,
 	type FulfillmentStatus
 } from './fulfillment.ts';
 
@@ -42,6 +43,21 @@ describe('fulfillment state machine', () => {
 		// Terminal states offer nothing.
 		expect(legalTransitions('returned')).toHaveLength(0);
 		expect(legalTransitions('cancelled')).toHaveLength(0);
+	});
+
+	// FIX-11 (audit P1 "courier-cancelled AWB"): a courier-side cancellation
+	// hands the parcel back to the warehouse, so the SYNC may move shipped →
+	// packed. Operators may not — shipping stays the point of no return for
+	// them (and the admin UI lists only `legalTransitions`).
+	it('allows shipped → packed for the shipment-sync actor only', () => {
+		expect(canTransition('shipped', 'packed')).toBe(false);
+		expect(canTransition('shipped', 'packed', 'admin@example.ro')).toBe(false);
+		expect(legalTransitions('shipped')).not.toContain('packed');
+		expect(canTransition('shipped', 'packed', SHIPMENT_SYNC_ACTOR)).toBe(true);
+		// The actor unlocks that one edge and nothing else.
+		expect(canTransition('delivered', 'packed', SHIPMENT_SYNC_ACTOR)).toBe(false);
+		expect(canTransition('returned', 'packed', SHIPMENT_SYNC_ACTOR)).toBe(false);
+		expect(canTransition('shipped', 'unfulfilled', SHIPMENT_SYNC_ACTOR)).toBe(false);
 	});
 
 	it('isFulfillmentStatus narrows only real statuses', () => {

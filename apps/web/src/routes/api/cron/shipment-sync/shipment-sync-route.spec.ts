@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../../../lib/db/client.ts';
+import { CourierAuthError } from '../../../../lib/modules/shop/courier.ts';
+import type { MockCourierProvider } from '../../../../lib/modules/shop/mock-courier.ts';
+import { orders, shipments } from '../../../../lib/modules/shop/schema.ts';
 
 // The shipment-sync cron route under the existing cron-auth rules: missing
 // CRON_SECRET is 503 (an unconfigured deploy never falls open), a missing or
@@ -54,6 +57,7 @@ beforeAll(async () => {
 
 afterEach(() => {
 	delete envHolder.env.CRON_SECRET;
+	vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -79,5 +83,48 @@ describe('GET /api/cron/shipment-sync', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(await response.json()).toEqual({ polled: 0, updated: 0, errors: 0 });
+	});
+
+	// FIX-11 (audit P1 "shipment-sync starvation"): an auth failure used to
+	// fail every row silently; the run must abort, log at error level and say
+	// so in the response the scheduler sees.
+	it('reports an aborted run when the courier rejects the credentials', async () => {
+		envHolder.env.CRON_SECRET = 'cron-test-secret';
+		const [order] = await db
+			.insert(orders)
+			.values({
+				id: 'sync-route-order',
+				email: 'client@example.ro',
+				stripeSessionId: 'cs_sync_route',
+				amountTotalCents: 1000,
+				currency: 'ron',
+				status: 'paid',
+				fulfillmentStatus: 'shipped'
+			})
+			.returning();
+		await db.insert(shipments).values({
+			id: 'sync-route-shipment',
+			orderId: order.id,
+			provider: 'mock',
+			awb: 'MOCKAWB-ROUTE',
+			status: 'registered'
+		});
+		// The route resolves the server-barrel courier singleton (the mock).
+		const { getCourierProvider } = await import('../../../../lib/modules/shop/server.ts');
+		const courier = getCourierProvider() as MockCourierProvider;
+		courier.trackFailures.set(
+			'MOCKAWB-ROUTE',
+			new CourierAuthError('Sameday authentication failed')
+		);
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const response = await get(requestEvent('Bearer cron-test-secret'));
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ polled: 1, updated: 0, errors: 1, aborted: 'auth' });
+		expect(errorLog).toHaveBeenCalled();
+		const [row] = await db.select().from(shipments).where(eq(shipments.id, 'sync-route-shipment'));
+		expect(row.errorCount).toBe(1);
+		expect(row.lastError).toContain('authentication failed');
+		courier.trackFailures.delete('MOCKAWB-ROUTE');
 	});
 });

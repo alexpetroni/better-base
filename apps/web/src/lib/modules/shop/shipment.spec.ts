@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import Stripe from 'stripe';
 import { resolveSiteConfig } from '../../config/index.ts';
@@ -11,10 +11,24 @@ import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { invoiceLines, invoices } from '../invoice/schema.ts';
 import { siteSettings } from '../settings/schema.ts';
 import { buildCartMetadata } from './checkout.ts';
+import { CourierAuthError, type CourierProvider } from './courier.ts';
+import { SHIPMENT_SYNC_ACTOR } from './fulfillment.ts';
 import { createMockCourierProvider, type MockCourierProvider } from './mock-courier.ts';
-import { orderEvents, orders, products, shipments, type OrderRow } from './schema.ts';
+import {
+	orderEvents,
+	orders,
+	products,
+	shipments,
+	type OrderRow,
+	type ShipmentRow
+} from './schema.ts';
 import {
 	createShipmentForOrder,
+	getShipmentForOrder,
+	SHIPMENT_SYNC_BACKOFF_BASE_MS,
+	SHIPMENT_SYNC_BACKOFF_MAX_MS,
+	shipmentSyncHealth,
+	syncBackoffMs,
 	syncShipmentStatuses,
 	type CreateShipmentDeps
 } from './shipment-service.ts';
@@ -82,7 +96,55 @@ afterAll(async () => {
 	await db?.$client.end();
 });
 
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
 let seq = 0;
+const ACTOR = 'admin@example.ro';
+
+/** Poll (from a pool connection, i.e. across transactions) until a row of this status is committed. */
+async function waitForShipment(
+	orderId: string,
+	status: ShipmentRow['status']
+): Promise<ShipmentRow> {
+	for (let i = 0; i < 100; i += 1) {
+		const [row] = await db
+			.select()
+			.from(shipments)
+			.where(and(eq(shipments.orderId, orderId), eq(shipments.status, status)));
+		if (row) return row;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error(`no ${status} shipment for ${orderId} within 2s`);
+}
+
+/** The mock courier with a createShipment that waits until the test releases it. */
+function gatedCourier(): { courier: CourierProvider; release: () => void } {
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	return {
+		release,
+		courier: {
+			name: courier.name,
+			getLabel: (awb) => courier.getLabel(awb),
+			trackShipment: (awb) => courier.trackShipment(awb),
+			cancelShipment: (awb) => courier.cancelShipment(awb),
+			async createShipment(request) {
+				await gate;
+				return courier.createShipment(request);
+			}
+		}
+	};
+}
+
+async function shipmentRows(orderId: string): Promise<ShipmentRow[]> {
+	return db
+		.select()
+		.from(shipments)
+		.where(eq(shipments.orderId, orderId))
+		.orderBy(asc(shipments.createdAt));
+}
 
 /** A paid order created through the REAL webhook path, shipping included. */
 async function orderViaWebhook(input: {
@@ -337,24 +399,165 @@ describe('AWB generation (admin action service)', () => {
 		expect(!done.ok && done.error).toBe('order-not-shippable');
 	});
 
-	it('a courier failure writes nothing: no shipment, no transition, no email', async () => {
+	it('a courier failure leaves a `failed` row with the reason, no transition, no email; the retry registers exactly one AWB', async () => {
 		const order = await orderViaWebhook({});
-		courier.failNextCreate = new Error('sameday down');
+		const before = courier.shipments.size;
+		courier.failNextCreate = new Error('Sameday AWB creation failed (HTTP 400): county unknown');
 
-		const result = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
+		const result = await createShipmentForOrder(shipDeps, order.id, ACTOR);
 		expect(!result.ok && result.error).toBe('courier');
-		expect(!result.ok && result.detail).toContain('sameday down');
+		expect(!result.ok && result.detail).toContain('HTTP 400');
 
 		const [after] = await db.select().from(orders).where(eq(orders.id, order.id));
 		expect(after.fulfillmentStatus).toBe('unfulfilled');
-		expect(await db.select().from(shipments).where(eq(shipments.orderId, order.id))).toHaveLength(
-			0
-		);
-		expect((await eventKinds(order.id)).includes('awb-generated')).toBe(false);
+		// Two-phase (audit P2 "courier call inside the transaction"): the claim
+		// row survives the failure and says why — no AWB, so nothing to mail.
+		const [failed] = await shipmentRows(order.id);
+		expect(failed.status).toBe('failed');
+		expect(failed.awb).toBeNull();
+		expect(failed.lastError).toContain('county unknown');
+		const kinds = await eventKinds(order.id);
+		expect(kinds).toContain('awb-failed');
+		expect(kinds).not.toContain('awb-generated');
+		expect(
+			await db
+				.select()
+				.from(emailLog)
+				.where(
+					and(eq(emailLog.toEmail, order.email), eq(emailLog.template, 'shipping-notification'))
+				)
+		).toHaveLength(0);
 
-		// The retry after the courier recovers succeeds normally.
-		const retry = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
+		// The retry after the courier recovers: a new row, one AWB, order shipped.
+		const retry = await createShipmentForOrder(shipDeps, order.id, ACTOR);
 		expect(retry.ok && retry.value.created).toBe(true);
+		const rows = await shipmentRows(order.id);
+		expect(rows.map((r) => r.status)).toEqual(['failed', 'registered']);
+		expect(courier.shipments.size).toBe(before + 1);
+		expect((await getShipmentForOrder({ db }, order.id))?.status).toBe('registered');
+		const [shipped] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(shipped.fulfillmentStatus).toBe('shipped');
+	});
+});
+
+// Audit 2026-09-03 P2 "courier call inside the shipment transaction can orphan
+// an AWB": the `creating` row is committed BEFORE the courier is called and the
+// order row is not locked while the courier works — so a crash mid-call leaves
+// a row to recover from and Sameday's AWB is findable by clientInternalReference.
+describe('two-phase AWB creation', () => {
+	it('commits the creating row first and calls the courier outside the order lock', async () => {
+		const order = await orderViaWebhook({});
+		const gated = gatedCourier();
+		const pending = createShipmentForOrder(
+			{ ...shipDeps, courier: gated.courier },
+			order.id,
+			ACTOR
+		);
+		try {
+			// Visible from another connection while the courier call is in flight.
+			const creating = await waitForShipment(order.id, 'creating');
+			expect(creating.awb).toBeNull();
+			expect(creating.provider).toBe('mock');
+			// No lock is held on the order meanwhile: NOWAIT succeeds.
+			await db.transaction(async (tx) => {
+				await tx.execute(sql`select id from orders where id = ${order.id} for update nowait`);
+			});
+		} finally {
+			gated.release();
+		}
+		const result = await pending;
+		expect(result.ok && result.value.created).toBe(true);
+		expect(result.ok && result.value.shipment.status).toBe('registered');
+		expect(result.ok && result.value.shipment.awb).toMatch(/^MOCKAWB/);
+		const [after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.fulfillmentStatus).toBe('shipped');
+		expect(await shipmentRows(order.id)).toHaveLength(1);
+	});
+
+	it('a refund landing during the courier call cancels the fresh AWB; the order stays cancelled', async () => {
+		const order = await orderViaWebhook({});
+		const gated = gatedCourier();
+		const pending = createShipmentForOrder(
+			{ ...shipDeps, courier: gated.courier },
+			order.id,
+			ACTOR
+		);
+		try {
+			await waitForShipment(order.id, 'creating');
+			await refundViaWebhook(order);
+		} finally {
+			gated.release();
+		}
+		const result = await pending;
+		expect(!result.ok && result.error).toBe('order-not-shippable');
+
+		const [after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.status).toBe('refunded');
+		expect(after.fulfillmentStatus).toBe('cancelled');
+		const rows = await shipmentRows(order.id);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].status).toBe('cancelled');
+		expect(rows[0].awb).toMatch(/^MOCKAWB/);
+		// The AWB that came back from the courier was cancelled there again.
+		expect(courier.cancelled).toContain(rows[0].awb);
+		const kinds = await eventKinds(order.id);
+		expect(kinds).toContain('awb-generated');
+		expect(kinds).toContain('shipment-cancelled');
+		expect(
+			await db
+				.select()
+				.from(emailLog)
+				.where(
+					and(eq(emailLog.toEmail, order.email), eq(emailLog.template, 'shipping-notification'))
+				)
+		).toHaveLength(0);
+	});
+
+	it('two concurrent clicks register exactly one AWB', async () => {
+		const order = await orderViaWebhook({});
+		const before = courier.shipments.size;
+		const results = await Promise.all([
+			createShipmentForOrder(shipDeps, order.id, ACTOR),
+			createShipmentForOrder(shipDeps, order.id, ACTOR)
+		]);
+		expect(results.every((r) => r.ok)).toBe(true);
+		expect(results.filter((r) => r.ok && r.value.created)).toHaveLength(1);
+		expect(await shipmentRows(order.id)).toHaveLength(1);
+		expect(courier.shipments.size).toBe(before + 1);
+	});
+
+	it('a fresh creating row is returned as-is; a stale one (process died mid-call) is failed and replaced', async () => {
+		const order = await orderViaWebhook({});
+		await db.insert(shipments).values({
+			id: `fresh-${order.id}`,
+			orderId: order.id,
+			provider: 'mock',
+			status: 'creating',
+			awb: null
+		});
+		const fresh = await createShipmentForOrder(shipDeps, order.id, ACTOR);
+		expect(fresh.ok && fresh.value.created).toBe(false);
+		expect(fresh.ok && fresh.value.shipment.status).toBe('creating');
+		expect(await shipmentRows(order.id)).toHaveLength(1);
+
+		// Ten minutes later with no outcome: the claim is dead, take over.
+		const later = new Date(Date.now() + 10 * 60_000);
+		const replaced = await createShipmentForOrder(shipDeps, order.id, ACTOR, { now: later });
+		expect(replaced.ok && replaced.value.created).toBe(true);
+		const rows = await shipmentRows(order.id);
+		expect(rows.map((r) => r.status)).toEqual(['failed', 'registered']);
+		expect(rows[0].lastError).toMatch(/no courier answer/i);
+		expect(await eventKinds(order.id)).toContain('awb-failed');
+	});
+});
+
+describe('sync backoff (pure)', () => {
+	it('doubles from the base and caps', () => {
+		expect(syncBackoffMs(1)).toBe(SHIPMENT_SYNC_BACKOFF_BASE_MS);
+		expect(syncBackoffMs(2)).toBe(2 * SHIPMENT_SYNC_BACKOFF_BASE_MS);
+		expect(syncBackoffMs(3)).toBe(4 * SHIPMENT_SYNC_BACKOFF_BASE_MS);
+		expect(syncBackoffMs(20)).toBe(SHIPMENT_SYNC_BACKOFF_MAX_MS);
+		expect(syncBackoffMs(0)).toBe(SHIPMENT_SYNC_BACKOFF_BASE_MS);
 	});
 });
 
@@ -483,12 +686,194 @@ describe('cron shipment-status sync', () => {
 		const created = await createShipmentForOrder(shipDeps, order.id, 'admin@example.ro');
 		if (!created.ok) throw new Error('shipment failed');
 		// Simulate a courier-side unknown: delete it from the mock's memory.
-		courier.shipments.delete(created.value.shipment.awb);
+		courier.shipments.delete(created.value.shipment.awb ?? '');
 
 		const result = await syncShipmentStatuses({ db, courier });
 		expect(result.polled).toBe(1);
 		expect(result.updated).toBe(0);
 		await db.update(shipments).set({ status: 'delivered' });
+	});
+});
+
+// Audit 2026-09-03 P1 "Shipment-sync starvation": a row whose tracking call
+// throws kept its head-of-queue position, so a few poisoned AWBs stopped every
+// other shipment from ever being polled, and an auth failure failed every row
+// hourly with a console.log. Rows must rotate with backoff, keep their error,
+// and an auth failure must abort the run loudly.
+describe('shipment-sync rotation and health', () => {
+	/** Two registered shipments, A older-synced than B, everything else parked. */
+	async function pair(): Promise<{
+		a: ShipmentRow;
+		b: ShipmentRow;
+		orderA: OrderRow;
+		orderB: OrderRow;
+	}> {
+		await db.update(shipments).set({ status: 'delivered' });
+		const orderA = await orderViaWebhook({});
+		const orderB = await orderViaWebhook({});
+		const a = await createShipmentForOrder(shipDeps, orderA.id, ACTOR);
+		const b = await createShipmentForOrder(shipDeps, orderB.id, ACTOR);
+		if (!a.ok || !b.ok) throw new Error('shipment setup failed');
+		// A was synced long ago, B never: A polls first.
+		await db
+			.update(shipments)
+			.set({ lastSyncedAt: new Date(Date.now() - 3_600_000) })
+			.where(eq(shipments.id, a.value.shipment.id));
+		return { a: a.value.shipment, b: b.value.shipment, orderA, orderB };
+	}
+
+	async function row(id: string): Promise<ShipmentRow> {
+		const [r] = await db.select().from(shipments).where(eq(shipments.id, id));
+		return r;
+	}
+
+	it('REGRESSION: a throwing row does not block the next row; error_count and backoff advance', async () => {
+		const { a, b, orderA } = await pair();
+		courier.trackFailures.set(a.awb!, new Error('Sameday status lookup failed (HTTP 500): boom'));
+		courier.setTrackingStatus(b.awb!, 'in-transit');
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		// Batch of ONE: before the fix A stayed at the head forever and B starved.
+		const t0 = new Date();
+		const first = await syncShipmentStatuses({ db, courier }, { limit: 1, now: t0 });
+		expect(first).toEqual({ polled: 1, updated: 0, errors: 1 });
+		let rowA = await row(a.id);
+		expect(rowA.status).toBe('registered');
+		expect(rowA.errorCount).toBe(1);
+		expect(rowA.lastError).toContain('boom');
+		expect(rowA.lastSyncedAt?.getTime()).toBe(t0.getTime());
+		expect(rowA.nextSyncAt!.getTime()).toBe(t0.getTime() + syncBackoffMs(1));
+		expect(await eventKinds(orderA.id)).toContain('shipment-sync-error');
+		expect(await shipmentSyncHealth({ db })).toMatchObject({ failing: 1 });
+
+		// Next run: A is backed off, so the batch of one reaches B.
+		const t1 = new Date(t0.getTime() + 60_000);
+		const second = await syncShipmentStatuses({ db, courier }, { limit: 1, now: t1 });
+		expect(second).toEqual({ polled: 1, updated: 1, errors: 0 });
+		expect((await row(b.id)).status).toBe('in-transit');
+		expect((await row(a.id)).errorCount).toBe(1);
+
+		// Once the backoff elapsed A is retried; still failing → longer backoff.
+		const t2 = new Date(t0.getTime() + syncBackoffMs(1) + 1_000);
+		const third = await syncShipmentStatuses({ db, courier }, { limit: 1, now: t2 });
+		expect(third).toEqual({ polled: 1, updated: 0, errors: 1 });
+		rowA = await row(a.id);
+		expect(rowA.errorCount).toBe(2);
+		expect(rowA.nextSyncAt!.getTime()).toBe(t2.getTime() + syncBackoffMs(2));
+		expect(syncBackoffMs(2)).toBeGreaterThan(syncBackoffMs(1));
+		expect((await eventKinds(orderA.id)).filter((k) => k === 'shipment-sync-error')).toHaveLength(
+			2
+		);
+
+		// The courier recovers: the row heals on the next successful poll.
+		courier.trackFailures.delete(a.awb!);
+		const t3 = new Date(t2.getTime() + syncBackoffMs(2) + 1_000);
+		await syncShipmentStatuses({ db, courier }, { limit: 5, now: t3 });
+		rowA = await row(a.id);
+		expect(rowA.errorCount).toBe(0);
+		expect(rowA.lastError).toBeNull();
+		expect(rowA.nextSyncAt).toBeNull();
+		expect(await shipmentSyncHealth({ db })).toMatchObject({ failing: 0 });
+	});
+
+	it('an auth error aborts the run at error level, reports it, and leaves the other rows untouched', async () => {
+		const { a, b, orderA } = await pair();
+		courier.trackFailures.set(
+			a.awb!,
+			new CourierAuthError('Sameday authentication failed (HTTP 401)')
+		);
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const t0 = new Date();
+		const result = await syncShipmentStatuses({ db, courier }, { limit: 25, now: t0 });
+		expect(result).toEqual({ polled: 1, updated: 0, errors: 1, aborted: 'auth' });
+		expect(errorLog).toHaveBeenCalledWith(expect.stringMatching(/credentials|authentication/i));
+
+		// B was never polled; A records the failure (visible on the dashboard)
+		// but is NOT backed off: the credentials are at fault, not the AWB.
+		expect((await row(b.id)).lastSyncedAt).toBeNull();
+		const rowA = await row(a.id);
+		expect(rowA.errorCount).toBe(1);
+		expect(rowA.lastError).toContain('authentication failed');
+		expect(rowA.nextSyncAt).toBeNull();
+		expect(await eventKinds(orderA.id)).toContain('shipment-sync-error');
+		expect(await shipmentSyncHealth({ db })).toMatchObject({
+			failing: 1,
+			latestError: expect.stringContaining('authentication failed')
+		});
+
+		// Credentials fixed: the next run polls both and clears the flag.
+		courier.trackFailures.delete(a.awb!);
+		const again = await syncShipmentStatuses(
+			{ db, courier },
+			{ now: new Date(t0.getTime() + 60_000) }
+		);
+		expect(again).toEqual({ polled: 2, updated: 0, errors: 0 });
+		expect((await row(a.id)).errorCount).toBe(0);
+		expect(await shipmentSyncHealth({ db })).toMatchObject({ failing: 0 });
+	});
+});
+
+// Audit 2026-09-03 P1 "Courier-cancelled AWB is a dead end": the order stayed
+// `shipped` forever and the cancelled row blocked any replacement AWB.
+describe('courier-cancelled AWB (outside the refund path)', () => {
+	it('moves the order back to packed, marks the row cancelled, and allows a replacement AWB', async () => {
+		await db.update(shipments).set({ status: 'delivered' });
+		const order = await orderViaWebhook({});
+		const first = await createShipmentForOrder(shipDeps, order.id, ACTOR);
+		if (!first.ok) throw new Error('shipment failed');
+		const oldAwb = first.value.shipment.awb!;
+		courier.setTrackingStatus(oldAwb, 'cancelled');
+
+		const result = await syncShipmentStatuses({ db, courier });
+		expect(result).toEqual({ polled: 1, updated: 1, errors: 0 });
+		const [row] = await shipmentRows(order.id);
+		expect(row.status).toBe('cancelled');
+		let [after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.fulfillmentStatus).toBe('packed');
+		expect(await eventKinds(order.id)).toContain('awb-cancelled-externally');
+		const back = await db
+			.select()
+			.from(orderEvents)
+			.where(
+				and(
+					eq(orderEvents.orderId, order.id),
+					eq(orderEvents.kind, 'fulfillment-transition'),
+					eq(orderEvents.fromStatus, 'shipped'),
+					eq(orderEvents.toStatus, 'packed')
+				)
+			);
+		expect(back).toHaveLength(1);
+		expect(back[0].actor).toBe(SHIPMENT_SYNC_ACTOR);
+		// With no replacement yet, the detail page still shows the latest row.
+		expect((await getShipmentForOrder({ db }, order.id))?.id).toBe(row.id);
+		// The cancelled row leaves the polling set.
+		expect((await syncShipmentStatuses({ db, courier })).polled).toBe(0);
+
+		// A replacement AWB: new row, order shipped again, old row untouched.
+		const second = await createShipmentForOrder(shipDeps, order.id, ACTOR);
+		expect(second.ok && second.value.created).toBe(true);
+		const newAwb = second.ok ? second.value.shipment.awb! : '';
+		expect(newAwb).not.toBe(oldAwb);
+		const rows = await shipmentRows(order.id);
+		expect(rows.map((r) => r.status)).toEqual(['cancelled', 'registered']);
+		[after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.fulfillmentStatus).toBe('shipped');
+		expect((await getShipmentForOrder({ db }, order.id))?.awb).toBe(newAwb);
+		// One shipping email per AWB: the replacement gets its own.
+		expect(
+			await db
+				.select()
+				.from(emailLog)
+				.where(eq(emailLog.idempotencyKey, `shipping-notification:${newAwb}`))
+		).toHaveLength(1);
+
+		// The refund rule acts on the ACTIVE row: the replacement is cancelled with the courier.
+		await refundViaWebhook(order);
+		expect(courier.cancelled).toContain(newAwb);
+		expect(courier.cancelled).not.toContain(oldAwb);
+		[after] = await db.select().from(orders).where(eq(orders.id, order.id));
+		expect(after.fulfillmentStatus).toBe('returned');
 	});
 });
 
