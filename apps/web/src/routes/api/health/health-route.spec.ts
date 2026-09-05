@@ -13,6 +13,9 @@ vi.mock('$lib/modules/media/server', () => ({
 	}
 }));
 
+// The chat barrel selects the provider from env at import: unset = mock.
+vi.mock('$env/dynamic/private', () => ({ env: {} }));
+
 import { GET } from './+server.ts';
 
 describe('GET /api/health with unconstructable dependencies', () => {
@@ -22,7 +25,14 @@ describe('GET /api/health with unconstructable dependencies', () => {
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(await response.json()).toEqual({
 			status: 'degraded',
-			checks: { db: 'error', storage: 'error' }
+			checks: { db: 'error', storage: 'error' },
+			chatProvider: 'mock'
 		});
+	});
+
+	// FIX-14 (audit P2): the provider kind is visible to ops, not only to tests.
+	it('carries the chat provider kind', async () => {
+		const response = await GET({} as Parameters<typeof GET>[0]);
+		expect((await response.json()).chatProvider).toBe('mock');
 	});
 });

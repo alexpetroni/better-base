@@ -204,6 +204,23 @@ const CASES: Array<{
 		mutate: (env) => (env.CHAT_PROVIDER = 'anthropic'),
 		message: /ANTHROPIC_API_KEY is required when CHAT_PROVIDER=anthropic/
 	},
+	// FIX-14 (audit P2): a mock provider in production is otherwise undetectable.
+	{
+		name: 'a live env (EMAIL_DRYRUN=false) still on the mock chat provider',
+		mutate: (env) => {
+			liveEnv(env);
+			delete env.CHAT_PROVIDER;
+		},
+		message: /CHAT_PROVIDER is "mock" in a live env \(EMAIL_DRYRUN=false\)/
+	},
+	{
+		name: 'a live env (EMAIL_DRYRUN=false) still on the mock courier',
+		mutate: (env) => {
+			liveEnv(env);
+			env.COURIER_PROVIDER = 'mock';
+		},
+		message: /COURIER_PROVIDER is "mock" in a live env \(EMAIL_DRYRUN=false\)/
+	},
 	{
 		name: 'a cloudflare deploy without a private fiscal bucket',
 		mutate: (env) => delete env.S3_INVOICE_BUCKET,
@@ -227,6 +244,56 @@ const CASES: Array<{
 		message: /DIRECT_DATABASE_URL is not set \(required on the vercel target/
 	}
 ];
+
+/** Flip a prod-shaped env to live mode with real providers everywhere. */
+function liveEnv(env: Record<string, string | undefined>): void {
+	env.EMAIL_DRYRUN = 'false';
+	env.RESEND_API_KEY = 're_live';
+	env.STRIPE_SECRET_KEY = 'sk_live_123';
+	env.STRIPE_WEBHOOK_SECRET = 'whsec_live_real';
+	env.CHAT_PROVIDER = 'anthropic';
+	env.ANTHROPIC_API_KEY = 'sk-ant-live';
+	env.COURIER_PROVIDER = 'sameday';
+	env.SAMEDAY_USERNAME = 'user';
+	env.SAMEDAY_PASSWORD = 'pass';
+	env.SAMEDAY_PICKUP_POINT = '1';
+}
+
+describe('launch:check mock-provider rule (FIX-14)', () => {
+	const mockProviderProblems = (problems: string[]) =>
+		problems.filter((p) => /in a live env \(EMAIL_DRYRUN=false\)/.test(p));
+
+	it('passes a live env on real providers', () => {
+		const env = prodEnv();
+		liveEnv(env);
+		expect(launchCheckProblems(env, { target: 'node' })).toEqual([]);
+	});
+
+	it('reports both mock providers in one pass', () => {
+		const env = prodEnv();
+		liveEnv(env);
+		env.CHAT_PROVIDER = 'mock';
+		env.COURIER_PROVIDER = 'mock';
+		const problems = mockProviderProblems(launchCheckProblems(env, { target: 'node' }));
+		expect(problems).toHaveLength(2);
+		expect(problems.join('\n')).toMatch(/--allow-mock-providers/);
+	});
+
+	it('--allow-mock-providers acknowledges mocks in a live env', () => {
+		const env = prodEnv();
+		liveEnv(env);
+		env.CHAT_PROVIDER = 'mock';
+		env.COURIER_PROVIDER = 'mock';
+		expect(launchCheckProblems(env, { target: 'node', allowMockProviders: true })).toEqual([]);
+	});
+
+	it('does not fire while EMAIL_DRYRUN=true (staging on mocks is the normal state)', () => {
+		const env = prodEnv();
+		env.CHAT_PROVIDER = 'mock';
+		env.COURIER_PROVIDER = 'mock';
+		expect(mockProviderProblems(launchCheckProblems(env, { target: 'node' }))).toEqual([]);
+	});
+});
 
 describe('launch:check rules', () => {
 	it('passes a complete prod-shaped env on the node target', () => {
