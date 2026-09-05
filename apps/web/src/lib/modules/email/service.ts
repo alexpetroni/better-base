@@ -1,5 +1,6 @@
 import { and, eq, lte, or } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { EmailTransportError } from './resend.ts';
 import { emailLog, type EmailLogRow, type EmailStatus } from './schema.ts';
 import { renderEmailTemplate, type TemplateData, type TemplateKey } from './templates.ts';
 
@@ -54,7 +55,13 @@ export interface SendEmailInput<K extends TemplateKey = TemplateKey> {
 
 export type SendEmailOutcome =
 	| { status: 'sent' | 'dryrun' | 'skipped'; logId: string }
-	| { status: 'error'; logId: string; error: string };
+	| {
+			status: 'error';
+			logId: string;
+			error: string;
+			/** False only for a classified permanent failure (EmailTransportError); unknown errors stay retryable. */
+			retryable: boolean;
+	  };
 
 export interface EmailSender {
 	/** Callers that reason about email_log rows need to know whether `dryrun` means delivered here. */
@@ -178,7 +185,7 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 			if (!cfg.transport) {
 				const message = 'No email transport configured — set RESEND_API_KEY or EMAIL_DRYRUN=true';
 				await markStatus(claimed.id, { status: 'error', error: message });
-				return { status: 'error', logId: claimed.id, error: message };
+				return { status: 'error', logId: claimed.id, error: message, retryable: true };
 			}
 
 			try {
@@ -196,8 +203,9 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 				return { status: 'sent', logId: claimed.id };
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
+				const retryable = err instanceof EmailTransportError ? err.retryable : true;
 				await markStatus(claimed.id, { status: 'error', error: message });
-				return { status: 'error', logId: claimed.id, error: message };
+				return { status: 'error', logId: claimed.id, error: message, retryable };
 			}
 		}
 	};

@@ -8,8 +8,19 @@ import { getSite } from '$lib/server/site';
 import { createResendTransport, RESEND_TIMEOUT_MS_DEFAULT } from './resend.ts';
 import { createEmailSender, type EmailSender } from './service.ts';
 
-export { createResendTransport, RESEND_TIMEOUT_MS_DEFAULT } from './resend.ts';
+export {
+	createResendTransport,
+	EmailTransportError,
+	isRetryableStatus,
+	RESEND_TIMEOUT_MS_DEFAULT
+} from './resend.ts';
 export { emailLog, type EmailLogRow, type EmailStatus } from './schema.ts';
+export {
+	parseResendEvent,
+	RESEND_WEBHOOK_TOLERANCE_SECONDS,
+	verifyResendWebhook,
+	type ResendFeedbackEvent
+} from './webhook.ts';
 export {
 	createEmailSender,
 	EMAIL_SENDING_STALE_MS,

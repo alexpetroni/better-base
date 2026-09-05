@@ -8,6 +8,7 @@ import type { EmailSender } from '../email/service.ts';
 import {
 	NURTURE_MAX_ATTEMPTS,
 	NURTURE_SEND_BATCH,
+	NURTURE_SEND_PACE_MS,
 	NURTURE_STALE_CLAIM_MINUTES,
 	retryDelayMs
 } from './schedule.ts';
@@ -39,7 +40,11 @@ export interface NurtureDrainDeps {
 	siteName: string;
 	/** Public origin for unsubscribe/CTA links, e.g. https://bettersleep.ro */
 	baseUrl: string;
+	/** Waits between two live sends (default: a real sleep; tests inject a spy). */
+	pace?: (ms: number) => Promise<void>;
 }
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export interface NurtureDrainResult {
 	claimed: number;
@@ -103,6 +108,8 @@ export async function drainNurtureSends(
 	});
 	result.claimed = claimed.length;
 
+	const pace = deps.pace ?? sleep;
+	let liveSends = 0;
 	for (const send of claimed) {
 		const [row] = await deps.db
 			.select({
@@ -150,6 +157,9 @@ export async function drainNurtureSends(
 					url: step.cta.url.startsWith('/') ? `${deps.baseUrl}${step.cta.url}` : step.cta.url
 				}
 			: undefined;
+		// Pace live transport calls (Resend ~2 req/s); dry runs touch no API.
+		if (!deps.email.dryRun && liveSends > 0) await pace(NURTURE_SEND_PACE_MS);
+		if (!deps.email.dryRun) liveSends += 1;
 		const outcome = await deps.email.send({
 			to: row.subscriber.email,
 			template: step.templateKey,
@@ -170,14 +180,19 @@ export async function drainNurtureSends(
 		// so: `sent`, or `dryrun` while the sender itself runs dry. An
 		// in-flight (`sending`) or failed log row is not (audit 2026-09-03).
 		let failure: string | null = null;
-		if (outcome.status === 'error') failure = outcome.error;
-		else if (outcome.status === 'skipped') {
+		let retryable = true;
+		if (outcome.status === 'error') {
+			failure = outcome.error;
+			retryable = outcome.retryable;
+		} else if (outcome.status === 'skipped') {
 			const delivered = await logRowDelivered(deps, outcome.logId);
 			if (!delivered) failure = `email log row ${outcome.logId || '?'} is not delivered`;
 		}
 
 		if (failure !== null) {
-			if (send.attempts >= NURTURE_MAX_ATTEMPTS) {
+			// A classified permanent failure (bad key, rejected address) parks at
+			// once — retrying it 5× over a day cannot help (audit 2026-09-03 P1).
+			if (!retryable || send.attempts >= NURTURE_MAX_ATTEMPTS) {
 				await deps.db
 					.update(nurtureSends)
 					.set({ status: 'failed', lastError: failure })
@@ -203,14 +218,16 @@ export async function drainNurtureSends(
 			result.sent += 1;
 		}
 
-		// Terminal outcome: when no open sends remain, close the enrollment.
+		// Terminal outcome: when no open sends remain, close the enrollment. A
+		// parked (`failed`) send keeps it open — the operator's retry re-queues
+		// the row and the enrollment must still be drainable (audit P2).
 		const [open] = await deps.db
 			.select({ count: sql<number>`cast(count(*) as int)` })
 			.from(nurtureSends)
 			.where(
 				and(
 					eq(nurtureSends.enrollmentId, send.enrollmentId),
-					inArray(nurtureSends.status, ['pending', 'sending'])
+					inArray(nurtureSends.status, ['pending', 'sending', 'failed'])
 				)
 			);
 		if (open && open.count === 0) {
