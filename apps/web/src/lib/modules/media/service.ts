@@ -10,6 +10,7 @@ import { finalizeMediaObject } from '../../server/media-objects.ts';
 import {
 	isAllowedImageMime,
 	mediaKeyFor,
+	PENDING_PREFIX,
 	pendingKeyFor,
 	validateUpload,
 	type AllowedImageMime
@@ -97,6 +98,12 @@ export async function confirmUpload(
 	deps: MediaDeps,
 	input: { key: string; filename: string; alt?: string; createdBy: string }
 ): Promise<Result<MediaRow>> {
+	// Only a quarantine key may be confirmed (FIX-17): confirm copies the key
+	// it is handed and then DELETES it, so a served `uploads/…` key here would
+	// remove an object an existing row points at.
+	if (!input.key.startsWith(PENDING_PREFIX)) {
+		return { ok: false, error: 'not-found', detail: 'not a pending upload' };
+	}
 	const stat = await deps.storage.statObject(input.key);
 	if (!stat) return { ok: false, error: 'not-found', detail: 'object not in storage' };
 	if (!stat.mime || !isAllowedImageMime(stat.mime)) return { ok: false, error: 'invalid-mime' };
