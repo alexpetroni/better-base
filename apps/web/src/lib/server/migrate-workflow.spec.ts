@@ -200,6 +200,52 @@ describe('.github/workflows/ci.yml', () => {
 	});
 });
 
+// Review 2026-09-05 #8: the checklist told the operator to set a secret CI
+// never reads (`DIRECT_DATABASE_URL`, unsuffixed) and to run a workflow FIX-16
+// deleted (`migrate.yml`) — the fail-closed guard then blocks the first
+// production deploy with no explanation. The box is kept true to the files
+// it describes.
+describe('LAUNCH-CHECKLIST.md matches the shipped pipeline', () => {
+	const checklist = read('LAUNCH-CHECKLIST.md');
+	const ciYaml = read('.github/workflows/ci.yml');
+	const backupYaml = read('.github/workflows/backup.yml');
+	const sitesJson = read('deploy/sites.json');
+
+	it('never names the deleted migrate.yml workflow', () => {
+		expect(checklist).not.toMatch(/migrate\.yml/);
+		expect(checklist).not.toMatch(/Actions → migrate\b/);
+	});
+
+	it('never names an unsuffixed DIRECT_DATABASE_URL as a GitHub secret', () => {
+		// The env var of that name exists (scripts read it from a checkout);
+		// as a GitHub SECRET only the per-site suffixed names exist.
+		const secretMentions = checklist.match(/`DIRECT_DATABASE_URL[A-Z0-9_]*`/g) ?? [];
+		expect(secretMentions.length).toBeGreaterThan(0);
+		for (const mention of secretMentions) {
+			expect(mention).not.toBe('`DIRECT_DATABASE_URL`');
+		}
+	});
+
+	it('every GitHub secret it names is one ci.yml/backup.yml reads or deploy/sites.json declares', () => {
+		const named = new Set(
+			[...checklist.matchAll(/`((?:DIRECT_DATABASE_URL|VERCEL)_[A-Z0-9_]+)`/g)].map((m) => m[1])
+		);
+		expect(named.size).toBeGreaterThan(0);
+		for (const secret of named) {
+			const known =
+				ciYaml.includes(`secrets.${secret}`) ||
+				backupYaml.includes(`secrets.${secret}`) ||
+				sitesJson.includes(`"${secret}"`);
+			expect(known, `${secret} is named in LAUNCH-CHECKLIST.md but nothing reads it`).toBe(true);
+		}
+		// And the per-site names the matrix declares are what the checklist tells the operator to set.
+		for (const site of sites.sites) {
+			expect(checklist).toContain(site.directDatabaseUrlSecret);
+			expect(checklist).toContain(site.vercelProjectIdSecret);
+		}
+	});
+});
+
 describe('.github/workflows/backup.yml', () => {
 	it('runs nightly and on dispatch, one site per matrix entry, through scripts/backup.sh', () => {
 		const schedule = backup.on.schedule as Array<{ cron: string }>;
