@@ -50,3 +50,38 @@ describe('capHistory', () => {
 		expect(capped.at(-1)).toEqual(message(HISTORY_LIMIT + 6));
 	});
 });
+
+// FIX-14 (audit 2026-09-03 "Chat"): the Messages API rejects a conversation
+// whose first turn is not `user`. With alternating turns the 11th message
+// makes the newest-20 window start with an `assistant` row.
+describe('capHistory role parity', () => {
+	const alternating = (n: number): ChatMessage[] =>
+		Array.from({ length: n }, (_, i) => ({
+			role: i % 2 === 0 ? 'user' : 'assistant',
+			content: `m${i}`
+		}));
+
+	it('starts the capped window with a user turn for 21 alternating rows (assistant before the fix)', () => {
+		const capped = capHistory(alternating(21));
+		expect(capped.length).toBeLessThanOrEqual(HISTORY_LIMIT);
+		expect(capped[0].role).toBe('user');
+		expect(capped.at(-1)).toEqual({ role: 'user', content: 'm20' });
+	});
+
+	it('drops every leading non-user turn, not just the first', () => {
+		const capped = capHistory(
+			[
+				{ role: 'assistant', content: 'a1' },
+				{ role: 'assistant', content: 'a2' },
+				{ role: 'user', content: 'u' }
+			],
+			3
+		);
+		expect(capped).toEqual([{ role: 'user', content: 'u' }]);
+	});
+
+	it('leaves a window that already starts with a user turn untouched', () => {
+		const history = alternating(20);
+		expect(capHistory(history)).toEqual(history);
+	});
+});
