@@ -427,7 +427,7 @@ describe('launch:check rules', () => {
 	it('an imgproxy deploy may derive the fiscal bucket (no public media origin)', () => {
 		const env = imgproxyProdEnv();
 		delete env.S3_INVOICE_BUCKET;
-		expect(launchCheckProblems(env, { target: 'node' })).toEqual([]);
+		expect(launchCheckProblems(env, { target: 'node', ...acknowledged })).toEqual([]);
 	});
 
 	it.each(CASES)('flags $name', ({ target, base, mutate, message }) => {
