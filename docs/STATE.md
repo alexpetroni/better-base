@@ -3293,3 +3293,18 @@ is deleted. `storage.putObject(key, body, mime, headers?)` and the new
   locally they are harmless orphans).
 - "Write-once storage freezes defective renders" from the same P2 bullet
   belongs to the invoice module (FIX-12 territory), not this phase.
+
+**Verification (2026-09-05):** `pnpm lint && pnpm check && pnpm test:unit`
+green (web: 121 files, 1189 passed, 4 skipped — the same 4 as FIX-14;
+formcomp: 27 passed; the first full unit run failed only the admin route
+manifest, which now lists `GET /admin/media/library`). `pnpm test:e2e`
+(adapter-node build + both preview sites): 91 passed, 5 skipped, 2 failed —
+`chat.e2e.ts` "rate limit surfaces as a friendly ro message" on both sites
+(no 429 within 25 POSTs), a chat-limiter spec this phase does not touch;
+the same two cases pass on an immediate targeted rerun against the same
+build (`playwright test -g "rate limit surfaces"`: 2 passed), so it is
+order-dependent in the full run. The hreflang, blog, media and quiz e2e
+cases pass. The touched DB specs (media, content, seed, blog, quiz,
+sitemap, blog/quiz route specs: 14 files, 114 tests) also pass under
+`DB_DRIVER=neon` over the local proxy; `DEPLOY_TARGET=vercel pnpm build`
+succeeds. No migration in this phase.
