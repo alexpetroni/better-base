@@ -201,6 +201,77 @@ describe('handleAdminGuard on plain paths (unchanged behavior)', () => {
 	});
 });
 
+/**
+ * SvelteKit's built-in origin check refuses EVERY cross-site form POST, which
+ * would 403 the RFC 8058 one-click unsubscribe POST mail clients send (form
+ * content type, no Origin). The check is therefore re-implemented in the hook
+ * with exactly one exemption. Everything else must behave as kit did.
+ */
+describe('handleCsrf (kit origin check + the one-click unsubscribe exemption)', () => {
+	const form = { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' };
+
+	it('refuses a cross-site form POST to an ordinary route with 403 before it resolves', async () => {
+		const outcome = await runHandle({
+			method: 'POST',
+			rawPath: '/newsletter',
+			routeId: '/(public)/newsletter',
+			headers: { ...form, origin: 'https://evil.example' }
+		});
+		expect(outcome.resolved).toBe(false);
+		expect(outcome.response?.status).toBe(403);
+	});
+
+	it('refuses a form POST without any Origin header (kit parity)', async () => {
+		const outcome = await runHandle({
+			method: 'POST',
+			rawPath: '/newsletter',
+			routeId: '/(public)/newsletter',
+			headers: form
+		});
+		expect(outcome.resolved).toBe(false);
+		expect(outcome.response?.status).toBe(403);
+	});
+
+	it('lets a same-origin form POST through', async () => {
+		const outcome = await runHandle({
+			method: 'POST',
+			rawPath: '/newsletter',
+			routeId: '/(public)/newsletter',
+			headers: { ...form, origin: 'http://localhost' }
+		});
+		expect(outcome.resolved).toBe(true);
+	});
+
+	it('lets a non-form POST (JSON webhooks) through regardless of origin', async () => {
+		const outcome = await runHandle({
+			method: 'POST',
+			rawPath: '/api/webhooks/resend',
+			routeId: '/api/webhooks/resend',
+			headers: { 'content-type': 'application/json' }
+		});
+		expect(outcome.resolved).toBe(true);
+	});
+
+	it('exempts ONLY the one-click unsubscribe POST (form body, no origin)', async () => {
+		const oneClick = await runHandle({
+			method: 'POST',
+			rawPath: '/unsubscribe/some-token',
+			routeId: '/(public)/unsubscribe/[token]',
+			headers: { 'content-type': 'application/x-www-form-urlencoded' }
+		});
+		expect(oneClick.resolved).toBe(true);
+		// The same shape against the confirm route stays refused.
+		const confirm = await runHandle({
+			method: 'POST',
+			rawPath: '/newsletter/confirm/some-token',
+			routeId: '/(public)/newsletter/confirm/[token]',
+			headers: { 'content-type': 'application/x-www-form-urlencoded' }
+		});
+		expect(confirm.resolved).toBe(false);
+		expect(confirm.response?.status).toBe(403);
+	});
+});
+
 describe('handleSecurityHeaders (audit 2026-09-03: no security headers / CSP anywhere)', () => {
 	it('sets the header set + runtime CSP half on public responses', async () => {
 		const outcome = await runHandle({ rawPath: '/blog', routeId: '/(public)/blog' });

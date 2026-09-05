@@ -70,6 +70,24 @@ describe('email templates', () => {
 		expect(rendered.text).toContain('Fă testul: https://example.ro/quiz/evaluare-somn');
 	});
 
+	it('the nurture template asks for RFC 8058 List-Unsubscribe headers; transactional templates do not', () => {
+		const nurture = renderEmailTemplate('nurture', {
+			siteName: 'S',
+			subject: 'Sub',
+			paragraphs: ['P'],
+			unsubscribeUrl: 'https://example.ro/unsubscribe/tok-123'
+		});
+		expect(nurture.headers).toEqual({
+			'List-Unsubscribe': '<https://example.ro/unsubscribe/tok-123>',
+			'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+		});
+		const confirm = renderEmailTemplate('newsletter-confirm', {
+			siteName: 'S',
+			confirmUrl: 'https://example.ro/c'
+		});
+		expect(confirm.headers).toBeUndefined();
+	});
+
 	it('escapes HTML in interpolated data', () => {
 		const rendered = renderEmailTemplate('newsletter-confirm', {
 			siteName: '<script>alert(1)</script>',
@@ -137,6 +155,23 @@ describe('shouldSkipResend', () => {
 // Audit Theme C (resilience #3): the Resend call must be bounded — a hung
 // socket used to pin the awaiting request forever (the shop webhook awaits
 // the send inline).
+describe('resend transport request shape', () => {
+	it('forwards the template headers to Resend', async () => {
+		const fetchFn = vi.fn(async () => Response.json({ id: 're_1' }));
+		const transport = createResendTransport('re_key_not_real', fetchFn as typeof fetch);
+		await transport.send({
+			from: 'a@b.ro',
+			to: 'x@y.ro',
+			subject: 's',
+			html: '<p>h</p>',
+			text: 't',
+			headers: { 'List-Unsubscribe': '<https://example.ro/unsubscribe/t>' }
+		});
+		const body = JSON.parse(fetchFn.mock.calls[0][1]!.body as string);
+		expect(body.headers).toEqual({ 'List-Unsubscribe': '<https://example.ro/unsubscribe/t>' });
+	});
+});
+
 describe('resend transport timeout', () => {
 	it('rejects when the API call exceeds the timeout instead of hanging (hung before the fix)', async () => {
 		const transport = createResendTransport('re_key_not_real', hangingFetch, 50);
@@ -273,6 +308,34 @@ describe('sendEmail idempotency (integration)', () => {
 		const outcome = await sender.send(input('no-transport-1'));
 		expect(outcome.status).toBe('error');
 		expect((await rowsFor('no-transport-1'))[0].status).toBe('error');
+	});
+
+	it('records the template headers on the log row and hands them to the transport', async () => {
+		const transport = fakeTransport();
+		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
+		const nurture = {
+			to: 'test@example.com',
+			template: 'nurture',
+			data: {
+				siteName: 'S',
+				subject: 'Sub',
+				paragraphs: ['P'],
+				unsubscribeUrl: 'https://example.ro/unsubscribe/tok-h'
+			},
+			idempotencyKey: 'headers-1'
+		} as const;
+		expect((await sender.send(nurture)).status).toBe('sent');
+		const expected = {
+			'List-Unsubscribe': '<https://example.ro/unsubscribe/tok-h>',
+			'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+		};
+		expect(transport.send.mock.calls[0][0].headers).toEqual(expected);
+		expect((await rowsFor('headers-1'))[0].headers).toEqual(expected);
+
+		// The dry-run record carries them too (the pre-launch soak shows what would go out).
+		const dry = createEmailSender({ db, dryRun: true, from: 'a@b.ro' });
+		await dry.send({ ...nurture, idempotencyKey: 'headers-dry-1' });
+		expect((await rowsFor('headers-dry-1'))[0].headers).toEqual(expected);
 	});
 
 	// Audit 2026-09-03 P1 "Email, CRM & nurture": `dryrun` and `sending` rows

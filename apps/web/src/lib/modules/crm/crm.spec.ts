@@ -11,6 +11,7 @@ import {
 	confirmSubscriber,
 	listSubscribers,
 	requestNewsletterSignup,
+	revokeConsentsByEmail,
 	subscribersCsv,
 	unsubscribeByToken,
 	upsertSubscriber,
@@ -180,6 +181,98 @@ describe('unsubscribe', () => {
 
 	it('an unknown token unsubscribes nobody', async () => {
 		expect(await unsubscribeByToken(deps, 'no-such-token')).toBeNull();
+	});
+
+	// Audit 2026-09-03 P1: withdrawal kept confirmed_at, so a later re-grant
+	// (by anyone who knows the address) was mailable without double opt-in.
+	it('withdrawal clears confirmed_at; a re-grant needs a fresh double opt-in (mailable before the fix)', async () => {
+		const first = await requestNewsletterSignup(signupDeps, {
+			email: 'again@example.ro',
+			source: 'footer'
+		});
+		if (!first.ok) throw new Error('signup failed');
+		const logsBefore = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.toEmail, 'again@example.ro'));
+		const token = (logsBefore[0].data as { confirmUrl: string }).confirmUrl.split(
+			'/newsletter/confirm/'
+		)[1];
+		const confirmed = await confirmSubscriber(deps, SECRET, token);
+		expect(confirmed.ok).toBe(true);
+
+		const withdrawn = await unsubscribeByToken(deps, first.subscriber.unsubscribeToken);
+		expect(withdrawn?.confirmedAt).toBeNull();
+
+		// Re-submitting the form: a NEW confirm email, and not mailable until confirmed.
+		const second = await requestNewsletterSignup(signupDeps, {
+			email: 'again@example.ro',
+			source: 'footer'
+		});
+		if (!second.ok) throw new Error('signup failed');
+		expect(second.confirm).toBe('dryrun');
+		expect(second.subscriber.confirmedAt).toBeNull();
+		expect(hasConsent(second.subscriber.consents, 'newsletter')).toBe(true);
+		const logsAfter = await db
+			.select()
+			.from(emailLog)
+			.where(eq(emailLog.toEmail, 'again@example.ro'));
+		expect(logsAfter).toHaveLength(2);
+		expect(logsAfter.every((row) => row.template === 'newsletter-confirm')).toBe(true);
+	});
+
+	it('revokeConsentsByEmail (bounce/complaint feedback) withdraws like unsubscribe, with its own source', async () => {
+		const created = await upsertSubscriber(deps, {
+			email: 'Bounce@Example.RO',
+			grants: { newsletter: true },
+			source: 'footer'
+		});
+		if (!created.ok) throw new Error('upsert failed');
+		await db
+			.update(subscribers)
+			.set({ confirmedAt: new Date() })
+			.where(eq(subscribers.id, created.value.id));
+
+		const revoked = await revokeConsentsByEmail(deps, 'bounce@example.ro', 'bounce');
+		expect(revoked?.id).toBe(created.value.id);
+		expect(hasConsent(revoked!.consents, 'newsletter')).toBe(false);
+		expect(revoked!.consents.newsletter?.source).toBe('bounce');
+		expect(revoked!.confirmedAt).toBeNull();
+		expect(await revokeConsentsByEmail(deps, 'nobody@example.ro', 'bounce')).toBeNull();
+	});
+});
+
+describe('consent evidence', () => {
+	it('records ip, user agent and the consent text version on the changed record only', async () => {
+		const created = await upsertSubscriber(deps, {
+			email: 'evidence@example.ro',
+			grants: { newsletter: true },
+			source: 'footer',
+			evidence: {
+				ip: '203.0.113.7',
+				userAgent: 'Mozilla/5.0 (spec)',
+				consentTextVersion: { newsletter: 'newsletter_consent_label@1' }
+			}
+		});
+		if (!created.ok) throw new Error('upsert failed');
+		expect(created.value.consents.newsletter).toMatchObject({
+			granted: true,
+			source: 'footer',
+			ip: '203.0.113.7',
+			userAgent: 'Mozilla/5.0 (spec)',
+			consentTextVersion: 'newsletter_consent_label@1'
+		});
+		expect(created.value.consents.profile_emails).toBeUndefined();
+
+		// Re-affirming with different evidence is not a change: the original proof stays.
+		const again = await upsertSubscriber(deps, {
+			email: 'evidence@example.ro',
+			grants: { newsletter: true },
+			source: 'quiz:x',
+			evidence: { ip: '198.51.100.1' }
+		});
+		if (!again.ok) throw new Error('upsert failed');
+		expect(again.value.consents.newsletter?.ip).toBe('203.0.113.7');
 	});
 });
 

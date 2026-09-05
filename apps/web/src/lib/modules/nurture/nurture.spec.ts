@@ -557,16 +557,33 @@ describe('withdrawal stops everything', () => {
 		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
 		const [enrollment] = await enrollmentsOf(subscriber.id);
 
-		// Step 1 goes out; its rendered data carries the unsubscribe URL.
+		// Step 1 goes out; its rendered data carries the unsubscribe URL, and
+		// the dry-run record carries the RFC 8058 headers pointing at it.
 		await drainNurtureSends(drainDeps(), { now: NOW });
 		const [logged] = await emailLogTo(subscriber.email);
 		const url = (logged.data as { unsubscribeUrl: string }).unsubscribeUrl;
 		expect(url).toBe(`https://example.ro/unsubscribe/${subscriber.unsubscribeToken}`);
+		expect(logged.headers).toEqual({
+			'List-Unsubscribe': `<${url}>`,
+			'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+		});
 
-		// Click the link: the REAL route load, with the token from the email.
+		// Open the link (GET): the REAL route load renders the confirmation and
+		// changes nothing — a mail scanner's prefetch must not unsubscribe.
 		const token = url.split('/').pop()!;
 		const route = await import('../../../routes/(public)/unsubscribe/[token]/+page.server.ts');
-		const outcome = await route.load({ params: { token } } as Parameters<typeof route.load>[0]);
+		expect(await route.load({ params: { token } } as Parameters<typeof route.load>[0])).toEqual({
+			valid: true
+		});
+		expect((await sendsOf(enrollment.id)).map((s) => s.status)).toEqual(['sent', 'pending']);
+
+		// Press the button: the POST action revokes.
+		const body = new FormData();
+		body.set('intent', 'unsubscribe');
+		const outcome = await route.actions.default({
+			params: { token },
+			request: new Request(`https://example.ro${new URL(url).pathname}`, { method: 'POST', body })
+		} as unknown as Parameters<typeof route.actions.default>[0]);
 		expect(outcome).toEqual({ done: true });
 
 		// Consents revoked, the pending step cancelled, and the step-2 instant

@@ -70,3 +70,36 @@ describe('revokeAllConsents / hasConsent', () => {
 		expect(hasConsent({}, 'newsletter')).toBe(false);
 	});
 });
+
+describe('consent evidence', () => {
+	const now = new Date('2026-09-05T10:00:00Z');
+
+	it('stamps ip, user agent and the per-key text version on changed records', () => {
+		const next = applyConsents({}, { newsletter: true, profile_emails: true }, 'footer', now, {
+			ip: '203.0.113.7',
+			userAgent: 'UA',
+			consentTextVersion: { newsletter: 'newsletter_consent_label@1' }
+		});
+		expect(next.newsletter).toEqual({
+			granted: true,
+			at: now.toISOString(),
+			source: 'footer',
+			ip: '203.0.113.7',
+			userAgent: 'UA',
+			consentTextVersion: 'newsletter_consent_label@1'
+		});
+		// No text version known for this key → the field is simply absent.
+		expect(next.profile_emails).toEqual({
+			granted: true,
+			at: now.toISOString(),
+			source: 'footer',
+			ip: '203.0.113.7',
+			userAgent: 'UA'
+		});
+	});
+
+	it('records nothing extra without evidence (revocations, scripts)', () => {
+		const next = applyConsents({}, { newsletter: true }, 'script', now);
+		expect(next.newsletter).toEqual({ granted: true, at: now.toISOString(), source: 'script' });
+	});
+});
