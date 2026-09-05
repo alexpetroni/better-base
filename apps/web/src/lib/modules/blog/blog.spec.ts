@@ -169,6 +169,27 @@ describe('pillar visibility follows the site config', () => {
 		expect((await listPublished(deps, { pillarSlugs: [] })).items).toHaveLength(0);
 	});
 
+	// FIX-15 (audit P1 'blog detail ignores pillar activity'): the detail
+	// page used to answer 200 (canonical + JSON-LD) for an article no listing
+	// or sitemap on this site would ever show.
+	it('getBySlug hides an article whose only pillar is inactive on the site', async () => {
+		const foreign = await makeArticle('Doar nutriție', ['nutritie']);
+		const untagged = await makeArticle('Fără pilon, publicat');
+		for (const a of [foreign, untagged]) {
+			const r = await publishArticle(deps, a.id);
+			expect(r.ok).toBe(true);
+		}
+
+		expect(await getBySlug(deps, foreign.slug, { pillarSlugs: sleepPillars })).toBeNull();
+		expect(await getBySlug(deps, untagged.slug, { pillarSlugs: sleepPillars })).toBeNull();
+		expect(await getBySlug(deps, untagged.slug, { pillarSlugs: lifePillars })).toBeNull();
+		const onLife = await getBySlug(deps, foreign.slug, { pillarSlugs: lifePillars });
+		expect(onLife?.article.id).toBe(foreign.id);
+		// The admin editor (no pillar filter) still opens it.
+		const admin = await getBySlug(deps, foreign.slug, { includeDrafts: true });
+		expect(admin?.article.id).toBe(foreign.id);
+	});
+
 	it('paginates newest-first and reports totals', async () => {
 		for (let i = 1; i <= 4; i++) {
 			const a = await makeArticle(`Serie paginare ${i}`, ['somn']);
