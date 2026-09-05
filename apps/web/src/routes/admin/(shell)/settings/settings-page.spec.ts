@@ -44,7 +44,7 @@ function saveEvent(fields: Record<string, string>): { request: Request; locals: 
 	for (const [key, value] of Object.entries(fields)) body.set(key, value);
 	return {
 		request: new Request('http://localhost/admin/settings?/save', { method: 'POST', body }),
-		locals: { user: STAFF, settings: createSettingsLoader(() => db) }
+		locals: { user: STAFF, settings: createSettingsLoader(() => db), requestId: 'spec' }
 	};
 }
 

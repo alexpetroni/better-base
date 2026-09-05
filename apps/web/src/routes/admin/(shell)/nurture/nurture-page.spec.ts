@@ -49,7 +49,7 @@ let toggle: (event: { request: Request; locals: App.Locals }) => Promise<unknown
 let retry: (event: { request: Request; locals: App.Locals }) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
-	return { user, settings: createSettingsLoader(() => db) };
+	return { user, settings: createSettingsLoader(() => db), requestId: 'spec' };
 }
 
 function toggleEvent(user: typeof ADMIN | typeof EDITOR | null, fields: Record<string, string>) {

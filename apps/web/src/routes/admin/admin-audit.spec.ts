@@ -64,7 +64,7 @@ beforeAll(async () => {
 });
 
 function locals(): App.Locals {
-	return { user: ADMIN, settings: createSettingsLoader(() => db) };
+	return { user: ADMIN, settings: createSettingsLoader(() => db), requestId: 'spec' };
 }
 
 async function auditRows(action: string) {

@@ -99,7 +99,7 @@ beforeAll(async () => {
 });
 
 function locals(user: typeof ADMIN | typeof EDITOR): App.Locals {
-	return { user, settings: createSettingsLoader(() => db) };
+	return { user, settings: createSettingsLoader(() => db), requestId: 'spec' };
 }
 
 describe('quiz editor results for the editor role', () => {

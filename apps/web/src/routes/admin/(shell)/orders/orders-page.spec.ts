@@ -78,7 +78,7 @@ let updateShippingAddressAction: (event: {
 }) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
-	return { user, settings: createSettingsLoader(() => db) };
+	return { user, settings: createSettingsLoader(() => db), requestId: 'spec' };
 }
 
 function transitionEvent(
