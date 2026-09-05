@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '../../db/client.ts';
 import { deleteInBatches, PRUNE_BATCH_SIZE } from '../../server/prune.ts';
@@ -365,6 +365,7 @@ async function replanSequenceSends(
 			id: nurtureSends.id,
 			enrollmentId: nurtureSends.enrollmentId,
 			stepIndex: nurtureSends.stepIndex,
+			status: nurtureSends.status,
 			enrolledAt: nurtureEnrollments.enrolledAt
 		})
 		.from(nurtureSends)
@@ -373,31 +374,46 @@ async function replanSequenceSends(
 			and(
 				eq(nurtureEnrollments.sequenceId, sequenceId),
 				eq(nurtureEnrollments.status, 'active'),
-				eq(nurtureSends.status, 'pending'),
-				isNotNull(nurtureSends.stepsHash),
-				ne(nurtureSends.stepsHash, hash)
+				or(
+					and(
+						eq(nurtureSends.status, 'pending'),
+						isNotNull(nurtureSends.stepsHash),
+						ne(nurtureSends.stepsHash, hash)
+					),
+					// Rows an earlier shrink cancelled (FIX-17): the unique index on
+					// (enrollment, step) means a step that comes back must REOPEN
+					// this row — it can never get a second one.
+					and(eq(nurtureSends.status, 'cancelled'), eq(nurtureSends.lastError, 'replanned'))
+				)
 			)
 		);
 	if (mismatched.length === 0) return;
 
 	for (const row of mismatched) {
 		const step = steps[row.stepIndex];
+		if (!step) {
+			// Still vanished: an already-cancelled row needs no write.
+			if (row.status === 'cancelled') continue;
+			await db
+				.update(nurtureSends)
+				.set({ status: 'cancelled', lastError: 'replanned' })
+				.where(eq(nurtureSends.id, row.id));
+			continue;
+		}
 		await db
 			.update(nurtureSends)
-			.set(
-				step
-					? {
-							scheduledAt: computeStepScheduledAt(row.enrolledAt, step),
-							stepsHash: hash,
-							attempts: 0,
-							lastError: null
-						}
-					: { status: 'cancelled', lastError: 'replanned' }
-			)
+			.set({
+				status: 'pending',
+				scheduledAt: computeStepScheduledAt(row.enrolledAt, step),
+				stepsHash: hash,
+				attempts: 0,
+				lastError: null
+			})
 			.where(eq(nurtureSends.id, row.id));
 	}
 
-	// Steps added at the end get rows for every enrollment that was re-planned.
+	// Steps added at the end get rows for every enrollment that was re-planned
+	// (a reopened row above already covers its index — `known` includes it).
 	const enrollments = new Map(mismatched.map((row) => [row.enrollmentId, row.enrolledAt]));
 	for (const [enrollmentId, enrolledAt] of enrollments) {
 		const existing = await db
