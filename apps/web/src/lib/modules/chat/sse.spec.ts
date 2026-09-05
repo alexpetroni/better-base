@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ChatStreamEvent } from './provider.ts';
 import { chatSseStream } from './sse.ts';
 
 // Audit Theme C (resilience #4): the SSE response must propagate a client
@@ -24,16 +25,16 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 describe('chatSseStream', () => {
 	it('frames deltas then a done marker', async () => {
 		async function* chunks() {
-			yield 'Salut ';
-			yield 'lume';
+			yield { delta: 'Salut ' };
+			yield { delta: 'lume' };
 		}
 		const raw = await readAll(chatSseStream(chunks(), new AbortController()));
 		expect(frames(raw)).toEqual([{ delta: 'Salut ' }, { delta: 'lume' }, { done: true }]);
 	});
 
 	it('emits an error frame when the provider fails mid-stream', async () => {
-		async function* chunks(): AsyncIterable<string> {
-			yield 'a';
+		async function* chunks(): AsyncIterable<ChatStreamEvent> {
+			yield { delta: 'a' };
 			throw new Error('provider boom');
 		}
 		const raw = await readAll(chatSseStream(chunks(), new AbortController()));
@@ -50,7 +51,7 @@ describe('chatSseStream', () => {
 			for (let i = 0; i < 50; i++) {
 				if (abort.signal.aborted) return;
 				await tick(5);
-				yield `c${i} `;
+				yield { delta: `c${i} ` };
 				yielded += 1;
 			}
 			ranToCompletion = true;
@@ -65,4 +66,16 @@ describe('chatSseStream', () => {
 		expect(ranToCompletion).toBe(false);
 		expect(yielded).toBeLessThan(50);
 	}, 3_000);
+
+	// FIX-14: a truncated (max_tokens) or declined (refusal) reply ends with
+	// its own terminal frame — never `done`, which would let the widget show
+	// a half answer as complete.
+	it('forwards a stop event as the terminal frame instead of done', async () => {
+		async function* chunks(): AsyncIterable<ChatStreamEvent> {
+			yield { delta: 'Un început' };
+			yield { stop: 'max_tokens' };
+		}
+		const raw = await readAll(chatSseStream(chunks(), new AbortController()));
+		expect(frames(raw)).toEqual([{ delta: 'Un început' }, { stop: 'max_tokens' }]);
+	});
 });

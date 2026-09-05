@@ -4,7 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
 import { createMockChatProvider, mockReplyFor } from './mock-provider.ts';
-import type { ChatMessage, ChatProvider, ChatStreamOptions } from './provider.ts';
+import type { ChatMessage, ChatProvider, ChatStreamEvent, ChatStreamOptions } from './provider.ts';
 import { ipRateKey } from './rate-limit.ts';
 import { chatMessages, chatRateLimits, chatSessions } from './schema.ts';
 import {
@@ -36,9 +36,9 @@ function deps(overrides: Partial<ChatDeps> = {}): ChatDeps {
 	};
 }
 
-async function collect(iterable: AsyncIterable<string>): Promise<string> {
+async function collect(iterable: AsyncIterable<ChatStreamEvent>): Promise<string> {
 	let out = '';
-	for await (const chunk of iterable) out += chunk;
+	for await (const event of iterable) if ('delta' in event) out += event.delta;
 	return out;
 }
 
@@ -284,7 +284,7 @@ describe('handleChatMessage', () => {
 				for (let i = 0; i < 50; i++) {
 					if (signal?.aborted) return;
 					await new Promise((resolve) => setTimeout(resolve, 5));
-					yield `cuvânt${i} `;
+					yield { delta: `cuvânt${i} ` };
 				}
 				providerFinished = true;
 			}
@@ -314,6 +314,34 @@ describe('handleChatMessage', () => {
 			.where(eq(chatMessages.sessionId, outcome.sessionId));
 		expect(stored.map((m) => m.role)).toEqual(['user']);
 	}, 5_000);
+});
+
+describe('handleChatMessage stop events (FIX-14)', () => {
+	it('forwards a max_tokens stop and does not persist the truncated reply as an answer', async () => {
+		const truncating: ChatProvider = {
+			kind: 'mock',
+			async *stream() {
+				yield { delta: 'Un răspuns tă' };
+				yield { stop: 'max_tokens' };
+			}
+		};
+		const outcome = await handleChatMessage(deps({ provider: truncating }), {
+			message: 'Explică-mi somnul',
+			sessionToken: null,
+			ip: '198.51.100.90'
+		});
+		expect(outcome.kind).toBe('stream');
+		if (outcome.kind !== 'stream') return;
+		const seen: ChatStreamEvent[] = [];
+		for await (const event of outcome.stream) seen.push(event);
+		expect(seen).toEqual([{ delta: 'Un răspuns tă' }, { stop: 'max_tokens' }]);
+
+		const stored = await db
+			.select()
+			.from(chatMessages)
+			.where(eq(chatMessages.sessionId, outcome.sessionId));
+		expect(stored.map((m) => m.role)).toEqual(['user']);
+	});
 });
 
 describe('getChatHistory', () => {
