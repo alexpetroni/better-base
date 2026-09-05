@@ -19,7 +19,9 @@ if (!url) {
 
 const db = createDb(url);
 try {
-	console.log(`chat:prune — ${formatRetentionSweep(await runRetentionSweep(db))}`);
+	const result = await runRetentionSweep(db);
+	console.log(`chat:prune — ${formatRetentionSweep(result)}`);
+	if (result.failures.length) process.exitCode = 1;
 } finally {
 	await db.$client.end();
 }

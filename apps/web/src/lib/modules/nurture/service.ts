@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Db } from '../../db/client.ts';
+import { deleteInBatches, PRUNE_BATCH_SIZE } from '../../server/prune.ts';
 import { normalizeEmail } from '../../util/email.ts';
 // Cross-module: schema.ts relative imports and `import type` are the allowed
 // forms (the crm/quiz BARRELS pull .svelte files, which the plain-node seed
@@ -551,15 +552,32 @@ export async function listParkedSends(deps: NurtureDeps, limit = 50): Promise<Pa
 export const NURTURE_RETENTION_DAYS = 180;
 
 /** Retention sweep hook: delete closed enrollments past the cutoff. */
-export async function pruneNurtureEnrollments(db: Db, cutoff: Date): Promise<number> {
-	const deleted = await db
-		.delete(nurtureEnrollments)
-		.where(
-			and(
-				inArray(nurtureEnrollments.status, ['completed', 'cancelled']),
-				lt(nurtureEnrollments.closedAt, cutoff)
+export async function pruneNurtureEnrollments(
+	db: Db,
+	cutoff: Date,
+	batchSize: number = PRUNE_BATCH_SIZE
+): Promise<number> {
+	// Batched (FIX-14): one statement per `batchSize` rows, never one DELETE
+	// over the whole backlog.
+	return deleteInBatches(async (limit) => {
+		const deleted = await db
+			.delete(nurtureEnrollments)
+			.where(
+				inArray(
+					nurtureEnrollments.id,
+					db
+						.select({ id: nurtureEnrollments.id })
+						.from(nurtureEnrollments)
+						.where(
+							and(
+								inArray(nurtureEnrollments.status, ['completed', 'cancelled']),
+								lt(nurtureEnrollments.closedAt, cutoff)
+							)
+						)
+						.limit(limit)
+				)
 			)
-		)
-		.returning({ id: nurtureEnrollments.id });
-	return deleted.length;
+			.returning({ id: nurtureEnrollments.id });
+		return deleted.length;
+	}, batchSize);
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { desc, eq, lt, sql } from 'drizzle-orm';
+import { desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
+import { deleteInBatches, PRUNE_BATCH_SIZE } from '../../server/prune.ts';
 import {
 	consumeRateLimit,
 	pruneStaleRateLimits,
@@ -103,19 +104,26 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 	const validated = validateChatMessage(input.message);
 	if (!validated.ok) return { kind: 'invalid', reason: validated.reason };
 
+	// The IP counter is consumed BEFORE the session is resolved (FIX-14): a
+	// cookieless caller past the cap must not insert a session row per call.
+	// Both counters are consumed atomically before anything is persisted; the
+	// decision comes from the post-increment counts, so a concurrent burst
+	// cannot slip past the cap. A refused message still consumes its slots.
+	const ipResult = await consumeRateLimit(db, chatRateLimits, ipRateKey(input.ip), rateConfig, now);
+	if (ipResult.limited) return { kind: 'rate-limited' };
+
 	const resolved = await resolveSession(db, secret, input.sessionToken);
 	if (resolved === 'forbidden') return { kind: 'forbidden' };
 	const session = resolved;
 
-	// Both counters are consumed atomically BEFORE anything is persisted; the
-	// decision comes from the post-increment counts, so a concurrent burst
-	// cannot slip past the cap. A refused message still consumes its slots.
-	const consumed = await Promise.all(
-		[sessionRateKey(session.id), ipRateKey(input.ip)].map((key) =>
-			consumeRateLimit(db, chatRateLimits, key, rateConfig, now)
-		)
+	const sessionResult = await consumeRateLimit(
+		db,
+		chatRateLimits,
+		sessionRateKey(session.id),
+		rateConfig,
+		now
 	);
-	if (consumed.some((result) => result.limited)) return { kind: 'rate-limited' };
+	if (sessionResult.limited) return { kind: 'rate-limited' };
 
 	// Deliberately not transactional (audit Theme B): the assistant reply is
 	// persisted only after the external stream completes, which could never sit
@@ -254,18 +262,33 @@ async function bumpMessageCount(db: Db, sessionId: string): Promise<void> {
  * Delete sessions older than the retention window (messages cascade), plus
  * expired rate-limit counters — `session:`/`ip:` keys are upserted per key and
  * never removed by the limiter, so without this sweep `chat_rate_limits`
- * grows unbounded (audit resilience #6).
+ * grows unbounded (audit resilience #6). Sessions go in batches of
+ * `PRUNE_BATCH_SIZE` so no single statement outgrows `statement_timeout`
+ * (FIX-14).
  */
 export async function pruneChatSessions(
 	db: Db,
 	now: Date = new Date(),
-	retentionDays: number = CHAT_RETENTION_DAYS
+	retentionDays: number = CHAT_RETENTION_DAYS,
+	batchSize: number = PRUNE_BATCH_SIZE
 ): Promise<{ sessions: number; rateLimitRows: number }> {
 	const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
-	const deleted = await db
-		.delete(chatSessions)
-		.where(lt(chatSessions.createdAt, cutoff))
-		.returning({ id: chatSessions.id });
+	const sessions = await deleteInBatches(async (limit) => {
+		const deleted = await db
+			.delete(chatSessions)
+			.where(
+				inArray(
+					chatSessions.id,
+					db
+						.select({ id: chatSessions.id })
+						.from(chatSessions)
+						.where(lt(chatSessions.createdAt, cutoff))
+						.limit(limit)
+				)
+			)
+			.returning({ id: chatSessions.id });
+		return deleted.length;
+	}, batchSize);
 	const rateLimitRows = await pruneStaleRateLimits(db, chatRateLimits, cutoff);
-	return { sessions: deleted.length, rateLimitRows };
+	return { sessions, rateLimitRows };
 }

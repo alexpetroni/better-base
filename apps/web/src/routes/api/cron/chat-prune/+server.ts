@@ -26,7 +26,9 @@ export const GET: RequestHandler = async ({ request }) => {
 	// One structured line in the function logs — the only place this job's
 	// output is visible on a serverless deploy.
 	console.log(formatRetentionSweep(result));
-	return json(result, { headers: NO_STORE });
+	// A pruner that threw is already logged; answer 500 so the cron run is
+	// marked failed instead of silently green (FIX-14).
+	return json(result, { status: result.failures.length ? 500 : 200, headers: NO_STORE });
 };
 
 const NO_STORE = { 'cache-control': 'no-store' };
