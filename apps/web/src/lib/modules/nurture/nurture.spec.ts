@@ -434,6 +434,59 @@ describe('drain: claim-then-send', () => {
 		expect((await emailLogTo(subscriber.email)).length).toBe(1);
 	});
 
+	// Audit 2026-09-03 P1: the drain counted every `skipped` as sent. A crash
+	// between the email_log `sending` claim and the transport left a log row
+	// in flight; the stale-claim retry then came back `skipped` and the step
+	// was recorded as delivered although nothing ever went out.
+	it('reports `sent` only for rows the log shows as delivered — an in-flight log row is a retry, not a send', async () => {
+		await makeSequence({
+			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
+		});
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+		const [send] = await sendsOf(enrollment.id);
+
+		// The previous invocation claimed the email_log key and died before the
+		// transport answered: the log row is `sending` and still FRESH.
+		await db.insert(emailLog).values({
+			id: `nur-inflight-${enrollment.id}`,
+			idempotencyKey: `nurture:${enrollment.id}:0`,
+			toEmail: subscriber.email,
+			template: 'nurture',
+			subject: 'S',
+			data: {},
+			status: 'sending',
+			createdAt: new Date(NOW.getTime() - minutes(2)),
+			updatedAt: new Date(NOW.getTime() - minutes(2))
+		});
+		await db
+			.update(nurtureSends)
+			.set({ status: 'sending', claimedAt: new Date(NOW.getTime() - minutes(16)), attempts: 1 })
+			.where(eq(nurtureSends.id, send.id));
+
+		const result = await drainNurtureSends(drainDeps(), { now: NOW });
+		expect(result).toMatchObject({ claimed: 1, sent: 0, retried: 1 });
+		let [after] = await sendsOf(enrollment.id);
+		expect(after.status).toBe('pending');
+		expect(after.sentAt).toBeNull();
+		// Nothing was delivered, so the enrollment is still open.
+		expect((await enrollmentsOf(subscriber.id))[0].status).toBe('active');
+
+		// Once the log claim is stale the retry re-claims it and the step is
+		// recorded as sent exactly when the log says so.
+		await db
+			.update(emailLog)
+			.set({ updatedAt: new Date(NOW.getTime() - minutes(11)) })
+			.where(eq(emailLog.idempotencyKey, `nurture:${enrollment.id}:0`));
+		await db.update(nurtureSends).set({ scheduledAt: NOW }).where(eq(nurtureSends.id, send.id));
+		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({ claimed: 1, sent: 1 });
+		[after] = await sendsOf(enrollment.id);
+		expect(after.status).toBe('sent');
+		const [logged] = await emailLogTo(subscriber.email);
+		expect(logged.status).toBe('dryrun');
+	});
+
 	it('deactivating a sequence pauses its queue without a deploy; reactivating resumes it', async () => {
 		const sequence = await makeSequence({
 			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
