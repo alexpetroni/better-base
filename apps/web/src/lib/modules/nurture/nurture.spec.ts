@@ -797,6 +797,75 @@ describe('queue re-planning (pause/resume, reseed, retry)', () => {
 		expect((await sendsOf(enrollment.id))[1]).toMatchObject({ status: 'pending', stepsHash: null });
 	});
 
+	// FIX-17 (FIX-13 review, medium): a reseed that shrinks the steps cancels
+	// the trailing row as `replanned`; a later reseed that grows them again
+	// found the index already "known", inserted nothing (the unique index on
+	// (enrollment, step) forbids a second row anyway) and the step was never
+	// sent. The cancelled row must be reopened with the new schedule.
+	it('a reseed that grows the steps back reopens a `replanned` cancelled row; the step is sent exactly once', async () => {
+		seq += 1;
+		const definition: NurtureSequenceDefinition = {
+			key: `nur-regrow-${seq}`,
+			name: 'Regrow',
+			trigger: { kind: 'consent-confirmed' },
+			consentKey: 'newsletter',
+			steps: [
+				{ offsetDays: 0, templateKey: 'nurture', subject: 'S1', paragraphs: ['P'] },
+				{ offsetDays: 1, templateKey: 'nurture', subject: 'S2', paragraphs: ['P'] },
+				{ offsetDays: 2, templateKey: 'nurture', subject: 'S3', paragraphs: ['P'] }
+			]
+		};
+		await seedNurtureSequences(db, [definition], NOW);
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({ sent: 1 });
+
+		// 3 → 2: the third step vanishes and its row is cancelled as replanned.
+		const shrunk = { ...definition, steps: definition.steps.slice(0, 2) };
+		await seedNurtureSequences(db, [shrunk], NOW);
+		let sends = await sendsOf(enrollment.id);
+		expect(sends.map((s) => [s.stepIndex, s.status, s.lastError])).toEqual([
+			[0, 'sent', null],
+			[1, 'pending', null],
+			[2, 'cancelled', 'replanned']
+		]);
+
+		// 2 → 3: a third step is back, with a different timing.
+		const regrown: NurtureSequenceDefinition = {
+			...definition,
+			steps: [
+				...shrunk.steps,
+				{ offsetDays: 3, templateKey: 'nurture', subject: 'S3 nou', paragraphs: ['Nou.'] }
+			]
+		};
+		await seedNurtureSequences(db, [regrown], NOW);
+		sends = await sendsOf(enrollment.id);
+		expect(sends).toHaveLength(3);
+		expect(sends[2]).toMatchObject({
+			stepIndex: 2,
+			status: 'pending',
+			lastError: null,
+			attempts: 0,
+			stepsHash: stepsHash(regrown.steps),
+			scheduledAt: computeStepScheduledAt(NOW, regrown.steps[2])
+		});
+
+		// Drain past each step's time: step 2 goes out, then step 3 — once.
+		const step2At = new Date(sends[1].scheduledAt.getTime() + minutes(1));
+		expect(await drainNurtureSends(drainDeps(), { now: step2At })).toMatchObject({ sent: 1 });
+		const step3At = new Date(sends[2].scheduledAt.getTime() + minutes(1));
+		expect(await drainNurtureSends(drainDeps(), { now: step3At })).toMatchObject({
+			sent: 1,
+			completed: 1
+		});
+		expect(await drainNurtureSends(drainDeps(), { now: step3At })).toMatchObject({ claimed: 0 });
+		expect((await sendsOf(enrollment.id)).map((s) => s.status)).toEqual(['sent', 'sent', 'sent']);
+		const keys = (await emailLogTo(subscriber.email)).map((r) => r.idempotencyKey);
+		expect(keys.filter((k) => k === `nurture:${enrollment.id}:2`)).toHaveLength(1);
+		expect(keys).toHaveLength(3);
+	});
+
 	it('the operator retry re-queues a parked send (attempts reset) and the drain delivers it', async () => {
 		const failing = createEmailSender({
 			db,
