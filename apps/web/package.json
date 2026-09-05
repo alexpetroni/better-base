@@ -20,6 +20,7 @@
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"db:status": "node scripts/migrate-status.ts",
+		"db:role-timeout": "node scripts/db-role-timeout.ts",
 		"launch:check": "node scripts/launch-check.ts",
 		"db:seed": "node scripts/seed.ts all",
 		"seed:base": "node scripts/seed.ts base",

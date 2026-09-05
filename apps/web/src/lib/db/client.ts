@@ -147,7 +147,7 @@ function createNeonDb(connectionString: string, config: DbPoolConfig): Db {
 		// Not awaited, but safe: the pg protocol is strictly ordered per
 		// connection, so this SET completes before any query the pool hands
 		// this client afterwards. driver-parity.spec.ts proves it holds.
-		void client.query(`SET statement_timeout = ${config.statementTimeoutMillis}`);
+		void applyNeonStatementTimeout(client, config.statementTimeoutMillis);
 	});
 	// Both drivers produce a PgDatabase over the same schema with the same
 	// query API and a `$client` exposing `end()`, so every call site typed as
@@ -156,6 +156,32 @@ function createNeonDb(connectionString: string, config: DbPoolConfig): Db {
 	// compile-time assertions below and the runtime surface check in
 	// driver-parity.spec.ts, so it cannot rot silently.
 	return neonDrizzle(pool) as unknown as Db;
+}
+
+/**
+ * The per-connection `SET` for the neon path. A rejection (PgBouncer refusing
+ * the SET, a socket dropped mid-handshake) used to be an unhandled rejection
+ * that killed the function instance (audit 2026-09-03 "Neon path edges");
+ * now it is one warn line. Behind PgBouncer the SET is not a session
+ * guarantee either way — `pnpm db:role-timeout` pins it on the role
+ * (`src/lib/db/role-timeout.ts`), which every pooled connection inherits.
+ */
+export function applyNeonStatementTimeout(
+	client: { query(text: string): Promise<unknown> },
+	timeoutMs: number
+): Promise<void> {
+	return client.query(`SET statement_timeout = ${timeoutMs}`).then(
+		() => undefined,
+		(cause: unknown) => {
+			console.error(
+				JSON.stringify({
+					ts: new Date().toISOString(),
+					level: 'warn',
+					message: `SET statement_timeout failed on a neon connection (role-level setting still applies if pinned — DEPLOYMENT.md §12): ${cause instanceof Error ? cause.message : String(cause)}`
+				})
+			);
+		}
+	);
 }
 
 /** Split out so the neon side's OWN type (pre-cast) exists to assert against. */
