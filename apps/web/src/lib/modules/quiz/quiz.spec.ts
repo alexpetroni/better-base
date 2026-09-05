@@ -12,7 +12,7 @@ import { hasConsent } from '../crm/consent.ts';
 import { subscribers } from '../crm/schema.ts';
 import { unsubscribeByToken } from '../crm/service.ts';
 import { claimQuizResult, type QuizFunnelDeps } from './funnel.ts';
-import { quizResults, type QuizRow, type StoredAnswer } from './schema.ts';
+import { quizResults, quizzes, type QuizRow, type StoredAnswer } from './schema.ts';
 import type { ScoringConfig } from './scoring.ts';
 import {
 	createQuiz,
@@ -168,6 +168,27 @@ describe('quiz lifecycle', () => {
 
 		const quiz = await makePublishedQuiz('Complet');
 		expect(quiz.status).toBe('published');
+	});
+
+	// FIX-15 (audit P2): validateForPublish ran only at publish time, so a
+	// later save could leave a LIVE quiz without questions or with a scoring
+	// config pointing at questions that no longer exist.
+	it('a published quiz refuses a save that would make it unrenderable; a draft accepts it', async () => {
+		const live = await makePublishedQuiz('Publicat, apoi golit');
+		const refused = await updateQuiz(deps, live.id, { formSchema: { steps: [] } });
+		expect(!refused.ok && refused.error).toBe('not-publishable');
+		const [row] = await db.select().from(quizzes).where(eq(quizzes.id, live.id));
+		expect(row.formSchema.steps.length).toBeGreaterThan(0); // untouched
+		// Scoring that references a question the new form no longer has.
+		const mismatch = await updateQuiz(deps, live.id, {
+			formSchema: { ...FORM, steps: [FORM.steps[0]] }
+		});
+		expect(!mismatch.ok && mismatch.error).toBe('not-publishable');
+
+		const draft = await createQuiz(deps, { title: 'Ciornă golită', createdBy: USER_ID });
+		if (!draft.ok) throw new Error('createQuiz failed');
+		const accepted = await updateQuiz(deps, draft.value.id, { formSchema: { steps: [] } });
+		expect(accepted.ok).toBe(true);
 	});
 
 	it('drafts are invisible via public getQuizBySlug; unpublish hides again', async () => {

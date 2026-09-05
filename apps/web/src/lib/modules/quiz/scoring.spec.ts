@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FormConfig } from 'formcomp';
 import {
 	answersFromSubmitAnswers,
+	DEFAULT_NUMERIC_BOUND,
 	flattenStepResponses,
 	pickBand,
 	scoreQuiz,
@@ -171,6 +172,85 @@ describe('scoreQuiz', () => {
 		expect(profile.maxScore).toBe(4 + 3 + 5 + 6);
 		expect(profile.dimensions.find((d) => d.key === 'adormire')?.maxScore).toBe(7);
 		expect(profile.dimensions.find((d) => d.key === 'zi')?.maxScore).toBe(11);
+	});
+
+	// FIX-15 (audit P2 'scoring trusts the answer shape'): a single-select
+	// answered with an array scored every element; an unbounded numeric with a
+	// negative multiplier picked the band (and the nurture sequence).
+	it('scores 0 for an array answer on a single-select question', () => {
+		expect(scoreQuiz(FORM, SCORING, { adormire: ['peste-30'] }).score).toBe(0);
+		expect(scoreQuiz(FORM, SCORING, { adormire: ['peste-30', '15-30'] }).score).toBe(0);
+	});
+
+	it('multi-select accepts arrays only and counts each value once', () => {
+		expect(scoreQuiz(FORM, SCORING, { factori: 'ganduri' }).score).toBe(0);
+		expect(scoreQuiz(FORM, SCORING, { factori: ['ganduri', 'ganduri', 'ganduri'] }).score).toBe(2);
+	});
+
+	it('bounds numerics that have neither a question max nor a cap', () => {
+		const scoring: ScoringConfig = {
+			questions: { cafele: { kind: 'numeric', multiplier: -1 } },
+			bands: BANDS
+		};
+		expect(scoreQuiz(FORM, scoring, { cafele: 1e12 }).score).toBe(-DEFAULT_NUMERIC_BOUND);
+		expect(
+			scoreQuiz(FORM, { ...scoring, questions: { cafele: { kind: 'numeric' } } }, { cafele: 1e12 })
+				.score
+		).toBe(DEFAULT_NUMERIC_BOUND);
+		expect(scoreQuiz(FORM, scoring, { cafele: { from: 1, to: 9 } }).score).toBe(0);
+		expect(scoreQuiz(FORM, scoring, { cafele: [7] }).score).toBe(0);
+	});
+
+	it('maxScore counts only questions visible under the submitted answers', () => {
+		const form: FormConfig = {
+			steps: [
+				{
+					id: 's',
+					label: 'S',
+					groups: [
+						{
+							id: 'g',
+							label: 'G',
+							questions: [
+								{
+									id: 'adormire',
+									type: 'single-select',
+									label: 'Adormire',
+									options: [
+										{ value: 'sub-15', label: 'Sub 15' },
+										{ value: 'peste-30', label: 'Peste 30' }
+									]
+								},
+								{
+									id: 'treziri',
+									type: 'single-select',
+									label: 'Treziri',
+									condition: { questionId: 'adormire', operator: 'equals', value: 'peste-30' },
+									options: [
+										{ value: 'da', label: 'Da' },
+										{ value: 'nu', label: 'Nu' }
+									]
+								}
+							]
+						}
+					]
+				}
+			]
+		};
+		const scoring: ScoringConfig = {
+			questions: {
+				adormire: { kind: 'map', map: { 'sub-15': 0, 'peste-30': 4 } },
+				treziri: { kind: 'map', map: { da: 3, nu: 0 } }
+			},
+			bands: BANDS
+		};
+		// treziri hidden → not part of the reachable maximum, and its answer is ignored.
+		const hidden = scoreQuiz(form, scoring, { adormire: 'sub-15', treziri: 'da' });
+		expect(hidden.maxScore).toBe(4);
+		expect(hidden.score).toBe(0);
+		const shown = scoreQuiz(form, scoring, { adormire: 'peste-30', treziri: 'da' });
+		expect(shown.maxScore).toBe(7);
+		expect(shown.score).toBe(7);
 	});
 
 	it('reports a null maxScore when a numeric question is unbounded', () => {
