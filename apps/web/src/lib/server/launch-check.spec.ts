@@ -5,6 +5,7 @@ import {
 	fiscalProbeBlocker,
 	imageProbeBlocker,
 	launchCheckProblems,
+	launchCheckWarnings,
 	probeFiscalPrivacy,
 	probeImages
 } from './launch-check.ts';
@@ -30,6 +31,9 @@ function prodEnv(): Record<string, string | undefined> {
 		IMAGE_PROVIDER: 'cloudflare',
 		MEDIA_PUBLIC_BASE_URL: 'https://media.bettersleep.ro',
 		CF_IMAGE_BASE_URL: 'https://bettersleep.ro',
+		// FIX-16: an EMPTY key is the in-memory mock gateway — never prod-worthy.
+		STRIPE_SECRET_KEY: 'sk_live_123',
+		STRIPE_WEBHOOK_SECRET: 'whsec_real_value',
 		EMAIL_DRYRUN: 'true'
 	};
 }
@@ -52,7 +56,9 @@ function vercelEnv(): Record<string, string | undefined> {
 	return {
 		...prodEnv(),
 		DIRECT_DATABASE_URL: 'postgres://app:s3cr3t@db.prod.example.com/better_sleep',
-		CRON_SECRET: 'b2'.repeat(32)
+		CRON_SECRET: 'b2'.repeat(32),
+		DB_DRIVER: 'neon',
+		ERROR_REPORT_URL: 'https://sink.example.com/ingest'
 	};
 }
 
@@ -242,6 +248,27 @@ const CASES: Array<{
 		target: 'vercel',
 		mutate: (env) => delete env.DIRECT_DATABASE_URL,
 		message: /DIRECT_DATABASE_URL is not set \(required on the vercel target/
+	},
+	// FIX-16 (audit "launch:check blesses a deploy whose shop is a mock"): an
+	// empty key selects the in-memory mock gateway, which "takes" orders per
+	// function instance and never sees a webhook.
+	{
+		name: 'an empty STRIPE_SECRET_KEY (the mock gateway)',
+		mutate: (env) => (env.STRIPE_SECRET_KEY = ''),
+		message: /STRIPE_SECRET_KEY is empty — the shop would run on the in-memory MOCK gateway/
+	},
+	{
+		name: 'an unset STRIPE_SECRET_KEY (the mock gateway)',
+		mutate: (env) => delete env.STRIPE_SECRET_KEY,
+		message: /STRIPE_SECRET_KEY is empty — the shop would run on the in-memory MOCK gateway/
+	},
+	// The neon driver holds one WebSocket per process — on a long-lived node
+	// server that is the whole site behind a single connection.
+	{
+		name: 'the neon driver on the node target',
+		target: 'node',
+		mutate: (env) => (env.DB_DRIVER = 'neon'),
+		message: /DB_DRIVER=neon on the node target/
 	}
 ];
 
@@ -295,7 +322,52 @@ describe('launch:check mock-provider rule (FIX-14)', () => {
 	});
 });
 
+describe('launch:check warnings (FIX-16)', () => {
+	it('a complete vercel env warns about nothing', () => {
+		expect(launchCheckWarnings(vercelEnv(), { target: 'vercel' })).toEqual([]);
+	});
+
+	it('warns on the vercel target without the neon driver (pg pools churn per function)', () => {
+		const env = vercelEnv();
+		delete env.DB_DRIVER;
+		expect(launchCheckWarnings(env, { target: 'vercel' })).toEqual([
+			expect.stringMatching(/DB_DRIVER is not neon on the vercel target/)
+		]);
+	});
+
+	it('warns on the neon driver with DB_POOL_MAX above 2', () => {
+		const env = { ...vercelEnv(), DB_POOL_MAX: '10' };
+		expect(launchCheckWarnings(env, { target: 'vercel' })).toEqual([
+			expect.stringMatching(/DB_POOL_MAX=10 with DB_DRIVER=neon/)
+		]);
+		expect(launchCheckWarnings({ ...vercelEnv(), DB_POOL_MAX: '2' }, { target: 'vercel' })).toEqual(
+			[]
+		);
+	});
+
+	it('warns when no error sink is configured outside --dev', () => {
+		const env = prodEnv();
+		expect(launchCheckWarnings(env, { target: 'node' })).toEqual([
+			expect.stringMatching(/ERROR_REPORT_URL is not set/)
+		]);
+		expect(launchCheckWarnings(env, { target: 'node', dev: true })).toEqual([]);
+	});
+
+	it('--dev still warns about a driver/target mismatch', () => {
+		const env = { ...vercelEnv(), DB_POOL_MAX: '5' };
+		expect(launchCheckWarnings(env, { target: 'vercel', dev: true })).toEqual([
+			expect.stringMatching(/DB_POOL_MAX=5 with DB_DRIVER=neon/)
+		]);
+	});
+});
+
 describe('launch:check rules', () => {
+	it('--dev accepts an empty STRIPE_SECRET_KEY (the mock gateway is the dev default)', () => {
+		const env = devEnv();
+		env.STRIPE_SECRET_KEY = '';
+		expect(launchCheckProblems(env, { target: 'node', dev: true })).toEqual([]);
+	});
+
 	it('passes a complete prod-shaped env on the node target', () => {
 		expect(launchCheckProblems(prodEnv(), { target: 'node' })).toEqual([]);
 	});
