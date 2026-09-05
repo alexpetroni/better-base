@@ -233,10 +233,17 @@ Pick the deploy target first — adapter-node on a machine you run
 (DEPLOYMENT.md §3) or Vercel + Neon (§12) — then tick the branch that applies
 in the split boxes.
 
-- [ ] GitHub Actions repository secret `DIRECT_DATABASE_URL` set (repo →
-      Settings → Secrets and variables → Actions) and the `migrate` workflow
-      run green once by hand (Actions → migrate → Run workflow) — its log
-      prints the applied migration list (§12 "Ordered deploy").
+- [ ] GitHub Actions secrets set (repo → Settings → Secrets and variables →
+      Actions) with EXACTLY the names `deploy/sites.json` declares per site —
+      for better-sleep `DIRECT_DATABASE_URL_SLEEP` (the unpooled Neon URL)
+      and `VERCEL_PROJECT_ID_SLEEP` — plus the shared `VERCEL_TOKEN` and
+      `VERCEL_ORG_ID`; the `production` environment exists. The `migrate`
+      and `deploy` JOBS live in `.github/workflows/ci.yml` (there is no
+      separate migrate workflow): they run on every push to `main` and on
+      Actions → ci → Run workflow, and `migrate` fails closed when the
+      site's `DIRECT_DATABASE_URL_*` secret is missing. Watch the first run
+      green once — the migrate job's log prints the applied migration list
+      (`pnpm db:status`; DEPLOYMENT.md §12 "Ordered deploy").
 - [ ] First-deploy setup ran from a checkout with the prod env:
       `pnpm seed:base` (pillars, pages, settings, initial content — safe to
       re-run, never reverts admin edits), `pnpm media:blurhash` (image
