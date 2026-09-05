@@ -180,3 +180,10 @@ Deferred / disagreed on the assigned items: nothing.
   `?f=invoice-missing` listing — all absent from their parent commits.
 - Not run (no deliverable asks for it): `pnpm test:e2e`, `pnpm db:migrate`
   (no schema change).
+- Fix round 1: the runner's gate failed only in `migrate-script.spec.ts`'s
+  `afterAll` ("Hook timed out in 10000ms") — the scratch-database `DROP
+  DATABASE` forces an immediate checkpoint that queues behind the in-progress
+  spread checkpoint, whose sync phase took 20–30 s on the compose volume
+  (`docker compose logs db | grep checkpoint`). Both hooks now carry a 120 s
+  budget (commit `test(db): migrate-script spec hooks …`); assertions
+  unchanged. Gate re-run green after the change.
