@@ -211,6 +211,13 @@ describe('admin listing + CSV', () => {
 		const [header, line] = csv.trim().split('\n');
 		expect(header).toContain('newsletter_source');
 		expect(line).toContain('csv@example.ro');
+		// FIX-12 CSV hygiene: BOM for ro-RO Excel; a formula-shaped name is
+		// neutralised with a leading apostrophe instead of executing in a cell.
+		expect(csv.startsWith('\uFEFF')).toBe(true);
+		const hostile = subscribersCsv([
+			{ ...created.value, name: '=HYPERLINK("https://evil.example","x")' }
+		]);
+		expect(hostile.split('\n')[1]).toContain(`"'=HYPERLINK(""https://evil.example"",""x"")"`);
 		expect(line).toContain('"Nume, cu ""virgulă"""');
 		expect(line).toContain('yes');
 		expect(line).toContain('footer');

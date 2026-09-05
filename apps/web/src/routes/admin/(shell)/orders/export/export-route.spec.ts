@@ -129,13 +129,56 @@ beforeAll(async () => {
 			issuedAt: new Date('2026-07-10T10:00:00Z'),
 			dueAt: new Date('2026-07-10T10:00:00Z'),
 			buyerName: 'Bogdan Rus'
+		},
+		// FIX-12 CSV hygiene fixtures. A formula-shaped buyer name and company
+		// (customer-entered), a display number that starts like a formula, an
+		// 11% (reduced-rate) document alongside the 21% ones, and two documents
+		// at the month boundary: 2026-08-31T21:30Z is 00:30 on 1 September in
+		// Bucharest (NOT August); 2026-07-31T21:30Z is 00:30 on 1 August (IS
+		// August). The SQL window must use the Romanian calendar.
+		{
+			...base,
+			id: 'exp-aug-hostile',
+			kind: 'invoice',
+			number: 4,
+			displayNumber: '=EXP-0004',
+			issuedAt: new Date('2026-08-07T10:00:00Z'),
+			dueAt: new Date('2026-08-07T10:00:00Z'),
+			buyerName: '=HYPERLINK("https://evil.example";"Ana")',
+			buyerCompanyName: '+SUM(1;2) SRL',
+			buyerCompanyCui: 'RO999885',
+			netTotalCents: 2000,
+			vatTotalCents: 220,
+			grossTotalCents: 2220
+		},
+		{
+			...base,
+			id: 'exp-aug-boundary-in',
+			kind: 'invoice',
+			number: 5,
+			displayNumber: 'EXP-0005',
+			issuedAt: new Date('2026-07-31T21:30:00Z'),
+			dueAt: new Date('2026-07-31T21:30:00Z'),
+			buyerName: 'Carmen Ionescu'
+		},
+		{
+			...base,
+			id: 'exp-sep-boundary-out',
+			kind: 'invoice',
+			number: 6,
+			displayNumber: 'EXP-0006',
+			issuedAt: new Date('2026-08-31T21:30:00Z'),
+			dueAt: new Date('2026-08-31T21:30:00Z'),
+			buyerName: 'Dan Marin'
 		}
 	]);
 	await db.insert(invoiceLines).values(
 		[
 			['exp-aug-1', 1],
 			['exp-aug-2', -1],
-			['exp-jul-1', 1]
+			['exp-jul-1', 1],
+			['exp-aug-boundary-in', 1],
+			['exp-sep-boundary-out', 1]
 		].map(([invoiceId, sign], i) => ({
 			id: `exp-line-${i}`,
 			invoiceId: invoiceId as string,
@@ -149,6 +192,19 @@ beforeAll(async () => {
 			grossCents: 4990 * (sign as number)
 		}))
 	);
+	// The reduced-rate document: 2220 gross at 11% → 2000 net + 220 VAT.
+	await db.insert(invoiceLines).values({
+		id: 'exp-line-hostile',
+		invoiceId: 'exp-aug-hostile',
+		position: 1,
+		description: 'Ceai de seară',
+		qty: 1,
+		unitPriceCents: 2220,
+		vatRateBp: 1100,
+		netCents: 2000,
+		vatCents: 220,
+		grossCents: 2220
+	});
 
 	get = (await import('./+server.ts')).GET;
 });
@@ -168,23 +224,49 @@ describe('GET /admin/orders/export', () => {
 
 		const entries = unzipSync(new Uint8Array(await response.arrayBuffer()));
 		expect(Object.keys(entries).sort()).toEqual([
+			'Factura--EXP-0004.pdf',
+			'Factura--EXP-0004.xml',
 			'Factura-EXP-0001.pdf',
 			'Factura-EXP-0001.xml',
+			'Factura-EXP-0005.pdf',
+			'Factura-EXP-0005.xml',
 			'Storno-EXP-0002.pdf',
 			'Storno-EXP-0002.xml',
 			'facturi.csv'
 		]);
 		expect(new TextDecoder().decode(entries['Factura-EXP-0001.pdf'].slice(0, 5))).toBe('%PDF-');
 
-		const csv = new TextDecoder().decode(entries['facturi.csv']);
+		const raw = new TextDecoder().decode(entries['facturi.csv']);
+		// UTF-8 BOM: without it a ro-RO Excel reads "Pernă" as mojibake.
+		expect(raw.startsWith('\uFEFF')).toBe(true);
+		const csv = raw.slice(1);
 		const lines = csv.trim().split('\n');
+		// Per-rate base/VAT columns for every rate present in the month, highest first.
 		expect(lines[0]).toBe(
-			'numar;tip;data;cumparator;cui_cumparator;valoare_fara_tva;tva;total;moneda;storneaza'
+			'numar;tip;data;cumparator;cui_cumparator;valoare_fara_tva;tva;total;moneda;storneaza;baza_21;tva_21;baza_11;tva_11'
 		);
-		expect(lines[1]).toBe('EXP-0001;factura;2026-08-03;Ana Pop;;41,24;8,66;49,90;RON;');
-		expect(lines[2]).toBe('EXP-0002;storno;2026-08-05;Ana Pop;;-41,24;-8,66;-49,90;RON;EXP-0001');
+		expect(lines[1]).toBe('EXP-0001;factura;2026-08-03;Ana Pop;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00');
+		expect(lines[2]).toBe(
+			'EXP-0002;storno;2026-08-05;Ana Pop;;-41,24;-8,66;-49,90;RON;EXP-0001;-41,24;-8,66;0,00;0,00'
+		);
+		// Formula injection: number, buyer and company are neutralised, not executed.
+		expect(lines[3]).toBe(
+			`'=EXP-0004;factura;2026-08-07;"'+SUM(1;2) SRL";RO999885;20,00;2,20;22,20;RON;;0,00;0,00;20,00;2,20`
+		);
+		// The Bucharest calendar decides the month: 00:30 on 1 Aug is in, 00:30 on 1 Sep is out.
+		expect(lines[4]).toBe('EXP-0005;factura;2026-08-01;Carmen Ionescu;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00');
+		expect(lines).toHaveLength(5);
+		expect(csv).not.toContain('EXP-0006');
 		// July's document stays out of the August archive.
 		expect(csv).not.toContain('EXP-0003');
+	});
+
+	it('the September archive holds the boundary document August must not', async () => {
+		const response = await get(requestEvent('2026-09', ADMIN));
+		const entries = unzipSync(new Uint8Array(await response.arrayBuffer()));
+		const csv = new TextDecoder().decode(entries['facturi.csv']).slice(1);
+		expect(csv).toContain('EXP-0006;factura;2026-09-01;Dan Marin');
+		expect(csv).not.toContain('EXP-0005');
 	});
 
 	it('is admin-only and validates the month', async () => {
