@@ -59,6 +59,27 @@ describe('sanitization', () => {
 		expect(html).not.toContain('onclick');
 	});
 
+	// sanitize-html advisories (FIX-18, review 2026-09-05 #5). Both payloads
+	// are kept as regression vectors for the ONE config guarding every
+	// {@html} sink: neither must survive a sanitizer upgrade or a config edit.
+	it('neutralises the GHSA-jxwj-j7wr-gfrw mutation vector (literal </textarea/> solidus close)', () => {
+		const html = renderMarkdown(
+			'<textarea></textarea/><img src=x onerror="alert(document.domain)"></textarea>'
+		);
+		expect(html).not.toMatch(/onerror/i);
+		expect(html).not.toContain('</textarea/>');
+		expect(html).not.toMatch(/<textarea/i);
+	});
+
+	it('neutralises the GHSA-g8qq-57p8-ggw5 SMIL URI-list vector (animate href values)', () => {
+		const html = renderMarkdown(
+			`<svg><a><animate attributeName="href" values="#safe;javascript:alert('XSS')" dur=".01s" fill="freeze"></animate><text y="30">Click me</text></a></svg>`
+		);
+		expect(html).not.toMatch(/javascript:/i);
+		expect(html).not.toMatch(/<animate|<svg/i);
+		expect(html).not.toContain('values=');
+	});
+
 	it('keeps ordinary markdown structure', () => {
 		const html = renderMarkdown('# Titlu\n\n- unu\n- doi\n\n**bold** [link](https://x.ro)');
 		expect(html).toContain('<h1>Titlu</h1>');

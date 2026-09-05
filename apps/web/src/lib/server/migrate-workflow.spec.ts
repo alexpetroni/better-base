@@ -109,6 +109,17 @@ describe('.github/workflows/ci.yml', () => {
 		expect(runs).toMatch(/minio\/minio:RELEASE\.\d{4}-\d{2}-\d{2}T/);
 	});
 
+	it('gate: audits production dependencies at the high level (FIX-18, review 2026-09-05 #5)', () => {
+		const runs = runsOf(ci.jobs.gate);
+		expect(runs).toContain('pnpm audit --prod --audit-level=high');
+		// The local gate script is the same list of commands.
+		const root = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+		expect(root.scripts.gate).toContain('pnpm audit --prod --audit-level=high');
+		for (const command of ['pnpm lint', 'pnpm check', 'pnpm test:unit']) {
+			expect(root.scripts.gate).toContain(command);
+		}
+	});
+
 	it('gate: its env is dev-shaped, never a production secret', () => {
 		const env = ci.jobs.gate.env ?? {};
 		expect(JSON.stringify(env)).not.toContain('secrets.');
