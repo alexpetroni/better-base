@@ -107,6 +107,17 @@ export async function updateQuiz(
 		set.scoring = patch.scoring;
 	}
 
+	// A LIVE quiz must stay renderable and scorable: validate the merged
+	// config exactly as publish does (FIX-15) — e.g. a form saved without
+	// questions, or a form change that orphans the scoring's question ids.
+	if (existing.status === 'published') {
+		const errors = validateForPublish(
+			set.formSchema ?? existing.formSchema,
+			set.scoring ?? existing.scoring
+		);
+		if (errors.length) return { ok: false, error: 'not-publishable', detail: errors.join(' ') };
+	}
+
 	if (patch.pillarSlug !== undefined) {
 		if (patch.pillarSlug === null) {
 			set.pillarId = null;

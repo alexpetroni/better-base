@@ -1,4 +1,7 @@
 import type { FormConfig, Question } from 'formcomp';
+// The pure condition evaluator via its subpath: the package root pulls in
+// .svelte components, which the seed/content scripts (plain node) cannot load.
+import { evaluateCondition } from 'formcomp/conditions';
 import { isRecord } from '../../util/object.ts';
 
 /**
@@ -56,6 +59,15 @@ export interface QuizProfile {
 /** Flat answers keyed by question id — what the engine consumes. */
 export type QuizAnswers = Record<string, unknown>;
 
+/**
+ * Safety bound for a numeric answer whose question declares no `min`/`max`
+ * and whose scoring has no `cap` (FIX-15): a crafted `1e12` used to reach
+ * the band — and the nurture sequence — through an unbounded multiplier.
+ * The reachable maximum of such a question stays `null` (unknown), this
+ * only bounds what one answer can contribute.
+ */
+export const DEFAULT_NUMERIC_BOUND = 1000;
+
 /** Flatten formcomp's `onFormComplete` shape (responses keyed by step, then question). */
 export function flattenStepResponses(byStep: Record<string, Record<string, unknown>>): QuizAnswers {
 	const flat: QuizAnswers = {};
@@ -96,11 +108,58 @@ function clamp(value: number, min: number | undefined, max: number | undefined):
 	return value;
 }
 
-function mapPoints(map: Record<string, number>, answer: unknown): number {
-	if (answer === undefined || answer === null) return 0;
-	if (Array.isArray(answer)) {
-		return answer.reduce<number>((sum, value) => sum + (map[String(value)] ?? 0), 0);
+/**
+ * The questions a visitor could actually see given these answers — step,
+ * group and question `condition`s evaluated server-side with formcomp's own
+ * evaluator, to a fixpoint like formcomp's `collectResponses` (an answer to
+ * a hidden question is discarded, which may hide more). Hidden questions
+ * neither score nor count towards the reachable maximum (FIX-15).
+ */
+export function visibleQuestions(form: FormConfig, answers: QuizAnswers): Map<string, Question> {
+	const all = questionsById(form);
+	let allowed = new Set(all.keys());
+	// Each pass can only change membership; bounded by the question count.
+	for (let pass = 0; pass <= all.size; pass++) {
+		const get = (_stepId: string, questionId: string) =>
+			allowed.has(questionId) ? answers[questionId] : undefined;
+		const visible = new Map<string, Question>();
+		for (const step of form.steps) {
+			if (step.condition && !evaluateCondition(step.condition, get, step.id)) continue;
+			for (const group of step.groups) {
+				if (group.condition && !evaluateCondition(group.condition, get, step.id)) continue;
+				for (const question of group.questions) {
+					if (question.condition && !evaluateCondition(question.condition, get, step.id)) {
+						continue;
+					}
+					visible.set(question.id, question);
+				}
+			}
+		}
+		if (visible.size === allowed.size && [...visible.keys()].every((id) => allowed.has(id))) {
+			return visible;
+		}
+		allowed = new Set(visible.keys());
 	}
+	return new Map([...all].filter(([id]) => allowed.has(id)));
+}
+
+/**
+ * Points for a `map` question, coerced by the question's type (FIX-15):
+ * only a multi-select may answer with an array (each value counted once);
+ * an array on any other type — or a scalar on a multi-select — is a shape
+ * the form never produces and scores 0.
+ */
+function mapPoints(
+	map: Record<string, number>,
+	question: Question | undefined,
+	answer: unknown
+): number {
+	if (answer === undefined || answer === null) return 0;
+	if (question?.type === 'multi-select') {
+		if (!Array.isArray(answer)) return 0;
+		return [...new Set(answer.map(String))].reduce((sum, value) => sum + (map[value] ?? 0), 0);
+	}
+	if (Array.isArray(answer) || isRecord(answer)) return 0;
 	return map[String(answer)] ?? 0;
 }
 
@@ -109,9 +168,17 @@ function numericPoints(
 	question: Question | undefined,
 	answer: unknown
 ): number {
-	const value = typeof answer === 'number' ? answer : Number(answer);
-	if (answer === undefined || answer === null || answer === '' || Number.isNaN(value)) return 0;
-	let points = clamp(value, question?.min, question?.max) * (spec.multiplier ?? 1);
+	// Numbers and numeric strings only; objects (range values) and arrays are
+	// not a numeric answer.
+	const value =
+		typeof answer === 'number' ? answer : typeof answer === 'string' ? Number(answer) : NaN;
+	if (answer === '' || !Number.isFinite(value)) return 0;
+	const bounded = clamp(
+		value,
+		question?.min ?? -DEFAULT_NUMERIC_BOUND,
+		question?.max ?? DEFAULT_NUMERIC_BOUND
+	);
+	let points = bounded * (spec.multiplier ?? 1);
 	if (spec.cap !== undefined) points = Math.min(points, spec.cap);
 	return points;
 }
@@ -140,6 +207,7 @@ export function scoreQuiz(
 	answers: QuizAnswers
 ): QuizProfile {
 	const byId = questionsById(form);
+	const visible = visibleQuestions(form, answers);
 
 	let score = 0;
 	let maxScore: number | null = 0;
@@ -150,9 +218,13 @@ export function scoreQuiz(
 
 	for (const [questionId, spec] of Object.entries(scoring.questions)) {
 		const question = byId.get(questionId);
+		// A question the visitor could not see contributes neither points nor
+		// reachable maximum (a scored id missing from the form is validated
+		// away by validateScoringConfig; tolerated here as visible).
+		if (question && !visible.has(questionId)) continue;
 		const points =
 			spec.kind === 'map'
-				? mapPoints(spec.map, answers[questionId])
+				? mapPoints(spec.map, question, answers[questionId])
 				: numericPoints(spec, question, answers[questionId]);
 		const max = questionMax(spec, question);
 

@@ -1,4 +1,4 @@
-import type { FormConfig } from 'formcomp';
+import type { FormConfig, QuestionType } from 'formcomp';
 import { validateScoringConfig, type ScoringConfig } from './scoring.ts';
 import { isRecord } from '../../util/object.ts';
 
@@ -8,6 +8,27 @@ import { isRecord } from '../../util/object.ts';
  * which plain-node contexts like the seed script cannot load) — formcomp's own
  * `validateConfig` runs client-side in the editor preview pane instead.
  */
+
+/**
+ * Every question type formcomp renders. The `satisfies` clause is the
+ * compile-time link to formcomp's `QuestionType`: a type added or removed
+ * there fails this file until the list follows (FIX-15).
+ */
+const QUESTION_TYPES = new Set<string>(
+	Object.keys({
+		'single-select': true,
+		'multi-select': true,
+		select: true,
+		'time-input': true,
+		'date-input': true,
+		'number-input': true,
+		range: true,
+		'text-input': true,
+		textarea: true,
+		likert: true,
+		scale: true
+	} satisfies Record<QuestionType, true>)
+);
 
 /** ro errors; empty list ⇒ `raw` is a renderable FormConfig. */
 export function validateFormSchema(raw: unknown): string[] {
@@ -46,6 +67,11 @@ export function validateFormSchema(raw: unknown): string[] {
 				) {
 					errors.push(`${qWhere}: are nevoie de "id", "type" și "label" (text).`);
 					return;
+				}
+				if (!QUESTION_TYPES.has(question.type)) {
+					errors.push(
+						`${qWhere} ("${question.id}"): tipul "${question.type}" nu este suportat (${[...QUESTION_TYPES].join(', ')}).`
+					);
 				}
 				if (questionIds.has(question.id)) {
 					errors.push(`${qWhere}: id-ul "${question.id}" se repetă în formular.`);

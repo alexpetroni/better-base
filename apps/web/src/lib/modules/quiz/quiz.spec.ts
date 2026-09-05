@@ -180,8 +180,18 @@ describe('quiz lifecycle', () => {
 		const [row] = await db.select().from(quizzes).where(eq(quizzes.id, live.id));
 		expect(row.formSchema.steps.length).toBeGreaterThan(0); // untouched
 		// Scoring that references a question the new form no longer has.
+		const [step] = FORM.steps;
+		const [group] = step.groups;
 		const mismatch = await updateQuiz(deps, live.id, {
-			formSchema: { ...FORM, steps: [FORM.steps[0]] }
+			formSchema: {
+				...FORM,
+				steps: [
+					{
+						...step,
+						groups: [{ ...group, questions: group.questions.filter((q) => q.id === 'adormire') }]
+					}
+				]
+			}
 		});
 		expect(!mismatch.ok && mismatch.error).toBe('not-publishable');
 
