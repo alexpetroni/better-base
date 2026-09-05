@@ -5,15 +5,74 @@ records what that phase built, its verification results and what it
 deliberately deferred. For the current picture read `docs/STATE.md` (short),
 `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and `docs/TESTING.md`.
 
+## Remediation FIX-18 (high findings, launch checklist and the dropped FIX-10 item of the 2026-09-05 review — batch 2, phase 10, 2026-09-05)
+
+See `docs/STATE.md` § "Closed by FIX-18" for this phase (its verification,
+the accepted advisories and the deferred list); the next phase moves that
+section here when it writes its own. In one line: the 0024-backfilled VAT
+schedule is a launch problem and an admin warning until re-saved,
+`launch:check` refuses a production env on dry-run email, Resend calls carry
+the `email_log` key as `Idempotency-Key`, sanitize-html/SvelteKit/postcss/
+nanoid patched with `pnpm audit --prod --audit-level=high` in the gate
+(image-size has no fix — parsers disabled, ids accepted), settings saves are
+audited and the IBAN mod-97 checked, the checklist names the real secrets
+and the `ci.yml` migrate job, and a paid order with a refund exceeding its
+stornos is `invoice-missing`. No migration, no new env; new script
+`pnpm gate`.
+
 ## Remediation FIX-17 (medium findings of the FIX-12…16 phase reviews — batch 2, phase 9, 2026-09-05)
 
-See `docs/STATE.md` § "Closed by FIX-17" for this phase (and its
-verification); the next phase moves that section here when it writes its
-own. In one line: e-Factura parked-row re-queue (order page action +
-`pnpm efactura:requeue`), nurture reseed reopens `replanned` rows, chat
-inactivity timer armed only after the first event under a 55 s first-event
-cap, upload confirm accepts only `pending/` keys, request id adopts
-`x-vercel-id` only on Vercel. No migration, no new env.
+Moved verbatim from `docs/STATE.md` by FIX-18.
+
+Plan: the FIX-17 phase plan under `docs/fixes/`. Five test-first commit pairs
+(`git log`: `test(…)` then `fix(…)`/`feat(…)`). **No migration**, no new env.
+
+- **e-Factura parked rows had no way back** (FIX-12 review) —
+  `requeueParkedSubmission({db}, invoiceId, {orderId?})`,
+  `requeueAllParkedSubmissions`, `listParkedSubmissionsForOrder` in
+  `modules/invoice/submissions.ts` (`UPDATE … SET status='pending',
+  attempts=0, next_attempt_at/error/claimed_at=NULL WHERE status='failed'`);
+  admin-only `?/requeue` on `/admin/orders/[id]` (button "Repune în coada
+  ANAF" under a parked document, audited as `efactura-requeue`, scoped to the
+  order's documents, in the authz route manifest); **new script**
+  `pnpm efactura:requeue -- --all | <invoiceId>` (root + web
+  `package.json`). DEPLOYMENT §7/§9, RUNBOOK, LAUNCH-CHECKLIST updated.
+- **Nurture reseed never re-sent a re-added step** (FIX-13 review) —
+  `replanSequenceSends` also selects rows cancelled as `replanned` and, when
+  the step index exists again, UPDATEs them back to `pending` with the new
+  `scheduledAt`/`stepsHash`, `attempts: 0`, `lastError: null` (the unique
+  `(enrollment_id, step_index)` index means such a step can never get a
+  second row).
+- **Chat inactivity timer defeated the retry** (FIX-14 review) — the
+  watchdog is two-phase: until the first stream event only a hard cap of
+  `firstEventTimeoutMs` = `timeoutMs × (maxRetries + 1) + inactivityMs`
+  (55 s by default, under `maxDuration = 60`) is armed, so the SDK's own
+  `timeout`/`maxRetries` run as configured; the 15 s inactivity timer is armed
+  from the first event on. `chat/README.md` rows corrected.
+- **Upload confirm trusted any key** (FIX-15 review) — `confirmUpload`
+  returns `not-found` / "not a pending upload" for any key outside
+  `PENDING_PREFIX` before touching storage.
+- **Request id adopted a client `x-vercel-id` everywhere** (FIX-16 review) —
+  `resolveRequestId(headers, random, { onVercel })` adopts the header only
+  with `env.VERCEL` set (threaded from `hooks.server.ts`) and only when it is
+  a `[A-Za-z0-9:-]{1,128}` token; otherwise a UUID. The old hook assertion
+  ("echoes the x-vercel-id") asserted the defect and was replaced.
+
+Deferred / disagreed: nothing. Not in scope and untouched: everything else
+in those review verdicts (all rated low or informational).
+
+### Verification (FIX-17)
+
+- `pnpm lint && pnpm check && pnpm test:unit`: green — 131 files, 1245 tests
+  passed, 4 skipped (the pre-existing `skipIf(!PROXY)` driver-parity suite).
+  One flaky `migrate-script.spec.ts` hook timeout under the full parallel run
+  passed on re-run alone (5 s) and in the second full run.
+- Builds: adapter-node and `DEPLOY_TARGET=vercel DB_DRIVER=neon` both green.
+- Both sites boot from the adapter-node build (`SITE_ID=sleep` / `life`):
+  home 200, `/api/health` 200 with the site name; a request carrying
+  `x-vercel-id: spoofed` gets a UUID `x-request-id` back.
+- `pnpm efactura:requeue` smoke-tested against the dev database: usage error
+  and unknown invoice exit 1, `--all` reports the count (0).
 
 ## Remediation FIX-16 (audit 2026-09-03 P0 #5 + Ops & platform, P2 migration contract / pins / health / secrets / docs — batch 2, phase 8, 2026-09-05)
 
