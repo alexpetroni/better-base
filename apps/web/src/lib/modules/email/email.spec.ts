@@ -249,6 +249,69 @@ describe('sendEmail idempotency (integration)', () => {
 		expect((await rowsFor('no-transport-1'))[0].status).toBe('error');
 	});
 
+	// Audit 2026-09-03 P1 "Email, CRM & nurture": `dryrun` and `sending` rows
+	// were final forever. The documented dry-run soak (EMAIL_DRYRUN=true until
+	// DNS is verified) burned every confirm/nurture key it touched — after the
+	// flip to live the same key came back `skipped` and nothing went out.
+	it('a key recorded under dry-run is delivered once the sender runs live (skipped before the fix)', async () => {
+		const dry = createEmailSender({ db, dryRun: true, from: 'a@b.ro' });
+		expect((await dry.send(input('soak-1'))).status).toBe('dryrun');
+
+		const transport = fakeTransport();
+		const live = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
+		const outcome = await live.send(input('soak-1'));
+		expect(outcome.status).toBe('sent');
+		expect(transport.send).toHaveBeenCalledTimes(1);
+		const rows = await rowsFor('soak-1');
+		expect(rows).toHaveLength(1);
+		expect(rows[0].status).toBe('sent');
+
+		// …and a later dry-run pass over a DELIVERED key still never re-sends.
+		expect((await dry.send(input('soak-1'))).status).toBe('skipped');
+		expect((await rowsFor('soak-1'))[0].status).toBe('sent');
+	});
+
+	// A serverless kill between the `sending` claim and the transport left the
+	// row stuck forever: no retry could ever reclaim it.
+	it('a `sending` row older than the staleness window is re-sent exactly once under two concurrent callers', async () => {
+		await db.insert(emailLog).values({
+			id: 'stale-sending-1',
+			idempotencyKey: 'stale-1',
+			toEmail: 'test@example.com',
+			template: 'newsletter-confirm',
+			subject: 's',
+			data: {},
+			status: 'sending',
+			createdAt: new Date(Date.now() - 11 * 60 * 1000),
+			updatedAt: new Date(Date.now() - 11 * 60 * 1000)
+		});
+		const transport = fakeTransport();
+		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
+		const outcomes = await Promise.all([sender.send(input('stale-1')), sender.send(input('stale-1'))]);
+		expect(outcomes.map((o) => o.status).sort()).toEqual(['sent', 'skipped']);
+		expect(transport.send).toHaveBeenCalledTimes(1);
+		const rows = await rowsFor('stale-1');
+		expect(rows).toHaveLength(1);
+		expect(rows[0].status).toBe('sent');
+	});
+
+	it('a FRESH `sending` row (delivery in flight elsewhere) is not re-sent', async () => {
+		await db.insert(emailLog).values({
+			id: 'fresh-sending-1',
+			idempotencyKey: 'fresh-1',
+			toEmail: 'test@example.com',
+			template: 'newsletter-confirm',
+			subject: 's',
+			data: {},
+			status: 'sending'
+		});
+		const transport = fakeTransport();
+		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
+		expect((await sender.send(input('fresh-1'))).status).toBe('skipped');
+		expect(transport.send).not.toHaveBeenCalled();
+		expect((await rowsFor('fresh-1'))[0].status).toBe('sending');
+	});
+
 	it('a hung Resend socket becomes a retryable error row, not a pinned request (hung before the fix)', async () => {
 		const sender = createEmailSender({
 			db,
