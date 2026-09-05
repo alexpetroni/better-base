@@ -4,7 +4,9 @@ export const sleepSite: SiteConfig = {
 	id: 'sleep',
 	name: 'Better Sleep',
 	domain: 'bettersleep.ro',
-	locales: ['ro', 'en'],
+	// `ro` only until content is localized (FIX-15): drives the subscriber
+	// locale and hreflang alternates (none for a single locale).
+	locales: ['ro'],
 	pillars: ['somn'],
 	theme: {
 		'color-brand': 'oklch(0.45 0.14 275)',

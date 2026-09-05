@@ -4,7 +4,9 @@ export const lifeSite: SiteConfig = {
 	id: 'life',
 	name: 'Better Life',
 	domain: 'betterlife.ro',
-	locales: ['ro', 'en'],
+	// `ro` only until content is localized (FIX-15): drives the subscriber
+	// locale and hreflang alternates (none for a single locale).
+	locales: ['ro'],
 	pillars: ['somn', 'nutritie', 'miscare', 'stres', 'relatii', 'scop', 'mediu', 'minte', 'finante'],
 	theme: {
 		'color-brand': 'oklch(0.45 0.13 155)',

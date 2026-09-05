@@ -9,6 +9,12 @@ export interface SiteConfig {
 	id: string;
 	name: string;
 	domain: string;
+	/**
+	 * Locales the site really serves (data, not paraglide's compiled list).
+	 * Single source for the subscriber locale and for hreflang alternates —
+	 * which are emitted only for more than one locale AND a URL-based
+	 * paraglide strategy (FIX-15, `hreflangAlternates`).
+	 */
 	locales: string[];
 	/** Slugs of the active pillars; must exist in `CANONICAL_PILLARS`. */
 	pillars: string[];

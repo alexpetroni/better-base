@@ -875,6 +875,20 @@ connection instead of deadlocking (waits are bounded by
 `DB_POOL_CONNECTION_TIMEOUT_MS`, so overload sheds instead of hanging). The
 driver-level assertions live in `src/lib/db/driver-parity.spec.ts`.
 
+### Locale policy (FIX-15)
+
+Both sites are **single-locale (`ro`)**: `locales: ['ro']` in the site
+config is the source of truth for the subscriber locale and for `hreflang`
+alternates — and with one locale no alternates are emitted at all. Paraglide
+still compiles `messages/en.json` (a parity test keeps its keys equal to
+`ro.json`) but its runtime strategy is `cookie, globalVariable, baseLocale`
+without `url`, so `/en/…` is NOT a localized page and must never be
+advertised. To ship a second locale: add it to the site's `locales`, add
+`"url"` to the paraglide strategy (`vite.config.ts`) so the locale is
+resolved from the path and canonicals become self-referential per locale,
+and localize the content — `hreflangAlternates` (`src/lib/seo.ts`) starts
+emitting alternates only once BOTH hold.
+
 ### Known limits
 
 - **Cold starts** hit the first request after idle: a fresh function opens a

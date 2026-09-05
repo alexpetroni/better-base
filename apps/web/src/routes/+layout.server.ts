@@ -7,6 +7,7 @@ export const load: LayoutServerLoad = () => {
 		site: {
 			id: site.id,
 			name: site.name,
+			locales: site.locales,
 			nav: site.nav,
 			footerLinks: site.footerLinks,
 			theme: site.theme,
