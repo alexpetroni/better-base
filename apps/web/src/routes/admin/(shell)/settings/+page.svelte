@@ -121,6 +121,14 @@
 									class="w-full rounded border border-(--color-brand-soft) px-3 py-2 text-sm"
 									>{value}</textarea
 								>
+								{#if field.key === 'invoice.vatStandardRates' && data.vatScheduleAutoMigrated}
+									<span
+										data-testid="settings-warning-{field.key}"
+										class="mt-1 block text-sm text-amber-800"
+									>
+										{m.admin_settings_vat_schedule_migrated()}
+									</span>
+								{/if}
 							{:else}
 								<input
 									type="text"

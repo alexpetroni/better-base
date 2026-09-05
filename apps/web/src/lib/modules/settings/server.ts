@@ -3,6 +3,7 @@
 export { isSettingsPlaceholder, settingsConsistencyProblems } from './registry.ts';
 export { siteSettings, type SiteSettingRow } from './schema.ts';
 export {
+	autoMigratedVatSchedule,
 	createSettingsLoader,
 	loadSettings,
 	loadSettingsForAdmin,

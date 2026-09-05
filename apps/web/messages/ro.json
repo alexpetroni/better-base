@@ -497,6 +497,7 @@
 	"admin_settings_shop_allow_all_payment_methods": "Permite toate metodele de plată activate în Stripe (implicit: doar card)",
 	"admin_settings_err_too_long": "Text prea lung.",
 	"admin_settings_err_vat_rate": "Listă de cote invalidă — o linie per cotă, „AAAA-LL-ZZ procent”, cu una dintre cotele legale (5, 9, 11, 19, 21).",
+	"admin_settings_vat_schedule_migrated": "Această listă de cote a fost derivată automat din vechea cotă unică la un upgrade și nu a fost confirmată de atunci. Verifică dacă este calendarul care se aplică acestei entități (21% cotă standard din 2025-08-01 în România), apoi salvează — lista este folosită la fiecare factură.",
 	"admin_product_vat_rate": "Cota TVA",
 	"admin_product_vat_rate_standard": "standard (conform setărilor de facturare)",
 	"admin_product_err_vat_rate": "Cotă TVA invalidă.",

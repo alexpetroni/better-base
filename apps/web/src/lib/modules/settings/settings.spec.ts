@@ -384,7 +384,7 @@ describe('settings launch rule (integration)', () => {
  */
 async function replayVatBackfill(): Promise<void> {
 	const migration = readFileSync(
-		path.resolve(import.meta.dirname, '../../../drizzle/0024_vat_model.sql'),
+		path.resolve(import.meta.dirname, '../../../../drizzle/0024_vat_model.sql'),
 		'utf8'
 	);
 	const backfill = migration

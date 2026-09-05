@@ -42,7 +42,7 @@ commands with `SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5433
 | `pnpm subscriber:delete -- --email …` | GDPR erasure. |
 | `pnpm chat:prune` | Retention (the cron route does the same). |
 | `pnpm efactura:requeue -- --all \| <invoiceId>` | Put e-Factura submissions parked after 5 failed attempts back in the cron's queue (same write as the order page's "Repune în coada ANAF" button). Fix the cause first (`DEPLOYMENT.md` §7). |
-| `pnpm launch:check [--dev] [--no-probe] [--target=node\|vercel] [--allow-mock-providers]` | Preflight: env rules, image + fiscal-privacy probes, site-settings placeholders. Warnings (`warning:` lines) are advisory. `DEPLOYMENT.md` §2/§12. |
+| `pnpm launch:check [--dev] [--no-probe] [--target=node\|vercel] [--allow-mock-providers]` | Preflight: env rules, image + fiscal-privacy probes, site-settings placeholders, and the VAT schedule left by migration 0024 on an upgraded install (fix: Settings → Invoice, confirm, save — `DEPLOYMENT.md` §4). Warnings (`warning:` lines) are advisory. `DEPLOYMENT.md` §2/§12. |
 | `bash scripts/backup.sh [--dry-run]` | Nightly backup (dump + bucket sync); env in the script header. |
 | `bash scripts/dev-run.sh` / `dev-stop.sh` | Host helper: stack, migrate, seed, build, serve. |
 

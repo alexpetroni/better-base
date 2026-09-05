@@ -497,6 +497,7 @@
 	"admin_settings_shop_allow_all_payment_methods": "Allow every payment method enabled in Stripe (default: card only)",
 	"admin_settings_err_too_long": "Text too long.",
 	"admin_settings_err_vat_rate": "Invalid rate list — one line per rate, “YYYY-MM-DD percent”, using a legal rate (5, 9, 11, 19, 21).",
+	"admin_settings_vat_schedule_migrated": "This rate list was derived automatically from the old single rate during an upgrade and has not been confirmed since. Check that it is the schedule that applies to this entity (21% standard since 2025-08-01 in Romania), then save — the list is used for every invoice.",
 	"admin_product_vat_rate": "VAT rate",
 	"admin_product_vat_rate_standard": "standard (per the invoicing settings)",
 	"admin_product_err_vat_rate": "Invalid VAT rate.",

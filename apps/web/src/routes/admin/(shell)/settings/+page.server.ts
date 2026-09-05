@@ -28,9 +28,10 @@ function displayValue(key: SettingKey, value: string | number | boolean): string
 }
 
 export const load: PageServerLoad = async () => {
-	const { settings, audit } = await loadSettingsForAdmin({ db: getDb() });
+	const { settings, audit, vatScheduleAutoMigrated } = await loadSettingsForAdmin({ db: getDb() });
 	return {
 		audit,
+		vatScheduleAutoMigrated,
 		groups: SETTING_GROUPS.map((id) => ({
 			id,
 			fields: settingGroupKeys(id).map((key) => ({

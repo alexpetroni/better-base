@@ -197,6 +197,15 @@ Notes:
   content there; delete it in the admin when real content lands. It needs
   the media bucket (it uploads the covers).
 - `pnpm db:seed` runs both halves — the local one-shot for a fresh database.
+- **Upgrading an installation that was live before 2025-08-01** (FIX-18):
+  migration 0024 turns the old single `invoice.vatRateBp` into a one-line
+  standard-rate schedule dated `2025-08-01` carrying *that* rate — 19 % on
+  an entity that never edited it — and issuance would use it for every later
+  order. After `pnpm db:migrate`, open `/admin/settings` → Invoice, confirm
+  the standard-rate schedule (one `YYYY-MM-DD percent` line per rate change;
+  21 % standard since 2025-08-01 in Romania) and **save** the group. The form
+  shows a warning under the field and `pnpm launch:check` reports the
+  never-confirmed schedule as a problem until that save happens.
 - Staff users: `user:create` is idempotent by email (re-running updates
   role/password). Roles: `admin` (everything) / `editor` (content only).
 
