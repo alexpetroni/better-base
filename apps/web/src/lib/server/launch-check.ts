@@ -74,9 +74,28 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 		problems.push(cause instanceof Error ? cause.message : String(cause));
 	}
 
+	// One WebSocket for the whole server: the neon driver exists for
+	// short-lived functions, never for the long-lived adapter-node process
+	// (audit 2026-09-03 "Ops & platform"). Wrong in dev too.
+	if (opts.target === 'node' && env.DB_DRIVER === 'neon') {
+		problems.push(
+			'DB_DRIVER=neon on the node target — the serverless driver holds one WebSocket per process; use pg (or deploy with --target=vercel)'
+		);
+	}
+
 	if (opts.dev) return problems;
 
 	// --- production-only rules below ---------------------------------------
+
+	// An empty key selects the in-memory MOCK gateway (shop/server.ts): orders
+	// are "taken" per function instance and no webhook ever arrives. Dev's
+	// default, never a deploy's (audit 2026-09-03 "launch:check blesses a
+	// deploy whose shop is a mock").
+	if (!env.STRIPE_SECRET_KEY) {
+		problems.push(
+			'STRIPE_SECRET_KEY is empty — the shop would run on the in-memory MOCK gateway (orders taken, never paid); set the Stripe key (DEPLOYMENT.md §7)'
+		);
+	}
 
 	for (const spec of ENV_MATRIX) {
 		const problem = devDefaultProblem(spec.name, env[spec.name]);
@@ -138,6 +157,31 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 	}
 
 	return problems;
+}
+
+/**
+ * Advisory findings (FIX-16): printed by `pnpm launch:check`, never fatal.
+ * Each names a configuration that works but is very likely not what the
+ * operator meant on this target.
+ */
+export function launchCheckWarnings(env: Env, opts: LaunchCheckOptions): string[] {
+	const warnings: string[] = [];
+	if (opts.target === 'vercel' && env.DB_DRIVER !== 'neon') {
+		warnings.push(
+			'DB_DRIVER is not neon on the vercel target — a pg pool churns connections per function instance; set DB_DRIVER=neon (DEPLOYMENT.md §12)'
+		);
+	}
+	if (env.DB_DRIVER === 'neon' && env.DB_POOL_MAX && Number(env.DB_POOL_MAX) > 2) {
+		warnings.push(
+			`DB_POOL_MAX=${env.DB_POOL_MAX} with DB_DRIVER=neon — each function instance would open that many WebSockets; leave it unset (default 1) or ≤ 2`
+		);
+	}
+	if (!opts.dev && !env.ERROR_REPORT_URL) {
+		warnings.push(
+			'ERROR_REPORT_URL is not set — server errors are only on stderr; wire a sink or a log drain so someone is notified (DEPLOYMENT.md §11)'
+		);
+	}
+	return warnings;
 }
 
 /**

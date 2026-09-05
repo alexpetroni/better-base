@@ -20,6 +20,9 @@
 //               acknowledge launching a live env (EMAIL_DRYRUN=false) on the
 //               mock chat and/or courier provider (FIX-14)
 //
+// Warnings (`warning: …` lines) are advisory: driver/target mismatches, an
+// oversized pool on the neon driver, no error sink. They never fail the run.
+//
 // The env rules live in src/lib/server/launch-check.ts (variable list from the
 // same env-matrix.ts declaration the boot validator uses); the site-settings
 // rule lives in src/lib/modules/settings (settingsLaunchProblems).
@@ -30,6 +33,7 @@ import {
 	imageProbeBlocker,
 	fiscalProbeBlocker,
 	launchCheckProblems,
+	launchCheckWarnings,
 	probeFiscalPrivacy,
 	probeImages
 } from '../src/lib/server/launch-check.ts';
@@ -65,6 +69,8 @@ const resolvedTarget: DeployTarget =
 	target ?? (env.VERCEL || env.DEPLOY_TARGET === 'vercel' ? 'vercel' : 'node');
 
 const problems = launchCheckProblems(env, { target: resolvedTarget, dev, allowMockProviders });
+// Advisory only (FIX-16): printed, never fatal.
+const warnings = launchCheckWarnings(env, { target: resolvedTarget, dev });
 
 const notes: string[] = [];
 const probeBlocker = noProbe ? '--no-probe' : imageProbeBlocker(env);
@@ -112,6 +118,7 @@ if (dev) {
 const probeNote = notes.length ? ` (${notes.join('; ')})` : '';
 
 const label = `launch:check — target ${resolvedTarget}, SITE_ID ${env.SITE_ID ?? '(unset)'}${dev ? ', --dev' : ''}`;
+warnings.forEach((warning) => console.warn(`  warning: ${warning}`));
 if (problems.length) {
 	console.error(`${label}: FAIL${probeNote}`);
 	problems.forEach((problem, i) => console.error(`  ${i + 1}. ${problem}`));
