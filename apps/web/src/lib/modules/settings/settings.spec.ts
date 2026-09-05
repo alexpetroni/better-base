@@ -197,6 +197,19 @@ describe('request-scoped settings loader', () => {
 	});
 });
 
+describe('company.iban validation (FIX-18)', () => {
+	it('refuses an IBAN that fails the mod-97 checksum with its own error code', () => {
+		expect(validateSettingValue('company.iban', 'RO49AAAA1B31007593480000')).toBe('invalid-iban');
+		expect(validateSettingValue('company.iban', 'not an iban')).toBe('invalid-iban');
+	});
+
+	it('accepts a valid IBAN in any casing/spacing, and the empty value (not launch-required)', () => {
+		expect(validateSettingValue('company.iban', 'RO49AAAA1B31007593840000')).toBeNull();
+		expect(validateSettingValue('company.iban', 'ro49 aaaa 1b31 0075 9384 0000')).toBeNull();
+		expect(validateSettingValue('company.iban', '')).toBeNull();
+	});
+});
+
 // ---------------------------------------------------------------------------
 // Service + launch rule (integration, TEST_DATABASE_URL)
 // ---------------------------------------------------------------------------

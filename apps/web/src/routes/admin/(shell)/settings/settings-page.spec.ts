@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { isActionFailure } from '@sveltejs/kit';
 import { createDb, type Db } from '../../../../lib/db/client.ts';
-import { users } from '../../../../lib/modules/auth/schema.ts';
+import { adminAudit, users } from '../../../../lib/modules/auth/schema.ts';
 import { siteSettings } from '../../../../lib/modules/settings/schema.ts';
 import { createSettingsLoader } from '../../../../lib/modules/settings/service.ts';
 
@@ -183,6 +183,68 @@ describe('/admin/settings save action', () => {
 		expect(
 			(await db.select().from(siteSettings)).find((row) => row.key === 'invoice.vatStandardRates')
 		).toBeUndefined();
+	});
+});
+
+// Review 2026-09-05 #6: settings saves — the invoice IBAN included — left no
+// audit trail, and the IBAN had no checksum.
+describe('/admin/settings audit row and IBAN validation (FIX-18)', () => {
+	const settingsSaves = () =>
+		db.select().from(adminAudit).where(sql`${adminAudit.action} = 'settings-save'`);
+
+	beforeEach(async () => {
+		await db.delete(adminAudit);
+	});
+
+	it('writes one settings-save row per successful save: actor, group, changed keys, IBAN old → new', async () => {
+		const first = await saveAction(
+			saveEvent({ ...COMPANY_FIELDS, 'company.iban': 'RO49AAAA1B31007593840000', 'company.bank': 'Banca X' })
+		);
+		expect(first).toEqual({ saved: true, group: 'company' });
+		const rows = await settingsSaves();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].actor).toBe(STAFF.email);
+		expect(rows[0].target).toContain('company');
+		expect(rows[0].target).toContain('company.legalName');
+		expect(rows[0].target).toContain('company.iban');
+		expect(rows[0].target).toContain('"" → "RO49AAAA1B31007593840000"');
+		expect(rows[0].target).toContain('"" → "Banca X"');
+
+		// Changing only the IBAN records that change with both values.
+		const second = await saveAction(
+			saveEvent({ ...COMPANY_FIELDS, 'company.iban': 'DE89370400440532013000', 'company.bank': 'Banca X' })
+		);
+		expect(second).toEqual({ saved: true, group: 'company' });
+		const after = await settingsSaves();
+		expect(after).toHaveLength(2);
+		const latest = after.find((row) => row.id !== rows[0].id)!;
+		expect(latest.target).toContain('"RO49AAAA1B31007593840000" → "DE89370400440532013000"');
+		expect(latest.target).not.toContain('company.legalName');
+	});
+
+	it('a save that changes nothing writes no audit row', async () => {
+		await saveAction(saveEvent(COMPANY_FIELDS));
+		expect(await settingsSaves()).toHaveLength(1);
+		expect(await saveAction(saveEvent(COMPANY_FIELDS))).toEqual({ saved: true, group: 'company' });
+		expect(await settingsSaves()).toHaveLength(1);
+	});
+
+	it('refuses an IBAN that fails mod-97 with a field error and writes NOTHING', async () => {
+		const result = await saveAction(
+			saveEvent({ ...COMPANY_FIELDS, 'company.iban': 'RO49AAAA1B31007593480000' })
+		);
+		if (!isActionFailure(result)) throw new Error('expected an ActionFailure');
+		expect(result.status).toBe(400);
+		const data = result.data as unknown as { errors: Record<string, string> };
+		expect(data.errors).toEqual({ 'company.iban': 'invalid-iban' });
+		expect(await db.select().from(siteSettings)).toHaveLength(0);
+		expect(await settingsSaves()).toHaveLength(0);
+	});
+
+	it('stores the IBAN normalised (upper case, no spaces)', async () => {
+		await saveAction(saveEvent({ ...COMPANY_FIELDS, 'company.iban': 'ro49 aaaa 1b31 0075 9384 0000' }));
+		const row = (await db.select().from(siteSettings)).find((r) => r.key === 'company.iban');
+		expect(row?.value).toBe('RO49AAAA1B31007593840000');
 	});
 });
 
