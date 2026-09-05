@@ -236,16 +236,18 @@ describe('GET /admin/orders/export', () => {
 		]);
 		expect(new TextDecoder().decode(entries['Factura-EXP-0001.pdf'].slice(0, 5))).toBe('%PDF-');
 
-		const raw = new TextDecoder().decode(entries['facturi.csv']);
-		// UTF-8 BOM: without it a ro-RO Excel reads "Pernă" as mojibake.
-		expect(raw.startsWith('\uFEFF')).toBe(true);
-		const csv = raw.slice(1);
+		// UTF-8 BOM (EF BB BF): without it a ro-RO Excel reads "Pernă" as
+		// mojibake. Checked on the bytes — TextDecoder consumes a BOM silently.
+		expect([...entries['facturi.csv'].slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+		const csv = new TextDecoder().decode(entries['facturi.csv']);
 		const lines = csv.trim().split('\n');
 		// Per-rate base/VAT columns for every rate present in the month, highest first.
 		expect(lines[0]).toBe(
 			'numar;tip;data;cumparator;cui_cumparator;valoare_fara_tva;tva;total;moneda;storneaza;baza_21;tva_21;baza_11;tva_11'
 		);
-		expect(lines[1]).toBe('EXP-0001;factura;2026-08-03;Ana Pop;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00');
+		expect(lines[1]).toBe(
+			'EXP-0001;factura;2026-08-03;Ana Pop;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00'
+		);
 		expect(lines[2]).toBe(
 			'EXP-0002;storno;2026-08-05;Ana Pop;;-41,24;-8,66;-49,90;RON;EXP-0001;-41,24;-8,66;0,00;0,00'
 		);
@@ -254,7 +256,9 @@ describe('GET /admin/orders/export', () => {
 			`'=EXP-0004;factura;2026-08-07;"'+SUM(1;2) SRL";RO999885;20,00;2,20;22,20;RON;;0,00;0,00;20,00;2,20`
 		);
 		// The Bucharest calendar decides the month: 00:30 on 1 Aug is in, 00:30 on 1 Sep is out.
-		expect(lines[4]).toBe('EXP-0005;factura;2026-08-01;Carmen Ionescu;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00');
+		expect(lines[4]).toBe(
+			'EXP-0005;factura;2026-08-01;Carmen Ionescu;;41,24;8,66;49,90;RON;;41,24;8,66;0,00;0,00'
+		);
 		expect(lines).toHaveLength(5);
 		expect(csv).not.toContain('EXP-0006');
 		// July's document stays out of the August archive.
@@ -264,7 +268,8 @@ describe('GET /admin/orders/export', () => {
 	it('the September archive holds the boundary document August must not', async () => {
 		const response = await get(requestEvent('2026-09', ADMIN));
 		const entries = unzipSync(new Uint8Array(await response.arrayBuffer()));
-		const csv = new TextDecoder().decode(entries['facturi.csv']).slice(1);
+		expect([...entries['facturi.csv'].slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+		const csv = new TextDecoder().decode(entries['facturi.csv']);
 		expect(csv).toContain('EXP-0006;factura;2026-09-01;Dan Marin');
 		expect(csv).not.toContain('EXP-0005');
 	});

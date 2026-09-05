@@ -1,4 +1,5 @@
 import { desc, eq, ilike, or } from 'drizzle-orm';
+import { CSV_BOM, csvField } from '../../util/csv.ts';
 import type { Db } from '../../db/client.ts';
 import { normalizeEmail } from '../../util/email.ts';
 import type { Result } from '../../util/result.ts';
@@ -209,12 +210,7 @@ export async function listSubscribers(
 		.orderBy(desc(subscribers.createdAt), desc(subscribers.id));
 }
 
-function csvField(value: string | null): string {
-	const text = value ?? '';
-	return /[",\n\r;]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-/** CSV export for the admin screen. Pure. */
+/** CSV export for the admin screen. Pure. BOM + formula-safe cells (util/csv). */
 export function subscribersCsv(rows: SubscriberRow[]): string {
 	const header = [
 		'email',
@@ -245,8 +241,8 @@ export function subscribersCsv(rows: SubscriberRow[]): string {
 			row.confirmedAt?.toISOString() ?? '',
 			row.createdAt.toISOString()
 		]
-			.map(csvField)
+			.map((value) => csvField(value, ','))
 			.join(',');
 	});
-	return [header.join(','), ...lines].join('\n') + '\n';
+	return CSV_BOM + [header.join(','), ...lines].join('\n') + '\n';
 }
