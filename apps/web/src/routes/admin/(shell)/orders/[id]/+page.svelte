@@ -97,9 +97,13 @@
 		data.invoices.find((doc) => doc.kind === 'invoice')?.grossTotalCents ?? null
 	);
 	const stornoDueCents = $derived(Math.max(0, data.order.refundedCents - data.reversedCents));
+	// Mirrors listOrders' `fiscalIncomplete` (shop/webhook.ts): no invoice, a
+	// refund not fully reversed, or (paid) a partial refund still owing storno.
 	const fiscalIncomplete = $derived(
 		invoiceGrossCents === null ||
-			(data.order.status === 'refunded' && data.reversedCents < invoiceGrossCents)
+			(data.order.status === 'refunded'
+				? data.reversedCents < invoiceGrossCents
+				: data.order.refundedCents > data.reversedCents)
 	);
 
 	const shipping = $derived(data.order.shippingAddress);

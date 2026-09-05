@@ -983,9 +983,11 @@ export function listEmptyCartEvents(
  * - `oversold`: flagged orders still in a pre-shipping state — the ones where
  *   restock / partial refund / apology is still undecided;
  * - `invoice-missing`: orders whose fiscal record is incomplete — paid or
- *   refunded without an invoice (issuance failed), or refunded without the
- *   stornos adding up to the invoice — each fixable with the detail page's
- *   one-click issue action;
+ *   refunded without an invoice (issuance failed), refunded without the
+ *   stornos adding up to the invoice, or partially refunded (still `paid`,
+ *   shipped or not) with the refund exceeding what its stornos reverse
+ *   (FIX-18) — each fixable with the detail page's one-click issue/storno
+ *   action;
  * - a single fulfillment status; or `all`.
  */
 export type OrderListFilter =
@@ -1016,9 +1018,14 @@ const stornoNumbers = sql<
 const reversedCents = sql<number>`coalesce((select sum(-s.gross_total_cents) from invoices s where s.storno_of_invoice_id = ${orderInvoice.id}), 0)::int`;
 /** Days left to submit the order's most urgent document to ANAF (FIX-12). */
 const efacturaDaysLeft = efacturaDaysLeftSql(orders.id);
-/** The single definition of "fiscal record incomplete" — filter and badge agree. */
+/**
+ * The single definition of "fiscal record incomplete" — filter and badge
+ * agree. A `paid` order owes a storno for every refunded ban its stornos do
+ * not reverse yet (a partial refund on a shipped order left the action view
+ * and had no other surface — FIX-10's dropped finding, closed by FIX-18).
+ */
 const fiscalIncomplete = sql<boolean>`case
-	when ${orders.status} = 'paid' then ${orderInvoice.id} is null
+	when ${orders.status} = 'paid' then (${orderInvoice.id} is null or ${orders.refundedCents} > ${reversedCents})
 	when ${orders.status} = 'refunded' then (${orderInvoice.id} is null or ${reversedCents} < ${orderInvoice.grossTotalCents})
 	else false end`;
 
