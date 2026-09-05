@@ -20,8 +20,10 @@ import {
 	listParkedSends,
 	listSequencesWithStats,
 	pruneNurtureEnrollments,
+	retryParkedSend,
 	seedNurtureSequences,
-	setSequenceActive
+	setSequenceActive,
+	stepsHash
 } from './service.ts';
 
 // Integration spec for the nurture queue against the compose Postgres:
@@ -658,6 +660,212 @@ describe('withdrawal stops everything', () => {
 		const step2At = new Date('2026-02-13T07:00:00Z');
 		expect(await drainNurtureSends(drainDeps(), { now: step2At })).toMatchObject({ claimed: 0 });
 		expect((await emailLogTo(subscriber.email)).length).toBe(1);
+	});
+});
+
+// Audit 2026-09-03 P2 "Nurture queue frozen at enrollment".
+describe('queue re-planning (pause/resume, reseed, retry)', () => {
+	const days = (n: number) => n * 24 * 60 * 60 * 1000;
+
+	it('pause → resume past the grace window cancels stale steps as `stale` and sends the rest in order', async () => {
+		const sequence = await makeSequence({
+			steps: [
+				{ offsetDays: 0, templateKey: 'nurture', subject: 'S1', paragraphs: ['P'] },
+				{ offsetDays: 4, templateKey: 'nurture', subject: 'S2', paragraphs: ['P'] }
+			]
+		});
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+
+		// Operator pauses before anything goes out; resumes 4 days + 1 hour later:
+		// step 1 is ~97 h late (past NURTURE_STALE_SEND_HOURS), step 2 is 1 h late.
+		await setSequenceActive({ db }, sequence.id, false, NOW);
+		const resumeAt = new Date(NOW.getTime() + days(4) + minutes(60));
+		expect((await drainNurtureSends(drainDeps(), { now: resumeAt })).claimed).toBe(0);
+		await setSequenceActive({ db }, sequence.id, true, resumeAt);
+
+		const result = await drainNurtureSends(drainDeps(), { now: resumeAt });
+		expect(result).toMatchObject({ stale: 1, claimed: 1, sent: 1, completed: 1 });
+		const sends = await sendsOf(enrollment.id);
+		expect(sends.map((s) => s.status)).toEqual(['cancelled', 'sent']);
+		expect(sends[0].lastError).toBe('stale');
+		// Only step 2 was ever emailed.
+		expect((await emailLogTo(subscriber.email)).map((r) => r.idempotencyKey)).toEqual([
+			`nurture:${enrollment.id}:1`
+		]);
+		expect((await enrollmentsOf(subscriber.id))[0].status).toBe('completed');
+	});
+
+	it('late-but-within-grace steps of several enrollments go out in (enrollment, step) order', async () => {
+		const sequence = await makeSequence({
+			steps: [
+				{ offsetDays: 0, templateKey: 'nurture', subject: 'S1', paragraphs: ['P'] },
+				{ offsetDays: 1, templateKey: 'nurture', subject: 'S2', paragraphs: ['P'] }
+			]
+		});
+		const enrolled: string[] = [];
+		for (let i = 0; i < 3; i += 1) {
+			const subscriber = await makeSubscriber();
+			await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+			enrolled.push((await enrollmentsOf(subscriber.id))[0].id);
+		}
+		await setSequenceActive({ db }, sequence.id, false, NOW);
+		const resumeAt = new Date(NOW.getTime() + days(1) + minutes(60));
+		await setSequenceActive({ db }, sequence.id, true, resumeAt);
+
+		const order: string[] = [];
+		const recording: EmailSender = {
+			dryRun: true,
+			send: (input) => {
+				order.push(input.idempotencyKey);
+				return email.send(input);
+			}
+		};
+		const result = await drainNurtureSends(drainDeps({ email: recording }), { now: resumeAt });
+		expect(result).toMatchObject({ claimed: 6, sent: 6, stale: 0 });
+		expect(order).toHaveLength(6);
+		for (const id of enrolled) {
+			const step1 = order.indexOf(`nurture:${id}:0`);
+			const step2 = order.indexOf(`nurture:${id}:1`);
+			expect(step1).toBeGreaterThanOrEqual(0);
+			// Never step 2 before step 1 of the same enrollment.
+			expect(step2).toBeGreaterThan(step1);
+			// …and the two are adjacent: rows are grouped by enrollment.
+			expect(step2).toBe(step1 + 1);
+		}
+	});
+
+	it('stamps the steps hash at enrollment; a reseed re-plans mismatched pending rows and cancels vanished steps', async () => {
+		seq += 1;
+		const definition: NurtureSequenceDefinition = {
+			key: `nur-hash-${seq}`,
+			name: 'Hash',
+			trigger: { kind: 'consent-confirmed' },
+			consentKey: 'newsletter',
+			steps: [
+				{ offsetDays: 0, templateKey: 'nurture', subject: 'S1', paragraphs: ['P'] },
+				{ offsetDays: 3, templateKey: 'nurture', subject: 'S2', paragraphs: ['P'] }
+			]
+		};
+		await seedNurtureSequences(db, [definition], NOW);
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+		const original = stepsHash(definition.steps);
+		expect((await sendsOf(enrollment.id)).map((s) => s.stepsHash)).toEqual([original, original]);
+		await drainNurtureSends(drainDeps(), { now: NOW });
+
+		// Copy + timing of step 2 change, and a step 3 is added.
+		const changed: NurtureSequenceDefinition = {
+			...definition,
+			steps: [
+				definition.steps[0],
+				{ offsetDays: 5, templateKey: 'nurture', subject: 'S2 nou', paragraphs: ['Nou.'] },
+				{ offsetDays: 8, templateKey: 'nurture', subject: 'S3', paragraphs: ['P'] }
+			]
+		};
+		await seedNurtureSequences(db, [changed], NOW);
+		const next = stepsHash(changed.steps);
+		let sends = await sendsOf(enrollment.id);
+		expect(sends.map((s) => [s.stepIndex, s.status, s.stepsHash])).toEqual([
+			[0, 'sent', original], // delivered rows are history — never touched
+			[1, 'pending', next], // re-planned from the enrollment instant
+			[2, 'pending', next] // added
+		]);
+		expect(sends[1].scheduledAt).toEqual(computeStepScheduledAt(NOW, changed.steps[1]));
+		expect(sends[2].scheduledAt).toEqual(computeStepScheduledAt(NOW, changed.steps[2]));
+
+		// An identical reseed is a no-op for the rows.
+		await seedNurtureSequences(db, [changed], NOW);
+		expect((await sendsOf(enrollment.id)).map((s) => s.stepsHash)).toEqual([original, next, next]);
+
+		// Shrinking to one step cancels the pending rows whose step vanished.
+		await seedNurtureSequences(db, [{ ...definition, steps: [definition.steps[0]] }], NOW);
+		sends = await sendsOf(enrollment.id);
+		expect(sends.map((s) => [s.stepIndex, s.status, s.lastError])).toEqual([
+			[0, 'sent', null],
+			[1, 'cancelled', 'replanned'],
+			[2, 'cancelled', 'replanned']
+		]);
+		// Rows planned before the column existed (NULL hash) are left alone.
+		await db
+			.update(nurtureSends)
+			.set({ status: 'pending', stepsHash: null })
+			.where(eq(nurtureSends.id, sends[1].id));
+		await seedNurtureSequences(db, [changed], NOW);
+		expect((await sendsOf(enrollment.id))[1]).toMatchObject({ status: 'pending', stepsHash: null });
+	});
+
+	it('the operator retry re-queues a parked send (attempts reset) and the drain delivers it', async () => {
+		const failing = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'test@example.ro',
+			transport: {
+				send: async () => {
+					throw new Error('smtp down');
+				}
+			}
+		});
+		await makeSequence({
+			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
+		});
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+		let [send] = await sendsOf(enrollment.id);
+		await db.update(nurtureSends).set({ attempts: 4 }).where(eq(nurtureSends.id, send.id));
+		expect(await drainNurtureSends(drainDeps({ email: failing }), { now: NOW })).toMatchObject({
+			parked: 1
+		});
+		[send] = await sendsOf(enrollment.id);
+		expect(send.status).toBe('failed');
+		// A parked send keeps the enrollment open (was closed as completed before).
+		expect((await enrollmentsOf(subscriber.id))[0].status).toBe('active');
+
+		const later = new Date(NOW.getTime() + minutes(30));
+		expect(await retryParkedSend({ db }, send.id, later)).toBe(true);
+		[send] = await sendsOf(enrollment.id);
+		expect(send).toMatchObject({
+			status: 'pending',
+			attempts: 0,
+			lastError: null,
+			scheduledAt: later
+		});
+		// Not a parked row any more → not retriable again; unknown id → false.
+		expect(await retryParkedSend({ db }, send.id, later)).toBe(false);
+		expect(await retryParkedSend({ db }, 'no-such-send', later)).toBe(false);
+
+		expect(await drainNurtureSends(drainDeps(), { now: later })).toMatchObject({
+			sent: 1,
+			completed: 1
+		});
+		expect((await sendsOf(enrollment.id))[0].status).toBe('sent');
+	});
+
+	it('retrying a send of an enrollment closed as completed (legacy) re-opens it', async () => {
+		await makeSequence({
+			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
+		});
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+		const [send] = await sendsOf(enrollment.id);
+		await db
+			.update(nurtureSends)
+			.set({ status: 'failed', attempts: 5, lastError: 'x' })
+			.where(eq(nurtureSends.id, send.id));
+		await db
+			.update(nurtureEnrollments)
+			.set({ status: 'completed', closedAt: NOW })
+			.where(eq(nurtureEnrollments.id, enrollment.id));
+
+		expect(await retryParkedSend({ db }, send.id, NOW)).toBe(true);
+		const [reopened] = await enrollmentsOf(subscriber.id);
+		expect(reopened.status).toBe('active');
+		expect(reopened.closedAt).toBeNull();
+		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({ sent: 1 });
 	});
 });
 

@@ -91,6 +91,7 @@ describe('GET /api/cron/nurture-send', () => {
 			retried: 0,
 			parked: 0,
 			cancelled: 0,
+			stale: 0,
 			completed: 0
 		});
 	});

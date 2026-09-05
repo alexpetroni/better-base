@@ -46,16 +46,25 @@ const EDITOR = {
 type Page = typeof import('./+page.server.ts');
 let load: Page['load'];
 let toggle: (event: { request: Request; locals: App.Locals }) => Promise<unknown>;
+let retry: (event: { request: Request; locals: App.Locals }) => Promise<unknown>;
 
 function locals(user: typeof ADMIN | typeof EDITOR | null): App.Locals {
 	return { user, settings: createSettingsLoader(() => db) };
 }
 
 function toggleEvent(user: typeof ADMIN | typeof EDITOR | null, fields: Record<string, string>) {
+	return actionEvent('toggle', user, fields);
+}
+
+function actionEvent(
+	name: 'toggle' | 'retry',
+	user: typeof ADMIN | typeof EDITOR | null,
+	fields: Record<string, string>
+) {
 	const body = new FormData();
 	for (const [key, value] of Object.entries(fields)) body.set(key, value);
 	return {
-		request: new Request('http://localhost/admin/nurture?/toggle', { method: 'POST', body }),
+		request: new Request(`http://localhost/admin/nurture?/${name}`, { method: 'POST', body }),
 		locals: locals(user)
 	};
 }
@@ -73,6 +82,7 @@ beforeAll(async () => {
 	const page = await import('./+page.server.ts');
 	load = page.load;
 	toggle = page.actions.toggle as typeof toggle;
+	retry = page.actions.retry as typeof retry;
 
 	// One sequence with one enrollment: a sent step and a parked step.
 	await db.insert(nurtureSequences).values({
@@ -179,5 +189,26 @@ describe('/admin/nurture', () => {
 		expect(isActionFailure(missing) && missing.status === 400).toBe(true);
 		const malformed = await toggle(toggleEvent(ADMIN, { id: 'np-seq', active: 'maybe' }));
 		expect(isActionFailure(malformed) && malformed.status === 400).toBe(true);
+	});
+
+	// Audit 2026-09-03 P2: parked sends had no way back into the queue.
+	it('editor gets 403 from the retry action; admin re-queues the parked send', async () => {
+		await expect(retry(actionEvent('retry', EDITOR, { id: 'np-send-1' }))).rejects.toSatisfy(
+			(e) => isHttpError(e) && e.status === 403
+		);
+		let [send] = await db.select().from(nurtureSends).where(eq(nurtureSends.id, 'np-send-1'));
+		expect(send.status).toBe('failed');
+
+		expect(await retry(actionEvent('retry', ADMIN, { id: 'np-send-1' }))).toEqual({
+			retried: true
+		});
+		[send] = await db.select().from(nurtureSends).where(eq(nurtureSends.id, 'np-send-1'));
+		expect(send).toMatchObject({ status: 'pending', attempts: 0, lastError: null });
+		// The parked list is empty now; a second retry of a pending row is refused.
+		expect((await load({ locals: locals(ADMIN) } as Parameters<Page['load']>[0])).parked).toEqual(
+			[]
+		);
+		const again = await retry(actionEvent('retry', ADMIN, { id: 'np-send-1' }));
+		expect(isActionFailure(again) && again.status).toBe(400);
 	});
 });
