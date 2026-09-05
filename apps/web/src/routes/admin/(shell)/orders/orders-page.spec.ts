@@ -903,4 +903,36 @@ describe('/admin/orders/[id] ?/stornoPartial — the fiscal side of a partial re
 		expect(row?.refundedCents).toBe(1500);
 		expect(row?.status).toBe('paid');
 	});
+
+	// FIX-10's dropped medium finding (review 2026-09-05 #11): a SHIPPED order
+	// with a partial refund has left the action view, and the invoice-missing
+	// predicate ignored `refunded_cents > Σ stornos` — the owed storno never
+	// surfaced anywhere.
+	it('?f=invoice-missing: a shipped, partially refunded order without a storno is listed until the storno covers the refund', async () => {
+		const order = await insertOrder({
+			fulfillment: 'shipped',
+			refundedCents: 1500,
+			items: [{ name: 'Pernă', qty: 2, priceCents: 4990 }]
+		});
+		await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) });
+		expect((await docsOf(order.id)).map((d) => d.kind)).toEqual(['invoice']);
+
+		const owed = await loadIds('http://localhost/admin/orders?f=invoice-missing');
+		expect(owed.filter).toBe('invoice-missing');
+		expect(owed.ids).toContain(order.id);
+		const row = (await listOrders({ db }, 'invoice-missing')).find((o) => o.id === order.id);
+		expect(row?.fiscalIncomplete).toBe(true);
+		// Not in the action view (shipped) — the queue is its only surface.
+		expect((await loadIds('http://localhost/admin/orders')).ids).not.toContain(order.id);
+
+		expect(await stornoPartialAction({ params: { id: order.id }, locals: locals(ADMIN) })).toEqual({
+			stornoIssued: true
+		});
+		expect((await loadIds('http://localhost/admin/orders?f=invoice-missing')).ids).not.toContain(
+			order.id
+		);
+		const settled = (await listOrders({ db }, 'all')).find((o) => o.id === order.id);
+		expect(settled?.fiscalIncomplete).toBe(false);
+		expect(settled?.reversedCents).toBe(1500);
+	});
 });
