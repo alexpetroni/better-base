@@ -3049,3 +3049,16 @@ nurture drain answers a `stale` counter (DEPLOYMENT §9/§12 samples updated).
   withdraws + cancels, as specified; a per-message delivery status column is
   a later phase.
 
+
+**Verification (fix round 1, 2026-09-05):** the first gate run failed only on
+`admin-authz.spec.ts` — the new `retry` action was not declared in the route
+manifest (`1941cf9`, manifest row `retry: 'admin'`; the action already called
+`requireAdmin` before reading the form). `pnpm test:e2e` then failed in
+global setup on both site databases: `invoice_submissions` (0026) references
+`invoices`, so the fiscal `TRUNCATE` was refused — it is now in the list
+(`d79adfe`, test infrastructure only; this predates FIX-13). Results in this
+round: `pnpm lint && pnpm check && pnpm test:unit` green (112 files, 1119
+passed, 4 skipped); `pnpm test:e2e` (adapter-node build + both preview
+sites) 89 passed, 5 skipped, 0 failed; `pnpm db:migrate` clean on a fresh
+database (28 migrations, 35 tables) and on the populated dev database, with
+`email_log.headers` and `nurture_sends.steps_hash` present on both.
