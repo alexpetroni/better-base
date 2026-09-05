@@ -80,6 +80,7 @@ describe('/blog/[slug]', () => {
 	it('serves a published article tagged to an active pillar', async () => {
 		const somn = await publishedArticle('Articol despre somn', ['somn']);
 		const data = await detailLoad(somn);
+		if (!data) throw new Error('load returned nothing');
 		expect(data.canonical).toContain(`/blog/${somn}`);
 	});
 });
@@ -95,6 +96,7 @@ describe('/blog?page=', () => {
 	it('404s past the last page, but page 1 always renders', async () => {
 		await expect(listLoad('?page=999')).rejects.toMatchObject({ status: 404 });
 		const first = await listLoad('');
+		if (!first) throw new Error('load returned nothing');
 		expect(first.page).toBe(1);
 		expect(first.pageCount).toBeGreaterThanOrEqual(1);
 	});

@@ -93,6 +93,7 @@ describe('/quiz/[slug]/rezultat/[resultId]', () => {
 	it('renders a result of a quiz tagged to an active pillar', async () => {
 		const { slug, resultId } = await resultFor('Chestionar somn', 'somn');
 		const data = await resultLoad(slug, resultId);
+		if (!data) throw new Error('load returned nothing');
 		expect(data.quizSlug).toBe(slug);
 		expect(data.profile.band).toBeDefined();
 	});

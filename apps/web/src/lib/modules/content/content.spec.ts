@@ -247,6 +247,7 @@ describe('article export → import between two databases', () => {
 		const exported = await exportContent(depsA, { type: 'article', slug: 'articol-partajat' });
 		if (!exported.ok) throw new Error(exported.error);
 		const wire: ContentBundle = JSON.parse(JSON.stringify(exported.value));
+		if (wire.type !== 'article') throw new Error('expected an article bundle');
 		wire.article.slug = 'articol-atomic';
 
 		const { db: faulty, fault } = withDbFault(dbB, 'insert', articlePillars);
