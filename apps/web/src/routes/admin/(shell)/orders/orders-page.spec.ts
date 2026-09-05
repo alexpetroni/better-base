@@ -11,7 +11,12 @@ import {
 	transitionFulfillment
 } from '../../../../lib/modules/shop/fulfillment-service.ts';
 import type { FulfillmentStatus } from '../../../../lib/modules/shop/fulfillment.ts';
-import { invoiceLines, invoices } from '../../../../lib/modules/invoice/schema.ts';
+import {
+	invoiceLines,
+	invoices,
+	invoiceSubmissions
+} from '../../../../lib/modules/invoice/schema.ts';
+import { EFACTURA_MAX_ATTEMPTS } from '../../../../lib/modules/invoice/submissions.ts';
 import { siteSettings } from '../../../../lib/modules/settings/schema.ts';
 import {
 	orderEvents,
@@ -72,6 +77,11 @@ let stornoPartialAction: (event: {
 	locals: App.Locals;
 }) => Promise<unknown>;
 let updateShippingAddressAction: (event: {
+	request: Request;
+	params: { id: string };
+	locals: App.Locals;
+}) => Promise<unknown>;
+let requeueAction: (event: {
 	request: Request;
 	params: { id: string };
 	locals: App.Locals;
@@ -174,6 +184,7 @@ beforeAll(async () => {
 	stornoPartialAction = detailPage.actions.stornoPartial as unknown as typeof stornoPartialAction;
 	updateShippingAddressAction = detailPage.actions
 		.updateShippingAddress as unknown as typeof updateShippingAddressAction;
+	requeueAction = detailPage.actions.requeue as unknown as typeof requeueAction;
 });
 
 afterAll(async () => {
@@ -430,6 +441,105 @@ describe('/admin/orders/[id] ?/issueInvoice — the one-click fiscal retry', () 
 		expect(data.invoices).toHaveLength(1);
 		expect(data.invoices[0]).toMatchObject({ kind: 'invoice', displayNumber: 'QUE-0001' });
 		expect(data.events.some((e) => e.kind === 'invoice-issued')).toBe(true);
+	});
+});
+
+// FIX-17 (FIX-12 review, medium): the operator's way back into the e-Factura
+// queue for a document parked after EFACTURA_MAX_ATTEMPTS.
+describe('/admin/orders/[id] ?/requeue — re-queue a parked e-Factura submission', () => {
+	function requeueEvent(
+		orderId: string,
+		user: typeof ADMIN | typeof EDITOR | null,
+		invoiceId?: string
+	) {
+		const body = new FormData();
+		if (invoiceId !== undefined) body.set('invoiceId', invoiceId);
+		return {
+			request: new Request(`http://localhost/admin/orders/${orderId}?/requeue`, {
+				method: 'POST',
+				body
+			}),
+			params: { id: orderId },
+			locals: locals(user)
+		};
+	}
+
+	/** An issued invoice whose submission row is parked. */
+	async function parkedInvoice(): Promise<{ orderId: string; invoiceId: string }> {
+		const order = await insertOrder({});
+		expect(await issueInvoiceAction({ params: { id: order.id }, locals: locals(ADMIN) })).toEqual({
+			invoiceIssued: true
+		});
+		const [invoice] = await db.select().from(invoices).where(eq(invoices.orderId, order.id));
+		await db
+			.update(invoiceSubmissions)
+			.set({ status: 'failed', attempts: EFACTURA_MAX_ATTEMPTS, error: 'SPV answered 500' })
+			.where(eq(invoiceSubmissions.invoiceId, invoice.id));
+		return { orderId: order.id, invoiceId: invoice.id };
+	}
+
+	it('editor: 403 before anything is written', async () => {
+		const { orderId, invoiceId } = await parkedInvoice();
+		try {
+			await requeueAction(requeueEvent(orderId, EDITOR, invoiceId));
+			expect.unreachable('the action must throw');
+		} catch (err) {
+			if (!isHttpError(err)) throw err;
+			expect(err.status).toBe(403);
+		}
+		const [row] = await db
+			.select()
+			.from(invoiceSubmissions)
+			.where(eq(invoiceSubmissions.invoiceId, invoiceId));
+		expect(row).toMatchObject({ status: 'failed', attempts: EFACTURA_MAX_ATTEMPTS });
+	});
+
+	it('admin: the load lists the parked document, requeue resets it, a second click is a 400', async () => {
+		const { orderId, invoiceId } = await parkedInvoice();
+		const before = (await detailLoad({
+			params: { id: orderId }
+		} as Parameters<DetailPage['load']>[0])) as {
+			parkedSubmissions: Array<{ invoiceId: string; attempts: number; error: string | null }>;
+		};
+		expect(before.parkedSubmissions).toEqual([
+			{ invoiceId, attempts: EFACTURA_MAX_ATTEMPTS, error: 'SPV answered 500' }
+		]);
+
+		expect(await requeueAction(requeueEvent(orderId, ADMIN, invoiceId))).toEqual({
+			requeued: true
+		});
+		const [row] = await db
+			.select()
+			.from(invoiceSubmissions)
+			.where(eq(invoiceSubmissions.invoiceId, invoiceId));
+		expect(row).toMatchObject({ status: 'pending', attempts: 0, error: null, nextAttemptAt: null });
+		const after = (await detailLoad({
+			params: { id: orderId }
+		} as Parameters<DetailPage['load']>[0])) as { parkedSubmissions: unknown[] };
+		expect(after.parkedSubmissions).toEqual([]);
+
+		const again = await requeueAction(requeueEvent(orderId, ADMIN, invoiceId));
+		if (!isActionFailure(again)) throw new Error('expected an ActionFailure');
+		expect(again.status).toBe(400);
+		expect(again.data).toMatchObject({ requeueError: 'not-found' });
+	});
+
+	it('a missing invoiceId is a 400; a document of ANOTHER order is not re-queued through this page', async () => {
+		const { orderId } = await parkedInvoice();
+		const other = await parkedInvoice();
+		const invalid = await requeueAction(requeueEvent(orderId, ADMIN));
+		if (!isActionFailure(invalid)) throw new Error('expected an ActionFailure');
+		expect(invalid.status).toBe(400);
+		expect(invalid.data).toMatchObject({ requeueError: 'invalid' });
+
+		const foreign = await requeueAction(requeueEvent(orderId, ADMIN, other.invoiceId));
+		if (!isActionFailure(foreign)) throw new Error('expected an ActionFailure');
+		expect(foreign.data).toMatchObject({ requeueError: 'not-found' });
+		const [row] = await db
+			.select()
+			.from(invoiceSubmissions)
+			.where(eq(invoiceSubmissions.invoiceId, other.invoiceId));
+		expect(row.status).toBe('failed');
 	});
 });
 

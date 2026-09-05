@@ -65,7 +65,8 @@ const MANIFEST: Record<string, ManifestRow> = {
 			stornoPartial: 'admin',
 			generateAwb: 'admin',
 			updateShippingAddress: 'admin',
-			resendInvoice: 'admin'
+			resendInvoice: 'admin',
+			requeue: 'admin'
 		}
 	},
 	'./admin/(shell)/orders/export/+server.ts': { methods: { GET: 'admin' } },

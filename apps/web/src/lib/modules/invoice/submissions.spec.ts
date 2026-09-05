@@ -15,6 +15,9 @@ import {
 	EFACTURA_DEADLINE_DAYS,
 	EFACTURA_MAX_ATTEMPTS,
 	EFACTURA_SKIPPED_RETRY_MS,
+	listParkedSubmissionsForOrder,
+	requeueAllParkedSubmissions,
+	requeueParkedSubmission,
 	submissionRetryDelayMs,
 	submitPendingEFactura,
 	type EFacturaDrainDeps
@@ -335,6 +338,96 @@ describe('the cron drains pending submissions', () => {
 		expect(new Set(seen).size).toBe(12);
 		const rows = await db.select().from(invoiceSubmissions);
 		expect(rows.every((row) => row.status === 'submitted' && row.claimedAt === null)).toBe(true);
+	});
+});
+
+// FIX-17 (FIX-12 review, medium): a parked row was never claimed again and
+// nothing but manual SQL could reset it, while the 5-day statutory clock kept
+// running. The operator re-queue is the way back into the cron's queue.
+describe('operator re-queue of a parked submission', () => {
+	async function parkRow(invoiceId: string) {
+		await db
+			.update(invoiceSubmissions)
+			.set({
+				status: 'failed',
+				attempts: EFACTURA_MAX_ATTEMPTS,
+				error: 'SPV answered 500',
+				nextAttemptAt: null
+			})
+			.where(eq(invoiceSubmissions.invoiceId, invoiceId));
+	}
+
+	it('a failed row at EFACTURA_MAX_ATTEMPTS is claimed and submitted by the next tick after requeue', async () => {
+		await resetOrders();
+		const order = await insertPaidOrder();
+		await ensureInvoicesForOrder({ db }, order.id, 'test');
+		const [{ invoiceId }] = await submissionsOf(order.id);
+		await parkRow(invoiceId);
+		const { submitter, seen } = submittingMock();
+		const deps: EFacturaDrainDeps = { db, storage: memoryStorage(), efactura: submitter };
+		const now = new Date();
+		// Parked: the cron ignores it…
+		expect((await submitPendingEFactura(deps, { now })).claimed).toBe(0);
+		expect(await listParkedSubmissionsForOrder({ db }, order.id)).toEqual([
+			{ invoiceId, attempts: EFACTURA_MAX_ATTEMPTS, error: 'SPV answered 500' }
+		]);
+
+		// …until an operator re-queues it.
+		expect(await requeueParkedSubmission({ db }, invoiceId)).toBe(true);
+		let [row] = await submissionsOf(order.id);
+		expect(row).toMatchObject({
+			status: 'pending',
+			attempts: 0,
+			nextAttemptAt: null,
+			error: null,
+			claimedAt: null
+		});
+		expect(await listParkedSubmissionsForOrder({ db }, order.id)).toEqual([]);
+
+		const result = await submitPendingEFactura(deps, { now });
+		expect(result).toEqual({ claimed: 1, submitted: 1, skipped: 0, retried: 0, parked: 0 });
+		expect(seen).toEqual([invoiceId]);
+		[row] = await submissionsOf(order.id);
+		expect(row.status).toBe('submitted');
+		expect(row.anafIndex).toBe(
+			`anaf-${(await loadInvoiceModel(deps, invoiceId))!.invoice.displayNumber}`
+		);
+	});
+
+	it('a pending or submitted row is untouched (returns false); an unknown invoice too', async () => {
+		await resetOrders();
+		const order = await insertPaidOrder();
+		await ensureInvoicesForOrder({ db }, order.id, 'test');
+		const [pending] = await submissionsOf(order.id);
+		expect(await requeueParkedSubmission({ db }, pending.invoiceId)).toBe(false);
+		expect((await submissionsOf(order.id))[0]).toMatchObject({ status: 'pending', attempts: 0 });
+
+		const { submitter } = submittingMock();
+		await submitPendingEFactura({ db, storage: memoryStorage(), efactura: submitter });
+		const [submitted] = await submissionsOf(order.id);
+		expect(submitted.status).toBe('submitted');
+		expect(await requeueParkedSubmission({ db }, submitted.invoiceId)).toBe(false);
+		expect((await submissionsOf(order.id))[0]).toMatchObject({
+			status: 'submitted',
+			anafIndex: submitted.anafIndex
+		});
+		expect(await requeueParkedSubmission({ db }, 'no-such-invoice')).toBe(false);
+	});
+
+	it('the "all parked" variant re-queues every failed row and nothing else', async () => {
+		await resetOrders();
+		const parkedOrders = [await insertPaidOrder(), await insertPaidOrder()];
+		const untouched = await insertPaidOrder();
+		for (const order of [...parkedOrders, untouched]) {
+			await ensureInvoicesForOrder({ db }, order.id, 'test');
+		}
+		for (const order of parkedOrders) await parkRow((await submissionsOf(order.id))[0].invoiceId);
+
+		expect(await requeueAllParkedSubmissions({ db })).toBe(2);
+		const rows = await db.select().from(invoiceSubmissions);
+		expect(rows).toHaveLength(3);
+		expect(rows.every((row) => row.status === 'pending' && row.attempts === 0)).toBe(true);
+		expect(await requeueAllParkedSubmissions({ db })).toBe(0);
 	});
 });
 
