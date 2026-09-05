@@ -117,7 +117,9 @@ export type ImageSourceInput =
 export function imageSources(
 	provider: ImageProvider,
 	source: ImageSourceInput,
-	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number }
+	// `placeholder: false` skips the blurhash decode (a PNG per call) —
+	// thumbnail grids that render dozens of rows per load opt out (FIX-15).
+	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number; placeholder?: boolean }
 ): ImageSources {
 	const row = typeof source === 'string' ? null : source;
 	const key = row ? row.key : (source as string);
@@ -152,6 +154,9 @@ export function imageSources(
 		width: opts.w,
 		height,
 		alt: row?.alt ?? '',
-		placeholder: !isSvg && row?.blurhash ? blurhashPlaceholder(row.blurhash, natural) : null
+		placeholder:
+			opts.placeholder !== false && !isSvg && row?.blurhash
+				? blurhashPlaceholder(row.blurhash, natural)
+				: null
 	};
 }

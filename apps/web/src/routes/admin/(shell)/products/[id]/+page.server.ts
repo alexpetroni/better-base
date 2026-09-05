@@ -10,6 +10,7 @@ import {
 	updateProduct,
 	type ProductPatch
 } from '$lib/modules/shop/server';
+import { imgSources } from '$lib/modules/media/server';
 import { failResult, formStr, formStrAll, requireAdmin } from '$lib/server/forms';
 import { loadLibraryImages } from '$lib/server/media-library';
 import { resolveSitePillars } from '$lib/server/site';
@@ -19,10 +20,16 @@ export const load: PageServerLoad = async ({ params }) => {
 	const found = await getProduct({ db: getDb() }, params.id);
 	if (!found) error(404);
 
+	// Thumbs for the product's own cover + gallery, so the editor does not
+	// depend on the (paginated) library containing them.
+	const productThumbs = [...(found.cover ? [found.cover] : []), ...found.galleryMedia]
+		.filter((row) => row.key)
+		.map((row) => ({ id: row.id, thumb: imgSources(row, { w: 240, h: 180, fit: 'fill' }) }));
 	return {
 		product: found.product,
 		pillarSlugs: found.pillarSlugs,
 		sitePillars: resolveSitePillars(),
+		productThumbs,
 		library: await loadLibraryImages()
 	};
 };

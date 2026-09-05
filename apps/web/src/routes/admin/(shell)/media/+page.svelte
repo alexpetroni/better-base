@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages';
 	import { Img } from '$lib/modules/media';
 
@@ -223,4 +224,35 @@
 			</li>
 		{/each}
 	</ul>
+	{#if data.pageCount > 1}
+		<nav
+			data-testid="media-pagination"
+			class="mt-6 flex items-center justify-between text-sm"
+			aria-label={m.blog_page_of({ page: data.page, pageCount: data.pageCount })}
+		>
+			{#if data.page > 1}
+				<a
+					href="{resolve('/admin/(shell)/media')}?page={data.page - 1}"
+					class="text-(--color-brand) hover:underline"
+				>
+					← {m.blog_page_prev()}
+				</a>
+			{:else}
+				<span></span>
+			{/if}
+			<span class="text-(--color-ink)/60">
+				{m.blog_page_of({ page: data.page, pageCount: data.pageCount })}
+			</span>
+			{#if data.page < data.pageCount}
+				<a
+					href="{resolve('/admin/(shell)/media')}?page={data.page + 1}"
+					class="text-(--color-brand) hover:underline"
+				>
+					{m.blog_page_next()} →
+				</a>
+			{:else}
+				<span></span>
+			{/if}
+		</nav>
+	{/if}
 {/if}

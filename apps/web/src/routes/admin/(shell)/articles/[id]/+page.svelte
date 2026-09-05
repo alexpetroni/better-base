@@ -286,5 +286,5 @@
 </form>
 
 {#if picker !== 'closed'}
-	<MediaPicker items={data.library} onpick={onPick} onclose={() => (picker = 'closed')} />
+	<MediaPicker library={data.library} onpick={onPick} onclose={() => (picker = 'closed')} />
 {/if}

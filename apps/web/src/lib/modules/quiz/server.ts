@@ -13,6 +13,7 @@ export {
 	type ClaimQuizResultOutcome,
 	type QuizFunnelDeps
 } from './funnel.ts';
+export { quizzesMediaReferenceCheck } from './media-ref.ts';
 export { quizResults, quizzes } from './schema.ts';
 export {
 	createQuiz,

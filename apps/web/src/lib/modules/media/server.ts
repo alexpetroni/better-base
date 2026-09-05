@@ -57,11 +57,13 @@ export {
 	deleteMedia,
 	getMedia,
 	listMedia,
+	MEDIA_PAGE_SIZE,
 	requestUpload,
 	updateMediaAlt,
 	type MediaDeleteDeps,
 	type MediaDeps,
 	type MediaError,
+	type MediaPage,
 	type MediaReferenceCheck,
 	type Result,
 	type UploadTicket
@@ -125,7 +127,7 @@ export function imgUrl(key: string, opts: ImgOptions = {}): string {
 /** `ImageSources` for the <Img> component, using the app's env config. */
 export function imgSources(
 	source: ImageSourceInput,
-	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number }
+	opts: Omit<ImgOptions, 'format' | 'dpr'> & { w: number; placeholder?: boolean }
 ): ImageSources {
 	return imageSources(getImageProvider(), source, opts);
 }

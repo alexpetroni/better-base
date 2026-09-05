@@ -13,8 +13,10 @@
 	let { data, form } = $props();
 
 	// The editor buffer below intentionally captures INITIAL server data.
+	// Cover/gallery thumbs come with the product itself (the library is one
+	// page of many since FIX-15, so it cannot be the source for them).
 	// svelte-ignore state_referenced_locally
-	const thumbById = new Map(data.library.map((item) => [item.id, item.thumb]));
+	const thumbById = new Map(data.productThumbs.map((t) => [t.id, t.thumb]));
 
 	// The form intentionally captures the product's INITIAL values — it is an
 	// editing buffer, not a live view of server data.
@@ -335,5 +337,5 @@
 </form>
 
 {#if picker !== 'closed'}
-	<MediaPicker items={data.library} onpick={onPick} onclose={() => (picker = 'closed')} />
+	<MediaPicker library={data.library} onpick={onPick} onclose={() => (picker = 'closed')} />
 {/if}

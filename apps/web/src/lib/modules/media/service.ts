@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { imageSize } from 'image-size';
 import type { Db } from '../../db/client.ts';
 import type { Result as ResultOf } from '../../util/result.ts';
@@ -246,8 +246,32 @@ export async function createVideoEmbed(
 	return row;
 }
 
-export function listMedia(deps: Pick<MediaDeps, 'db'>): Promise<MediaRow[]> {
-	return deps.db.select().from(media).orderBy(desc(media.createdAt), desc(media.id));
+/** Rows per page in the admin library and the picker (FIX-15: no more unbounded reads). */
+export const MEDIA_PAGE_SIZE = 48;
+
+export interface MediaPage {
+	items: MediaRow[];
+	total: number;
+	page: number;
+	pageSize: number;
+	pageCount: number;
+}
+
+/** One page of the library, newest first. A page past the end is empty, not an error. */
+export async function listMedia(
+	deps: Pick<MediaDeps, 'db'>,
+	opts: { page?: number; pageSize?: number } = {}
+): Promise<MediaPage> {
+	const pageSize = opts.pageSize ?? MEDIA_PAGE_SIZE;
+	const page = Math.max(1, opts.page ?? 1);
+	const [{ total }] = await deps.db.select({ total: sql<number>`count(*)::int` }).from(media);
+	const items = await deps.db
+		.select()
+		.from(media)
+		.orderBy(desc(media.createdAt), desc(media.id))
+		.limit(pageSize)
+		.offset((page - 1) * pageSize);
+	return { items, total, page, pageSize, pageCount: Math.ceil(total / pageSize) };
 }
 
 export async function getMedia(deps: Pick<MediaDeps, 'db'>, id: string): Promise<MediaRow | null> {

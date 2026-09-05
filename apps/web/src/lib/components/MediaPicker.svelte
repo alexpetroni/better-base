@@ -9,6 +9,13 @@
 		alt: string;
 		thumb: ImageSources;
 	}
+
+	/** One page of the library (FIX-15: the picker no longer loads every row). */
+	export interface LibraryPage {
+		items: LibraryImage[];
+		page: number;
+		pageCount: number;
+	}
 </script>
 
 <script lang="ts">
@@ -16,14 +23,30 @@
 	import { Img } from '$lib/modules/media';
 
 	let {
-		items,
+		library,
 		onpick,
 		onclose
 	}: {
-		items: LibraryImage[];
+		/** Page 1, from the editor's server load; further pages are fetched here. */
+		library: LibraryPage;
 		onpick: (item: LibraryImage) => void;
 		onclose: () => void;
 	} = $props();
+
+	// The picker owns its paging state from the page the editor loaded.
+	// svelte-ignore state_referenced_locally
+	let current = $state<LibraryPage>(library);
+	let loading = $state(false);
+
+	async function goTo(page: number) {
+		loading = true;
+		try {
+			const res = await fetch(`/admin/media/library?page=${page}`);
+			if (res.ok) current = await res.json();
+		} finally {
+			loading = false;
+		}
+	}
 </script>
 
 <div
@@ -46,13 +69,13 @@
 			</button>
 		</div>
 		<div class="overflow-y-auto p-4">
-			{#if items.length === 0}
+			{#if current.items.length === 0}
 				<p data-testid="media-picker-empty" class="text-(--color-ink)/70">
 					{m.admin_article_picker_empty()}
 				</p>
 			{:else}
 				<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-					{#each items as item (item.id)}
+					{#each current.items as item (item.id)}
 						<li>
 							<button
 								type="button"
@@ -71,6 +94,35 @@
 						</li>
 					{/each}
 				</ul>
+			{/if}
+			{#if current.pageCount > 1}
+				<nav
+					data-testid="media-picker-pagination"
+					class="mt-4 flex items-center justify-between text-sm"
+					aria-label={m.blog_page_of({ page: current.page, pageCount: current.pageCount })}
+				>
+					<button
+						type="button"
+						data-testid="media-picker-prev"
+						class="rounded px-2 py-1 text-(--color-brand) hover:bg-(--color-brand-soft) disabled:opacity-40"
+						disabled={loading || current.page <= 1}
+						onclick={() => goTo(current.page - 1)}
+					>
+						← {m.blog_page_prev()}
+					</button>
+					<span class="text-(--color-ink)/60">
+						{m.blog_page_of({ page: current.page, pageCount: current.pageCount })}
+					</span>
+					<button
+						type="button"
+						data-testid="media-picker-next"
+						class="rounded px-2 py-1 text-(--color-brand) hover:bg-(--color-brand-soft) disabled:opacity-40"
+						disabled={loading || current.page >= current.pageCount}
+						onclick={() => goTo(current.page + 1)}
+					>
+						{m.blog_page_next()} →
+					</button>
+				</nav>
 			{/if}
 		</div>
 	</div>
