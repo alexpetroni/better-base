@@ -3062,3 +3062,104 @@ passed, 4 skipped); `pnpm test:e2e` (adapter-node build + both preview
 sites) 89 passed, 5 skipped, 0 failed; `pnpm db:migrate` clean on a fresh
 database (28 migrations, 35 tables) and on the populated dev database, with
 `email_log.headers` and `nurture_sends.steps_hash` present on both.
+
+## Remediation FIX-14 (audit 2026-09-03 P1 "Chat" ×3, P2 mock provider undetectable — batch 2, phase 6)
+
+Chat history parity, provider configuration, abuse bounds, observability.
+One session, test-first per group (`e4f7ee6` → `f60486d` history parity,
+`9c60ba2` → `305307a` provider configuration + stop frames + panel,
+`79c5f1f` → `edf6731` IP-before-session + batched prunes + isolated sweep,
+`e2e482d` → `911dd42` launch-check rule + boot line + health kind). No
+migration.
+
+**New env / flags:** none required. `ANTHROPIC_TIMEOUT_MS` default is now
+20 000 (was 60 000; `.env.example` updated). `pnpm launch:check
+--allow-mock-providers` acknowledges a live env (`EMAIL_DRYRUN=false`) on the
+mock chat and/or courier provider. **New constants:**
+`ANTHROPIC_MAX_RETRIES = 1` (was 2), `ANTHROPIC_INACTIVITY_MS_DEFAULT`
+(15 s), `CHAT_MAX_TOKENS = 2048` (was 1024), `PRUNE_BATCH_SIZE` (5000,
+`src/lib/server/prune.ts` with `deleteInBatches`). **New messages:**
+`chat_reply_truncated`, `chat_reply_declined` (en + ro). **New file:**
+`src/lib/modules/chat/server.spec.ts` (boot line). Chat README rewritten
+(stream contract, history window, the provider-settings table with the
+reasons, abuse bounds, observability).
+
+**Behavior changes the next phase must know:**
+
+- `ChatProvider.stream()` yields `ChatStreamEvent` (`{ delta }` |
+  `{ stop: 'max_tokens' | 'refusal' }`) instead of strings; `ChatOutcome.stream`
+  and `chatSseStream` take the same type. Hand-built fake providers in tests
+  must yield `{ delta }` objects.
+- SSE contract: deltas, then exactly ONE terminal frame — `{ done: true }`,
+  `{ stop }`, or `{ error }`. A stream that closes without one is a broken
+  reply: the panel marks the bubble failed with retry. A `stop` renders as a
+  truncated/declined bubble (`data-stop`) with the same retry; a truncated or
+  declined reply is NOT persisted as an assistant message.
+- `capHistory` drops leading non-`user` turns after slicing; the history read
+  is `ORDER BY created_at DESC, id DESC LIMIT 20` + reverse. In steady state
+  (odd row count at call time) the provider sees 19 rows, never an
+  assistant-first window. Two old assertions that expected the
+  assistant-first 20-row window were corrected (commit message says so).
+- Anthropic call: `thinking: { type: 'disabled' }` (chosen over
+  `output_config: { effort: 'low' }` — deterministic output budget, every
+  token visible; README), `max_tokens` 2048, `stop_reason` read from
+  `message_delta`, 20 s timeout × 2 attempts (< `maxDuration = 60`),
+  15 s stream-inactivity abort, one `formatServerError` JSON line per failed
+  call with the SDK error class (`error.constructor.name` — the SDK leaves
+  `name` at `Error`) and upstream status (`status: 0` for network errors;
+  `path: /api/chat`).
+- `handleChatMessage` consumes the IP counter BEFORE `resolveSession`, then
+  the session counter; a forbidden token now also costs an IP slot; a
+  cookieless caller past the cap creates no session row.
+- `pruneChatSessions(db, now, retentionDays, batchSize)` and
+  `pruneNurtureEnrollments(db, cutoff, batchSize)` loop `DELETE … WHERE id IN
+  (SELECT … LIMIT n)`. `runRetentionSweep(db, now, overrides?)` runs each
+  pruner in its own try/catch; `RetentionSweepResult.failures` lists
+  `{ step, message }` (count 0 for that step, one `console.error` line);
+  `/api/cron/chat-prune` answers 500 and `pnpm chat:prune` exits 1 when a
+  step failed. `pruneStaleRateLimits`/`pruneProcessedEvents`/
+  `pruneMatchedPendingRefunds` are still single statements (small tables,
+  not in the phase).
+- `/api/health` body gains `chatProvider: 'mock' | 'anthropic'`; the chat
+  barrel logs `chat provider: <kind>` once when it constructs the singleton.
+  `launchCheckProblems(env, { …, allowMockProviders })`: with
+  `EMAIL_DRYRUN=false`, `CHAT_PROVIDER !== 'anthropic'` or
+  `COURIER_PROVIDER !== 'sameday'` is a problem unless the flag is set
+  (production-only rule, next to the `sk_test_` one).
+
+**Closed by FIX-14:**
+
+- P1 Chat "History window can start with an assistant turn" — closed
+  (`capHistory` parity + bounded newest-first read; unit + integration).
+- P1 Chat "Provider call misconfigured for this workload" — closed (thinking
+  disabled, higher cap, stop frames, error log line, 20 s/1 retry,
+  inactivity timeout, panel failed-on-close-without-done; provider unit tests
+  through the fake-fetch seam, SSE unit test, service integration test, two
+  chat e2e cases).
+- P1 Chat "Cookieless POSTs insert session rows before the limiter; retention
+  deletes in one statement" — closed (IP counter first; batched prunes for
+  chat sessions and nurture enrollments; isolated sweep steps; integration
+  tests incl. 12 000-row prune and a failing-pruner run).
+- P2 "Mock chat provider in production is undetectable" — closed (launch-check
+  rule + `--allow-mock-providers`, boot line, health kind; courier covered by
+  the same rule).
+
+**Deferred / not done, on purpose:**
+
+- Batching the three remaining single-statement pruners (rate-limit
+  counters, processed events, matched pending refunds) — not in the phase;
+  their tables are bounded by their own windows.
+- A retry that re-asks with a "shorter answer" hint after a `max_tokens`
+  stop — the panel re-sends the same question; the copy asks the visitor to
+  retry for a shorter answer.
+
+**Verification (2026-09-05):** `pnpm lint && pnpm check && pnpm test:unit`
+green (web: 113 files, 1142 passed, 4 skipped — the same 4 as FIX-13;
+formcomp: 27 passed). `pnpm test:e2e` (adapter-node build + both preview
+sites) first failed only on the funnel's exact-match `/api/health` assertion,
+which now includes `chatProvider: 'mock'`; after that change the two funnel
+specs pass on the same build (2 passed) and the full run was 91 passed,
+5 skipped with those two as the only failures — the preview log shows the
+`chat provider: mock` boot line. The touched DB specs (chat, retention,
+nurture: 54 tests) also pass under `DB_DRIVER=neon` over the local proxy;
+`DEPLOY_TARGET=vercel pnpm build` succeeds. No migration in this phase.
