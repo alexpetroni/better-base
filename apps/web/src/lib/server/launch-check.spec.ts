@@ -322,6 +322,43 @@ describe('launch:check mock-provider rule (FIX-14)', () => {
 	});
 });
 
+// Review 2026-09-05 #3: a production deploy that never flipped EMAIL_DRYRUN
+// takes paid orders and sends nothing — every send is a silent `dryrun` row.
+describe('launch:check dry-run email rule (FIX-18)', () => {
+	const dryRunProblems = (problems: string[]) => problems.filter((p) => /EMAIL_DRYRUN/.test(p));
+
+	it('the unmodified production fixture (EMAIL_DRYRUN=true) is a problem outside --dev', () => {
+		const problems = dryRunProblems(launchCheckProblems(prodEnv(), { target: 'node' }));
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toMatch(/EMAIL_DRYRUN.*true.*no email/i);
+		expect(problems[0]).toMatch(/--allow-mock-providers/);
+	});
+
+	it('an unset EMAIL_DRYRUN is the same silent state (the sender defaults to dry-run)', () => {
+		const env = prodEnv();
+		delete env.EMAIL_DRYRUN;
+		expect(dryRunProblems(launchCheckProblems(env, { target: 'node' }))).toHaveLength(1);
+	});
+
+	it('--allow-mock-providers acknowledges a dry-run rehearsal on purpose', () => {
+		expect(launchCheckProblems(prodEnv(), { target: 'node', allowMockProviders: true })).toEqual(
+			[]
+		);
+		expect(
+			launchCheckProblems(vercelEnv(), { target: 'vercel', allowMockProviders: true })
+		).toEqual([]);
+	});
+
+	it('is silent once the env is live (EMAIL_DRYRUN=false) and under --dev', () => {
+		const env = prodEnv();
+		liveEnv(env);
+		expect(dryRunProblems(launchCheckProblems(env, { target: 'node' }))).toEqual([]);
+		expect(dryRunProblems(launchCheckProblems(devEnv(), { target: 'node', dev: true }))).toEqual(
+			[]
+		);
+	});
+});
+
 describe('launch:check warnings (FIX-16)', () => {
 	it('a complete vercel env warns about nothing', () => {
 		expect(launchCheckWarnings(vercelEnv(), { target: 'vercel' })).toEqual([]);
@@ -368,16 +405,23 @@ describe('launch:check rules', () => {
 		expect(launchCheckProblems(env, { target: 'node', dev: true })).toEqual([]);
 	});
 
+	// The fixtures rehearse on dry-run email (EMAIL_DRYRUN=true), which FIX-18
+	// makes a problem unless acknowledged — so these pass the acknowledgement
+	// and keep asserting that nothing ELSE is wrong with a complete env.
+	const acknowledged = { allowMockProviders: true } as const;
+
 	it('passes a complete prod-shaped env on the node target', () => {
-		expect(launchCheckProblems(prodEnv(), { target: 'node' })).toEqual([]);
+		expect(launchCheckProblems(prodEnv(), { target: 'node', ...acknowledged })).toEqual([]);
 	});
 
 	it('passes a complete prod-shaped env on the vercel target', () => {
-		expect(launchCheckProblems(vercelEnv(), { target: 'vercel' })).toEqual([]);
+		expect(launchCheckProblems(vercelEnv(), { target: 'vercel', ...acknowledged })).toEqual([]);
 	});
 
 	it('passes a complete imgproxy (self-hosted) prod env too', () => {
-		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node' })).toEqual([]);
+		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node', ...acknowledged })).toEqual(
+			[]
+		);
 	});
 
 	it('an imgproxy deploy may derive the fiscal bucket (no public media origin)', () => {
