@@ -9,7 +9,8 @@ import {
 	createEmailSender,
 	EMAIL_SENDING_STALE_MS,
 	shouldSkipResend,
-	type EmailMessage
+	type EmailMessage,
+	type SendEmailInput
 } from './service.ts';
 import { renderEmailTemplate } from './templates.ts';
 
@@ -157,8 +158,8 @@ describe('shouldSkipResend', () => {
 // the send inline).
 describe('resend transport request shape', () => {
 	it('forwards the template headers to Resend', async () => {
-		const fetchFn = vi.fn(async () => Response.json({ id: 're_1' }));
-		const transport = createResendTransport('re_key_not_real', fetchFn as typeof fetch);
+		const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ id: 're_1' }));
+		const transport = createResendTransport('re_key_not_real', fetchFn);
 		await transport.send({
 			from: 'a@b.ro',
 			to: 'x@y.ro',
@@ -313,7 +314,7 @@ describe('sendEmail idempotency (integration)', () => {
 	it('records the template headers on the log row and hands them to the transport', async () => {
 		const transport = fakeTransport();
 		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
-		const nurture = {
+		const nurture: SendEmailInput<'nurture'> = {
 			to: 'test@example.com',
 			template: 'nurture',
 			data: {
@@ -323,7 +324,7 @@ describe('sendEmail idempotency (integration)', () => {
 				unsubscribeUrl: 'https://example.ro/unsubscribe/tok-h'
 			},
 			idempotencyKey: 'headers-1'
-		} as const;
+		};
 		expect((await sender.send(nurture)).status).toBe('sent');
 		const expected = {
 			'List-Unsubscribe': '<https://example.ro/unsubscribe/tok-h>',
@@ -376,7 +377,10 @@ describe('sendEmail idempotency (integration)', () => {
 		});
 		const transport = fakeTransport();
 		const sender = createEmailSender({ db, dryRun: false, from: 'a@b.ro', transport });
-		const outcomes = await Promise.all([sender.send(input('stale-1')), sender.send(input('stale-1'))]);
+		const outcomes = await Promise.all([
+			sender.send(input('stale-1')),
+			sender.send(input('stale-1'))
+		]);
 		expect(outcomes.map((o) => o.status).sort()).toEqual(['sent', 'skipped']);
 		expect(transport.send).toHaveBeenCalledTimes(1);
 		const rows = await rowsFor('stale-1');

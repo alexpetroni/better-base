@@ -5,7 +5,7 @@ import {
 	upsertSubscriber,
 	type NewsletterSignupDeps
 } from '$lib/modules/crm/server';
-import type { ConsentChanges } from '../crm/consent.ts';
+import type { ConsentChanges, ConsentEvidence } from '../crm/consent.ts';
 import type { EmailSender, SendEmailOutcome } from '../email/service.ts';
 import { quizResults } from './schema.ts';
 import { getResultWithQuiz } from './service.ts';
@@ -44,6 +44,8 @@ export interface ClaimQuizResultInput {
 	/** Explicit checkbox states — unticked (false) means "don't touch". */
 	newsletter: boolean;
 	profileEmails: boolean;
+	/** Proof of the grant(s): ip, user agent, the consent copy seen. */
+	evidence?: ConsentEvidence;
 }
 
 export type ClaimQuizResultOutcome =
@@ -73,7 +75,8 @@ export async function claimQuizResult(
 		name: input.name,
 		locale: input.locale,
 		grants,
-		source: `quiz:${quiz.slug}`
+		source: `quiz:${quiz.slug}`,
+		evidence: input.evidence
 	});
 	if (!upserted.ok) return upserted;
 	const subscriber = upserted.value;

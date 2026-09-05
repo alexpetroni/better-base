@@ -3,6 +3,7 @@
 export {
 	EMAIL_TEMPLATE_KEYS,
 	escapeHtml,
+	listUnsubscribeHeaders,
 	renderEmailTemplate,
 	type RenderedEmail,
 	type TemplateData,

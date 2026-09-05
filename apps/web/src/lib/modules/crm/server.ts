@@ -5,13 +5,17 @@ import { tokenSecretFrom } from '$lib/server/secrets';
 export { subscribers, type SubscriberRow } from './schema.ts';
 export {
 	confirmSubscriber,
+	findSubscriberByUnsubscribeToken,
 	getSubscriber,
 	listSubscribers,
+	NEWSLETTER_CONFIRM_PURPOSE,
 	requestNewsletterSignup,
+	revokeConsentsByEmail,
 	sendNewsletterConfirmEmail,
 	subscribersCsv,
 	unsubscribeByToken,
 	upsertSubscriber,
+	verifyNewsletterConfirmToken,
 	type ConfirmOutcome,
 	type CrmDeps,
 	type CrmResult,

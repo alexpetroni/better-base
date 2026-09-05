@@ -1,4 +1,4 @@
-import { error, redirect, type Handle, type HandleServerError } from '@sveltejs/kit';
+import { error, json, redirect, text, type Handle, type HandleServerError } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
@@ -8,6 +8,7 @@ import { getDb } from '$lib/db';
 import { getAuth, guardAdminPath, isStaffRole, routeIdPathname } from '$lib/modules/auth';
 import { createSettingsLoader } from '$lib/modules/settings/server';
 import { assertBootEnv } from '$lib/server/boot';
+import { isForbiddenCrossSiteForm } from '$lib/server/csrf';
 import { formatServerError } from '$lib/server/log';
 import { applySecurityHeaders } from '$lib/server/security-headers';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
@@ -34,6 +35,23 @@ const handleSecurityHeaders: Handle = async ({ event, resolve }) => {
 		{ isAdmin: pathname === '/admin' || pathname.startsWith('/admin/') }
 	);
 	return response;
+};
+
+/**
+ * Kit's origin check, re-implemented so the RFC 8058 one-click unsubscribe
+ * POST can reach its route (see $lib/server/csrf). Runs right after the
+ * headers hook so a refusal still carries the security headers, and before
+ * anything reads the body. Mirrors kit's response shape (403, text or JSON).
+ */
+const handleCsrf: Handle = async ({ event, resolve }) => {
+	if (isForbiddenCrossSiteForm(event.request, event.url, routeIdPathname(event.route.id))) {
+		const message = `Cross-site ${event.request.method} form submissions are forbidden`;
+		if (event.request.headers.get('accept') === 'application/json') {
+			return json({ message }, { status: 403 });
+		}
+		return text(message, { status: 403 });
+	}
+	return resolve(event);
 };
 
 const handleParaglide: Handle = ({ event, resolve }) =>
@@ -101,6 +119,7 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 
 export const handle: Handle = sequence(
 	handleSecurityHeaders,
+	handleCsrf,
 	handleParaglide,
 	handleSettings,
 	handleAdminGuard

@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
+import { CONSENT_TEXT_VERSIONS } from '$lib/modules/crm';
 import { enrollFromQuizResult } from '$lib/modules/nurture/server';
 import { claimQuizResult, getQuizFunnelDeps, getResultWithQuiz } from '$lib/modules/quiz/server';
 import { consumePublicEmailBudget } from '$lib/server/rate-limit';
@@ -34,7 +35,13 @@ export const actions: Actions = {
 			name: String(form.get('name') ?? '') || undefined,
 			locale: getSite().locales[0],
 			newsletter: form.get('newsletter_consent') === 'yes',
-			profileEmails: form.get('profile_consent') === 'yes'
+			profileEmails: form.get('profile_consent') === 'yes',
+			// Proof of the grant(s): who agreed, from which client, to which copy.
+			evidence: {
+				ip: getClientAddress(),
+				userAgent: request.headers.get('user-agent')?.slice(0, 256) || undefined,
+				consentTextVersion: CONSENT_TEXT_VERSIONS
+			}
 		});
 		if (!outcome.ok) {
 			if (outcome.error === 'not-found') error(404);

@@ -9,6 +9,20 @@ export interface RenderedEmail {
 	subject: string;
 	html: string;
 	text: string;
+	/**
+	 * Extra message headers. Marketing templates set the RFC 8058 pair
+	 * (`List-Unsubscribe`, `List-Unsubscribe-Post`) so mail clients offer a
+	 * one-click unsubscribe that POSTs to the same URL as the footer link.
+	 */
+	headers?: Record<string, string>;
+}
+
+/** RFC 8058 one-click headers for a marketing message. */
+export function listUnsubscribeHeaders(unsubscribeUrl: string): Record<string, string> {
+	return {
+		'List-Unsubscribe': `<${unsubscribeUrl}>`,
+		'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+	};
 }
 
 export interface TemplateData {
@@ -293,7 +307,12 @@ ${ctaHtml}
 		'',
 		data.siteName
 	].join('\n');
-	return { subject: data.subject, html, text };
+	return {
+		subject: data.subject,
+		html,
+		text,
+		headers: listUnsubscribeHeaders(data.unsubscribeUrl)
+	};
 }
 
 export function renderEmailTemplate<K extends TemplateKey>(

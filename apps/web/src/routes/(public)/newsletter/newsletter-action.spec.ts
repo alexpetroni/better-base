@@ -80,7 +80,10 @@ describe('POST /newsletter', () => {
 
 	it('records ip, user agent and the consent copy version on the granted consent', async () => {
 		await action(event('proof@example.ro', '198.51.100.23'));
-		const [row] = await db.select().from(subscribers).where(eq(subscribers.email, 'proof@example.ro'));
+		const [row] = await db
+			.select()
+			.from(subscribers)
+			.where(eq(subscribers.email, 'proof@example.ro'));
 		expect(row.consents.newsletter).toMatchObject({
 			granted: true,
 			source: 'footer',

@@ -38,6 +38,10 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			adapter,
+			// The origin check lives in hooks.server.ts (handleCsrf) with the same
+			// rule plus one exemption — the RFC 8058 one-click unsubscribe POST
+			// mail clients send without an Origin header. See $lib/server/csrf.
+			csrf: { checkOrigin: false },
 			// The STATIC half of the CSP — kit nonces its inline bootstrap under
 			// 'strict-dynamic' (script tags the nonced bootstrap creates are
 			// trusted transitively, which is how the consent-gated analytics

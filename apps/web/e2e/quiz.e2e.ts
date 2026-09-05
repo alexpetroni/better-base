@@ -87,7 +87,15 @@ test('visitor completes the seeded quiz, opts into the funnel, confirms and unsu
 			logs.find((l) => l.template === 'newsletter-confirm')!.data as { confirmUrl: string }
 		).confirmUrl;
 		const token = confirmUrl.split('/newsletter/confirm/')[1];
+		// Opening the link only shows the button (a scanner's GET confirms nothing).
 		await page.goto(`/newsletter/confirm/${token}`);
+		await expect(page.getByTestId('confirm-form')).toBeVisible();
+		const [unconfirmed] = await db
+			.select()
+			.from(subscribers)
+			.where(eq(subscribers.email, visitorEmail));
+		expect(unconfirmed.confirmedAt).toBeNull();
+		await page.getByTestId('confirm-button').click();
 		await expect(page.getByTestId('confirm-success')).toBeVisible();
 
 		const [confirmed] = await db
@@ -120,16 +128,24 @@ test('visitor completes the seeded quiz, opts into the funnel, confirms and unsu
 			page.locator('[data-testid="quiz-result-row"]', { hasText: visitorEmail })
 		).toContainText('Somn afectat serios');
 
-		// One-click unsubscribe revokes the consent.
+		// The unsubscribe link shows a confirmation; the button (POST) revokes.
 		const [{ unsubscribeToken }] = await db
 			.select()
 			.from(subscribers)
 			.where(eq(subscribers.email, visitorEmail));
 		await page.goto(`/unsubscribe/${unsubscribeToken}`);
+		await expect(page.getByTestId('unsubscribe-form')).toBeVisible();
+		const [stillIn] = await db
+			.select()
+			.from(subscribers)
+			.where(eq(subscribers.email, visitorEmail));
+		expect(stillIn.consents.newsletter?.granted).toBe(true);
+		await page.getByTestId('unsubscribe-button').click();
 		await expect(page.getByTestId('unsubscribe-done')).toBeVisible();
 		const [after] = await db.select().from(subscribers).where(eq(subscribers.email, visitorEmail));
 		expect(after.consents.newsletter?.granted).toBe(false);
 		expect(after.consents.newsletter?.source).toBe('unsubscribe');
+		expect(after.confirmedAt).toBeNull();
 	} finally {
 		await db.$client.end();
 	}

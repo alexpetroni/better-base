@@ -164,7 +164,9 @@ describe('POST /unsubscribe/[token]', () => {
 
 	it('an unknown token or an unrelated body revokes nobody', async () => {
 		const subscriber = await makeSubscriber();
-		const unknown = await action(postEvent('no-such-token', 'List-Unsubscribe=One-Click'));
+		const unknown = await action(
+			postEvent('no-such-token', 'List-Unsubscribe=One-Click', 'application/x-www-form-urlencoded')
+		);
 		expect(isActionFailure(unknown) && unknown.status).toBe(404);
 		const body = new FormData();
 		body.set('intent', 'something-else');

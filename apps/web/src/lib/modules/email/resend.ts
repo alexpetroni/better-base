@@ -33,6 +33,7 @@ export function createResendTransport(
 					subject: message.subject,
 					html: message.html,
 					text: message.text,
+					headers: message.headers,
 					// Resend takes attachment bytes base64-encoded in the JSON body.
 					attachments: message.attachments?.map((attachment) => ({
 						filename: attachment.filename,

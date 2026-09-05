@@ -25,6 +25,8 @@ export interface EmailMessage {
 	html: string;
 	text: string;
 	attachments?: EmailAttachment[];
+	/** Extra headers the template asked for (List-Unsubscribe on marketing mail). */
+	headers?: Record<string, string>;
 }
 
 /** What actually delivers mail: the Resend adapter in prod, a fake in tests. */
@@ -133,6 +135,7 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					subject: rendered.subject,
 					data: input.data as Record<string, unknown>,
 					attachments: attachmentMeta,
+					headers: rendered.headers ?? null,
 					status: claimStatus
 				})
 				.onConflictDoNothing({ target: emailLog.idempotencyKey })
@@ -186,7 +189,8 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					subject: rendered.subject,
 					html: rendered.html,
 					text: rendered.text,
-					attachments: input.attachments
+					attachments: input.attachments,
+					headers: rendered.headers
 				});
 				await markStatus(claimed.id, { status: 'sent', providerId });
 				return { status: 'sent', logId: claimed.id };

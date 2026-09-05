@@ -482,7 +482,10 @@ describe('drain: claim-then-send', () => {
 			.set({ updatedAt: new Date(Date.now() - minutes(11)) })
 			.where(eq(emailLog.idempotencyKey, `nurture:${enrollment.id}:0`));
 		await db.update(nurtureSends).set({ scheduledAt: NOW }).where(eq(nurtureSends.id, send.id));
-		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({ claimed: 1, sent: 1 });
+		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({
+			claimed: 1,
+			sent: 1
+		});
 		[after] = await sendsOf(enrollment.id);
 		expect(after.status).toBe('sent');
 		const [logged] = await emailLogTo(subscriber.email);

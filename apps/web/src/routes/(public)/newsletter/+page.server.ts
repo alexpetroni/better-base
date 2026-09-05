@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
 import { getDb } from '$lib/db';
+import { CONSENT_TEXT_VERSIONS } from '$lib/modules/crm';
 import { getTokenSecret, requestNewsletterSignup } from '$lib/modules/crm/server';
 import { getEmailSender } from '$lib/modules/email/server';
 import { consumePublicEmailBudget } from '$lib/server/rate-limit';
@@ -35,12 +36,19 @@ export const actions: Actions = {
 			{
 				email: String(form.get('email') ?? ''),
 				locale: site.locales[0],
-				source: source.slice(0, 64)
+				source: source.slice(0, 64),
+				// Proof of the grant: who agreed, from which client, to which copy.
+				evidence: {
+					ip: getClientAddress(),
+					userAgent: request.headers.get('user-agent')?.slice(0, 256) || undefined,
+					consentTextVersion: { newsletter: CONSENT_TEXT_VERSIONS.newsletter }
+				}
 			}
 		);
 		if (!outcome.ok) return fail(400, { error: 'email' as const });
-		return {
-			status: outcome.confirm === 'already-confirmed' ? ('already' as const) : ('sent' as const)
-		};
+		// ONE answer for new and existing addresses: "already subscribed" was a
+		// confirmed-status oracle (audit 2026-09-03 P1). A confirmed address
+		// simply receives no second confirm email.
+		return { status: 'sent' as const };
 	}
 };
