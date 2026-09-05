@@ -1,0 +1,12 @@
+{
+	"$comment": "Sites the CI migrate/deploy/backup jobs run over (FIX-16). One entry per deployment; the secret NAMES here are resolved in the workflow (secrets[matrix.site.X]) — add the secrets in GitHub → Settings → Secrets and variables → Actions before adding an entry. better-life is one more entry, no workflow edit. See DEPLOYMENT.md §12 'Ordered deploy'.",
+	"sites": [
+		{
+			"id": "sleep",
+			"directDatabaseUrlSecret": "DIRECT_DATABASE_URL_SLEEP",
+			"vercelProjectIdSecret": "VERCEL_PROJECT_ID_SLEEP",
+			"mediaBucket": "bettersleep-media",
+			"fiscalBucket": "bettersleep-fiscal"
+		}
+	]
+}

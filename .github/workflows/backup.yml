@@ -1,0 +1,69 @@
+# Nightly backups (FIX-16, audit "No backup/restore path"): per site, a
+# `pg_dump --format=custom` of the production database plus an `rclone sync`
+# of the media and fiscal buckets to a SECOND storage provider (never the
+# same account as the live buckets). Restore runbook: docs/RESTORE.md.
+# The same script runs from a VPS cron — scripts/backup.sh documents its env.
+#
+# Secrets (repo → Settings → Secrets and variables → Actions):
+#   DIRECT_DATABASE_URL_<SITE>   per site (deploy/sites.json) — unpooled Neon URL
+#   BACKUP_SRC_ENDPOINT / BACKUP_SRC_ACCESS_KEY / BACKUP_SRC_SECRET_KEY
+#                                the LIVE bucket account (R2), a READ-ONLY token
+#   BACKUP_DST_ENDPOINT / BACKUP_DST_ACCESS_KEY / BACKUP_DST_SECRET_KEY
+#                                the second provider (B2, Hetzner, S3…)
+#   BACKUP_DST_BUCKET            bucket on the second provider that holds
+#                                <site>/db, <site>/media, <site>/fiscal
+name: backup
+
+on:
+  schedule:
+    - cron: '23 2 * * *' # 02:23 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: read
+        run: echo "matrix=$(jq -c '.sites' deploy/sites.json)" >> "$GITHUB_OUTPUT"
+
+  backup:
+    needs: sites
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJson(needs.sites.outputs.matrix) }}
+    concurrency:
+      group: backup-${{ matrix.site.id }}
+      cancel-in-progress: false
+    env:
+      BACKUP_SITE: ${{ matrix.site.id }}
+      DIRECT_DATABASE_URL: ${{ secrets[matrix.site.directDatabaseUrlSecret] }}
+      BACKUP_MEDIA_BUCKET: ${{ matrix.site.mediaBucket }}
+      BACKUP_FISCAL_BUCKET: ${{ matrix.site.fiscalBucket }}
+      BACKUP_SRC_ENDPOINT: ${{ secrets.BACKUP_SRC_ENDPOINT }}
+      BACKUP_SRC_ACCESS_KEY: ${{ secrets.BACKUP_SRC_ACCESS_KEY }}
+      BACKUP_SRC_SECRET_KEY: ${{ secrets.BACKUP_SRC_SECRET_KEY }}
+      BACKUP_DST_ENDPOINT: ${{ secrets.BACKUP_DST_ENDPOINT }}
+      BACKUP_DST_ACCESS_KEY: ${{ secrets.BACKUP_DST_ACCESS_KEY }}
+      BACKUP_DST_SECRET_KEY: ${{ secrets.BACKUP_DST_SECRET_KEY }}
+      BACKUP_DST_BUCKET: ${{ secrets.BACKUP_DST_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: rclone (pinned release, user-local — the runner image already ships pg_dump 16)
+        run: |
+          curl -fsSLO https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip
+          unzip -q rclone-v1.75.1-linux-amd64.zip
+          echo "$PWD/rclone-v1.75.1-linux-amd64" >> "$GITHUB_PATH"
+          pg_dump --version
+      - name: Backup (database dump + bucket sync, retention applied)
+        run: bash scripts/backup.sh

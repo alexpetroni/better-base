@@ -1,0 +1,22 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+	"timezone": "Europe/Bucharest",
+	"schedule": ["before 6am on monday"],
+	"packageRules": [
+		{
+			"matchManagers": ["github-actions"],
+			"groupName": "GitHub Actions",
+			"pinDigests": true
+		},
+		{
+			"matchDatasources": ["docker"],
+			"matchPackageNames": ["postgres"],
+			"allowedVersions": "/^16\\./"
+		},
+		{
+			"matchDatasources": ["node-version"],
+			"allowedVersions": "22"
+		}
+	]
+}

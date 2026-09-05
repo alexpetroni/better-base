@@ -1,0 +1,303 @@
+# The path to production (FIX-16, audit 2026-09-03 P0 #5):
+#
+#   gate ──▶ migrate (main only, per site) ──▶ deploy (per site)
+#     └──▶ e2e (PRs, non-blocking)
+#
+# gate     lint → check → db:migrate on a fresh Postgres → drizzle-kit check →
+#          test:unit (integration suite against Postgres + MinIO) → both
+#          builds → launch:check --target=vercel against a prod-shaped env.
+#          Runs on every PR and push; branch protection requires it.
+# migrate  applies apps/web/drizzle/*.sql (+ concurrent indexes) to each
+#          site's production database, one matrix entry per deploy/sites.json
+#          site, under the `production` environment. Fails closed without
+#          the site's DIRECT_DATABASE_URL secret. Never seeds.
+# deploy   `vercel build` + `vercel deploy --prebuilt --prod` per site —
+#          AFTER its migration, which is the ordering Vercel's Git integration
+#          cannot give. Disable Vercel's automatic production deploys for the
+#          project (keep previews) — DEPLOYMENT.md §12 "Ordered deploy".
+#
+# Secrets (repo → Settings → Secrets and variables → Actions):
+#   VERCEL_TOKEN, VERCEL_ORG_ID              shared
+#   DIRECT_DATABASE_URL_<SITE>               per site: the UNPOOLED Neon URL
+#   VERCEL_PROJECT_ID_<SITE>                 per site
+# (the per-site names are whatever deploy/sites.json says).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: better
+          POSTGRES_PASSWORD: better
+          POSTGRES_DB: better_sleep
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U better -d better_sleep"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      CI: 'true'
+      # Dev-shaped values only — the same ones .env.example ships. Never a
+      # production secret here (the gate runs on every PR).
+      SITE_ID: sleep
+      DATABASE_URL: postgres://better:better@localhost:5432/better_sleep
+      TEST_DATABASE_URL: postgres://better:better@localhost:5432/better_test
+      PUBLIC_SITE_URL: http://localhost:5173
+      BETTER_AUTH_SECRET: dev-only-secret-change-me-0123456789
+      TOKEN_SECRET: dev-only-token-secret-change-me-9876543210
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: better-media
+      S3_SECRET_KEY: better-media-secret
+      S3_BUCKET: better-base-media
+      S3_REGION: us-east-1
+      IMAGE_PROVIDER: direct
+      IMGPROXY_URL: http://localhost:8888
+      STRIPE_SECRET_KEY: ''
+      STRIPE_WEBHOOK_SECRET: whsec_dev_only_secret_change_me
+      COURIER_PROVIDER: mock
+      EMAIL_DRYRUN: 'true'
+      CHAT_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Start MinIO (pinned) and create the compose databases
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=better-media -e MINIO_ROOT_PASSWORD=better-media-secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for db in better_life better_test better_test_b; do
+            psql postgres://better:better@localhost:5432/postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $db OWNER better;"
+          done
+          curl --retry 20 --retry-delay 1 --retry-all-errors -sf http://localhost:9000/minio/health/live
+
+      - name: Install (root — builds packages/formcomp via prepare)
+        run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm check
+
+      - name: Migrate a fresh database (advisory lock + concurrent indexes)
+        run: pnpm db:migrate
+      - name: Journal and snapshots are consistent
+        run: pnpm db:check
+      - name: Create the media bucket
+        run: pnpm storage:init
+
+      - name: Unit + integration tests
+        run: pnpm test:unit
+
+      - name: Build (adapter-node)
+        run: pnpm build
+      - name: Build (adapter-vercel)
+        run: DEPLOY_TARGET=vercel pnpm build
+
+      - name: Launch preflight against a prod-shaped env (rules only, no probes)
+        # Placeholder values with the SHAPE of production: the rules (https
+        # origin matching the site domain, no dev defaults, a Stripe key, the
+        # neon driver, a private fiscal bucket) are what is under test here.
+        env:
+          SITE_ID: sleep
+          DB_DRIVER: neon
+          DATABASE_URL: postgres://app:placeholder@ep-placeholder-pooler.eu-central-1.aws.neon.tech/better_sleep?sslmode=require
+          DIRECT_DATABASE_URL: postgres://app:placeholder@ep-placeholder.eu-central-1.aws.neon.tech/better_sleep?sslmode=require
+          PUBLIC_SITE_URL: https://bettersleep.ro
+          BETTER_AUTH_SECRET: ci-placeholder-auth-secret-0123456789abcdef
+          TOKEN_SECRET: ci-placeholder-token-secret-fedcba9876543210
+          S3_ENDPOINT: https://placeholder.r2.cloudflarestorage.com
+          S3_ACCESS_KEY: ci-placeholder-access-key
+          S3_SECRET_KEY: ci-placeholder-secret-key
+          S3_BUCKET: bettersleep-media
+          S3_INVOICE_BUCKET: bettersleep-fiscal
+          IMAGE_PROVIDER: cloudflare
+          MEDIA_PUBLIC_BASE_URL: https://media.bettersleep.ro
+          CF_IMAGE_BASE_URL: https://bettersleep.ro
+          STRIPE_SECRET_KEY: sk_test_ci_placeholder_not_a_key
+          STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_secret
+          CRON_SECRET: ci-placeholder-cron-secret-0123456789abcdef
+          ERROR_REPORT_URL: https://sink.example.com/ci-placeholder
+          EMAIL_DRYRUN: 'true'
+        run: pnpm launch:check --target=vercel --no-probe
+
+  e2e:
+    # Advisory on PRs: the browser suite is slower and flakier than the gate
+    # and must not block a merge on its own — a red e2e is a signal to read,
+    # not a wall. It never runs on main (the gate did; the deploy waits on it).
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: better
+          POSTGRES_PASSWORD: better
+          POSTGRES_DB: better_sleep
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U better -d better_sleep"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      CI: 'true'
+      SITE_ID: sleep
+      DATABASE_URL: postgres://better:better@localhost:5432/better_sleep
+      TEST_DATABASE_URL: postgres://better:better@localhost:5432/better_test
+      PUBLIC_SITE_URL: http://localhost:4173
+      BETTER_AUTH_SECRET: dev-only-secret-change-me-0123456789
+      TOKEN_SECRET: dev-only-token-secret-change-me-9876543210
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: better-media
+      S3_SECRET_KEY: better-media-secret
+      S3_BUCKET: better-base-media
+      S3_REGION: us-east-1
+      IMAGE_PROVIDER: direct
+      IMGPROXY_URL: http://localhost:8888
+      STRIPE_SECRET_KEY: ''
+      STRIPE_WEBHOOK_SECRET: whsec_dev_only_secret_change_me
+      COURIER_PROVIDER: mock
+      EMAIL_DRYRUN: 'true'
+      CHAT_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Start MinIO (pinned) and create the compose databases
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=better-media -e MINIO_ROOT_PASSWORD=better-media-secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for db in better_life better_test better_test_b; do
+            psql postgres://better:better@localhost:5432/postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $db OWNER better;"
+          done
+          curl --retry 20 --retry-delay 1 --retry-all-errors -sf http://localhost:9000/minio/health/live
+      - run: pnpm install --frozen-lockfile
+      - name: Migrate both site databases and create the bucket
+        run: |
+          pnpm db:migrate
+          SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5432/better_life pnpm db:migrate
+          pnpm storage:init
+      - name: Browser dependencies
+        run: pnpm --filter web exec playwright install --with-deps chromium
+      - name: E2E (builds, then drives both preview servers)
+        run: pnpm test:e2e
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
+  sites:
+    # The deploy matrix lives in a committed file, so adding better-life is
+    # one JSON entry and its secrets — no workflow edit.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: read
+        run: echo "matrix=$(jq -c '.sites' deploy/sites.json)" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    needs: [gate, sites]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJson(needs.sites.outputs.matrix) }}
+    # One migration run per site at a time; a queued run waits instead of
+    # racing DDL (the script's advisory lock is the belt to this brace).
+    concurrency:
+      group: migrate-production-${{ matrix.site.id }}
+      cancel-in-progress: false
+    env:
+      SITE_ID: ${{ matrix.site.id }}
+      DIRECT_DATABASE_URL: ${{ secrets[matrix.site.directDatabaseUrlSecret] }}
+    steps:
+      - name: Fail closed without the site's DIRECT_DATABASE_URL secret
+        run: |
+          if [ -z "$DIRECT_DATABASE_URL" ]; then
+            echo "::error::Secret ${{ matrix.site.directDatabaseUrlSecret }} is not set — refusing to run against an unknown database. See DEPLOYMENT.md §12 (Ordered deploy)."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install web only, no lifecycle scripts (formcomp is not needed for DDL)
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter web
+      - name: Apply migrations (advisory lock; no-op when the database is current)
+        run: pnpm db:migrate
+      - name: Pin statement_timeout on the app role (idempotent)
+        run: pnpm db:role-timeout
+      - name: Print the applied migration list
+        run: pnpm db:status
+
+  deploy:
+    needs: [migrate, sites]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJson(needs.sites.outputs.matrix) }}
+    concurrency:
+      group: deploy-production-${{ matrix.site.id }}
+      cancel-in-progress: false
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets[matrix.site.vercelProjectIdSecret] }}
+    steps:
+      - name: Fail closed without the Vercel secrets
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::error::VERCEL_TOKEN / VERCEL_ORG_ID / ${{ matrix.site.vercelProjectIdSecret }} must all be set. See DEPLOYMENT.md §12 (Ordered deploy)."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The project's env (SITE_ID, DATABASE_URL, …) comes from Vercel via
+      # `pull`; the build happens HERE with the pinned CLI, and `deploy
+      # --prebuilt` only uploads the output — so the promotion is ordered
+      # after this site's migrate job, which Vercel's Git integration cannot
+      # guarantee (disable its automatic production deploys; §12).
+      - name: Pull the project's production settings and env
+        run: pnpm dlx vercel@59.11.7 pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build for production
+        run: pnpm dlx vercel@59.11.7 build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy the prebuilt output to production
+        run: pnpm dlx vercel@59.11.7 deploy --prebuilt --prod --token="$VERCEL_TOKEN"
