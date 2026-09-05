@@ -101,6 +101,17 @@ describe('seedDemoProducts', () => {
 			const stat = await storage.statObject(image.key!);
 			expect(stat?.mime).toBe('image/svg+xml');
 		}
+
+		// FIX-15: seeded SVGs go through the same finalize step as uploads —
+		// served as attachments off the public origin, and still a usable image.
+		await storage.allowPublicRead();
+		const cfg = storageConfigFromEnv(process.env);
+		const served = await fetch(
+			`${cfg.endpoint.replace(/\/$/, '')}/${storage.bucket}/${seedImages[0].key}`
+		);
+		expect(served.status).toBe(200);
+		expect(served.headers.get('content-disposition')).toContain('attachment');
+		expect(await served.text()).toContain('<svg');
 	});
 });
 

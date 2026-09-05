@@ -202,6 +202,84 @@ describe('upload flow (presign → PUT → confirm)', () => {
 		expect(put.status).toBe(403);
 	});
 
+	// FIX-15 (audit P1 media): the presigned PUT outlives confirm by up to 10
+	// minutes. When the browser uploaded straight into the served key, a second
+	// PUT after confirm replaced the object the row points at — for an SVG, the
+	// sanitized bytes and the attachment header. Confirm must PRODUCE the served
+	// object under its own key and the upload key must never be the served one.
+	it('presigns into a quarantine key the public origin refuses to serve', async () => {
+		const bytes = await readFile(FIXTURE);
+		const ticket = await requestUpload(deps, {
+			filename: 'quarantine.png',
+			mime: 'image/png',
+			size: bytes.byteLength
+		});
+		if (!ticket.ok) throw new Error(`presign failed: ${ticket.error}`);
+		expect(ticket.value.key).toMatch(/^pending\//);
+
+		const put = await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/png' },
+			body: bytes
+		});
+		expect(put.status).toBe(200);
+		// Uploaded, but not readable anonymously: the bucket policy denies pending/.
+		expect((await fetch(images.url(ticket.value.key))).status).toBe(403);
+	});
+
+	it('a PUT to the presigned URL after confirm cannot change the served object', async () => {
+		const bytes = await readFile(FIXTURE);
+		const ticket = await requestUpload(deps, {
+			filename: 'immutable.png',
+			mime: 'image/png',
+			size: bytes.byteLength
+		});
+		if (!ticket.ok) throw new Error(`presign failed: ${ticket.error}`);
+		await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/png' },
+			body: bytes
+		});
+		uploadedBytes.set(ticket.value.key, bytes);
+
+		const confirmed = await confirmUpload(deps, {
+			key: ticket.value.key,
+			filename: 'immutable.png',
+			createdBy: USER_ID
+		});
+		expect(confirmed.ok).toBe(true);
+		if (!confirmed.ok) return;
+		const servedKey = confirmed.value.key!;
+		expect(servedKey).not.toBe(ticket.value.key);
+		expect(servedKey).toMatch(/^uploads\//);
+		// The quarantine object is gone once the served one exists.
+		expect(await deps.storage.statObject(ticket.value.key)).toBeNull();
+
+		// The attacker's second PUT: same length (the signature pins it), different
+		// bytes — the trailing IEND chunk CRC flipped is enough to tell apart.
+		const tampered = Buffer.from(bytes);
+		tampered[tampered.length - 1] ^= 0xff;
+		const rePut = await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/png' },
+			body: tampered
+		});
+		expect(rePut.status).toBe(200);
+
+		const served = await fetch(images.url(servedKey));
+		expect(served.status).toBe(200);
+		expect(Buffer.from(await served.arrayBuffer()).equals(bytes)).toBe(true);
+	});
+
+	it('rasters are served with an immutable cache header', async () => {
+		const { key } = await uploadFixture();
+		const confirmed = await confirmUpload(deps, { key, filename: 'c.png', createdBy: USER_ID });
+		if (!confirmed.ok) throw new Error(confirmed.error);
+		const served = await fetch(images.url(confirmed.value.key!));
+		expect(served.status).toBe(200);
+		expect(served.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+	});
+
 	it('confirm fails for a key that was never uploaded', async () => {
 		const result = await confirmUpload(deps, {
 			key: 'uploads/2026/07/nothing-here.png',
@@ -259,11 +337,22 @@ describe('origin serving (the direct/cloudflare source URL)', () => {
 			createdBy: USER_ID
 		});
 		expect(confirmed.ok).toBe(true);
+		if (!confirmed.ok) return;
 		// SVGs never get a blurhash: nothing rasterizes them.
-		if (confirmed.ok) expect(confirmed.value.blurhash).toBeNull();
+		expect(confirmed.value.blurhash).toBeNull();
+
+		// FIX-15: the uploader re-PUTs the original payload to the still-valid
+		// presigned URL after confirm. The served object must not be that URL's
+		// target — otherwise this PUT restores the script and drops the header.
+		const rePut = await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/svg+xml' },
+			body: malicious
+		});
+		expect(rePut.status).toBe(200);
 
 		// Exactly the URL the app embeds for an SVG row.
-		const served = await fetch(images.url(ticket.value.key, { attachment: true }));
+		const served = await fetch(images.url(confirmed.value.key!, { attachment: true }));
 		expect(served.status).toBe(200);
 		expect(served.headers.get('content-disposition')).toContain('attachment');
 
@@ -272,6 +361,27 @@ describe('origin serving (the direct/cloudflare source URL)', () => {
 		expect(body).not.toContain('onload');
 		expect(body).not.toContain('javascript:');
 		expect(body).toContain('<rect'); // still a usable image, not an empty husk
+	});
+
+	it('refuses to confirm an "SVG" upload that is not an SVG document', async () => {
+		const notSvg = Buffer.from('<html><body><script>alert(1)</script></body></html>', 'utf8');
+		const ticket = await requestUpload(deps, {
+			filename: 'fake.svg',
+			mime: 'image/svg+xml',
+			size: notSvg.byteLength
+		});
+		if (!ticket.ok) throw new Error('presign failed');
+		await fetch(ticket.value.uploadUrl, {
+			method: 'PUT',
+			headers: { 'content-type': 'image/svg+xml' },
+			body: notSvg
+		});
+		const confirmed = await confirmUpload(deps, {
+			key: ticket.value.key,
+			filename: 'fake.svg',
+			createdBy: USER_ID
+		});
+		expect(confirmed).toMatchObject({ ok: false, error: 'invalid-mime' });
 	});
 });
 

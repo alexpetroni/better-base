@@ -390,6 +390,65 @@ describe('import of a bundle whose pillars are all absent from the target', () =
 	});
 });
 
+// FIX-15 (audit P1 media): import wrote bundle bytes verbatim — an SVG with a
+// script landed in the target bucket unsanitized and without the attachment
+// header. Import goes through the same finalize step as an admin upload.
+describe('imported SVGs go through the upload finalize step', () => {
+	it('sanitizes the bytes and serves the object as an attachment', async () => {
+		const malicious =
+			'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" onload="alert(1)">' +
+			'<script>alert(document.cookie)</script><rect width="10" height="10"/></svg>';
+		const key = 'uploads/content-spec/evil-import.svg';
+		const bundle: ContentBundle = {
+			version: 2,
+			type: 'article',
+			pillars: ['somn'],
+			media: [
+				{
+					id: 'content-evil-svg',
+					kind: 'image',
+					key,
+					filename: 'evil.svg',
+					mime: 'image/svg+xml',
+					size: Buffer.byteLength(malicious),
+					width: 10,
+					height: 10,
+					alt: '',
+					blurhash: null,
+					videoProvider: null,
+					videoExternalId: null,
+					dataBase64: Buffer.from(malicious, 'utf8').toString('base64')
+				}
+			],
+			article: {
+				slug: 'articol-svg-importat',
+				title: 'SVG importat',
+				excerpt: '',
+				bodyMd: '',
+				coverMediaId: 'content-evil-svg',
+				status: 'draft',
+				publishedAt: null,
+				seoTitle: null,
+				seoDescription: null
+			}
+		};
+		const imported = await importContent(depsB, bundle);
+		expect(imported.ok).toBe(true);
+
+		// Straight off the bucket's public origin, as the direct/cloudflare
+		// providers serve it (path-style, like MEDIA_PUBLIC_BASE_URL locally).
+		await storageB.allowPublicRead();
+		const cfg = storageConfigFromEnv(process.env);
+		const served = await fetch(`${cfg.endpoint.replace(/\/$/, '')}/${storageB.bucket}/${key}`);
+		expect(served.status).toBe(200);
+		expect(served.headers.get('content-disposition')).toContain('attachment');
+		const body = await served.text();
+		expect(body).not.toContain('<script');
+		expect(body).not.toContain('onload');
+		expect(body).toContain('<rect');
+	});
+});
+
 describe('export failure modes', () => {
 	it('reports unknown slugs', async () => {
 		const result = await exportContent(depsA, { type: 'article', slug: 'nu-exista' });
