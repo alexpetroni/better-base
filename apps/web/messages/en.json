@@ -472,6 +472,7 @@
 	"admin_nurture_parked_col_step": "Step",
 	"admin_nurture_parked_col_attempts": "Attempts",
 	"admin_nurture_parked_col_error": "Error",
+	"admin_nurture_retry": "Retry",
 	"admin_order_refund_partial": "partial refund",
 	"admin_order_refunded_amount": "Refunded (Stripe)",
 	"admin_order_storno_partial": "Issue partial storno ({amount})",

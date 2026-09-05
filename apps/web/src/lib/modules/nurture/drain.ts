@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lte, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, or } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import type { ConsentKey } from '../crm/consent.ts';
@@ -10,10 +10,11 @@ import {
 	NURTURE_SEND_BATCH,
 	NURTURE_SEND_PACE_MS,
 	NURTURE_STALE_CLAIM_MINUTES,
+	NURTURE_STALE_SEND_HOURS,
 	retryDelayMs
 } from './schedule.ts';
 import { nurtureEnrollments, nurtureSends, nurtureSequences } from './schema.ts';
-import { cancelEnrollment, isMailable } from './service.ts';
+import { cancelEnrollment, closeEnrollmentIfDone, isMailable } from './service.ts';
 
 /**
  * The queue drain behind /api/cron/nurture-send. Claim-then-send:
@@ -52,6 +53,8 @@ export interface NurtureDrainResult {
 	retried: number;
 	parked: number;
 	cancelled: number;
+	/** Due rows more than NURTURE_STALE_SEND_HOURS late, cancelled as `stale` instead of sent. */
+	stale: number;
 	/** Enrollments whose last open send resolved this run. */
 	completed: number;
 }
@@ -62,51 +65,100 @@ export async function drainNurtureSends(
 ): Promise<NurtureDrainResult> {
 	const now = opts.now ?? new Date();
 	const batchSize = opts.batchSize ?? NURTURE_SEND_BATCH;
-	const staleCutoff = new Date(now.getTime() - NURTURE_STALE_CLAIM_MINUTES * 60 * 1000);
+	const staleClaimCutoff = new Date(now.getTime() - NURTURE_STALE_CLAIM_MINUTES * 60 * 1000);
+	const staleSendCutoff = new Date(now.getTime() - NURTURE_STALE_SEND_HOURS * 60 * 60 * 1000);
 	const result: NurtureDrainResult = {
 		claimed: 0,
 		sent: 0,
 		retried: 0,
 		parked: 0,
 		cancelled: 0,
+		stale: 0,
 		completed: 0
 	};
 
 	// Atomic claim. Only sends of ACTIVE sequences and enrollments are
 	// eligible: deactivating a sequence in the admin pauses its queue rows in
 	// place (reactivation resumes them) — the no-deploy stop switch.
-	const claimed = await deps.db.transaction(async (tx) => {
+	const eligible = and(
+		eq(nurtureEnrollments.status, 'active'),
+		eq(nurtureSequences.active, true),
+		or(
+			and(eq(nurtureSends.status, 'pending'), lte(nurtureSends.scheduledAt, now)),
+			and(eq(nurtureSends.status, 'sending'), lte(nurtureSends.claimedAt, staleClaimCutoff))
+		)
+	);
+	const { claimed, staleCount, staleEnrollmentIds } = await deps.db.transaction(async (tx) => {
+		// Rows more than NURTURE_STALE_SEND_HOURS late are no longer wanted
+		// (a resumed pause must not flood every missed step): cancelled here,
+		// under the same eligibility, so a paused sequence's rows wait in
+		// place and are judged at resume time (audit 2026-09-03 P2).
+		const stale = await tx
+			.select({ id: nurtureSends.id, enrollmentId: nurtureSends.enrollmentId })
+			.from(nurtureSends)
+			.innerJoin(nurtureEnrollments, eq(nurtureSends.enrollmentId, nurtureEnrollments.id))
+			.innerJoin(nurtureSequences, eq(nurtureEnrollments.sequenceId, nurtureSequences.id))
+			.where(and(eligible, lt(nurtureSends.scheduledAt, staleSendCutoff)))
+			.for('update', { of: nurtureSends, skipLocked: true });
+		if (stale.length > 0) {
+			await tx
+				.update(nurtureSends)
+				.set({ status: 'cancelled', lastError: 'stale' })
+				.where(
+					inArray(
+						nurtureSends.id,
+						stale.map((row) => row.id)
+					)
+				);
+		}
 		const due = await tx
 			.select({ id: nurtureSends.id })
 			.from(nurtureSends)
 			.innerJoin(nurtureEnrollments, eq(nurtureSends.enrollmentId, nurtureEnrollments.id))
 			.innerJoin(nurtureSequences, eq(nurtureEnrollments.sequenceId, nurtureSequences.id))
-			.where(
-				and(
-					eq(nurtureEnrollments.status, 'active'),
-					eq(nurtureSequences.active, true),
-					or(
-						and(eq(nurtureSends.status, 'pending'), lte(nurtureSends.scheduledAt, now)),
-						and(eq(nurtureSends.status, 'sending'), lte(nurtureSends.claimedAt, staleCutoff))
-					)
-				)
+			.where(eligible)
+			.orderBy(
+				asc(nurtureSends.scheduledAt),
+				asc(nurtureSends.enrollmentId),
+				asc(nurtureSends.stepIndex)
 			)
-			.orderBy(asc(nurtureSends.scheduledAt))
 			.limit(batchSize)
 			.for('update', { of: nurtureSends, skipLocked: true });
-		if (due.length === 0) return [];
-		return tx
-			.update(nurtureSends)
-			.set({ status: 'sending', claimedAt: now, attempts: sql`${nurtureSends.attempts} + 1` })
-			.where(
-				inArray(
-					nurtureSends.id,
-					due.map((row) => row.id)
-				)
-			)
-			.returning();
+		const rows =
+			due.length === 0
+				? []
+				: await tx
+						.update(nurtureSends)
+						.set({ status: 'sending', claimedAt: now, attempts: sql`${nurtureSends.attempts} + 1` })
+						.where(
+							inArray(
+								nurtureSends.id,
+								due.map((row) => row.id)
+							)
+						)
+						.returning();
+		return {
+			claimed: rows,
+			staleCount: stale.length,
+			staleEnrollmentIds: [...new Set(stale.map((row) => row.enrollmentId))]
+		};
 	});
 	result.claimed = claimed.length;
+	result.stale = staleCount;
+	// A stale cancellation may have been the enrollment's last open row.
+	for (const enrollmentId of staleEnrollmentIds) {
+		if (await closeEnrollmentIfDone(deps.db, enrollmentId, now)) result.completed += 1;
+	}
+
+	// Within the batch, send grouped by enrollment in step order: a resumed
+	// backlog must never deliver step 2 before step 1 (audit 2026-09-03 P2).
+	claimed.sort((a, b) =>
+		a.enrollmentId === b.enrollmentId
+			? a.stepIndex - b.stepIndex
+			: a.enrollmentId < b.enrollmentId
+				? -1
+				: 1
+	);
 
 	const pace = deps.pace ?? sleep;
 	let liveSends = 0;
@@ -221,25 +273,7 @@ export async function drainNurtureSends(
 		// Terminal outcome: when no open sends remain, close the enrollment. A
 		// parked (`failed`) send keeps it open — the operator's retry re-queues
 		// the row and the enrollment must still be drainable (audit P2).
-		const [open] = await deps.db
-			.select({ count: sql<number>`cast(count(*) as int)` })
-			.from(nurtureSends)
-			.where(
-				and(
-					eq(nurtureSends.enrollmentId, send.enrollmentId),
-					inArray(nurtureSends.status, ['pending', 'sending', 'failed'])
-				)
-			);
-		if (open && open.count === 0) {
-			const closedRows = await deps.db
-				.update(nurtureEnrollments)
-				.set({ status: 'completed', closedAt: now })
-				.where(
-					and(eq(nurtureEnrollments.id, send.enrollmentId), eq(nurtureEnrollments.status, 'active'))
-				)
-				.returning({ id: nurtureEnrollments.id });
-			result.completed += closedRows.length;
-		}
+		if (await closeEnrollmentIfDone(deps.db, send.enrollmentId, now)) result.completed += 1;
 	}
 
 	return result;

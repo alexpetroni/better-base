@@ -99,3 +99,11 @@ export function retryDelayMs(attempts: number): number {
  * function budget. Dry runs touch no API and are not paced.
  */
 export const NURTURE_SEND_PACE_MS = 500;
+
+/**
+ * A send later than this past its `scheduled_at` is no longer wanted: a
+ * paused-then-resumed sequence must not flood a subscriber with every step
+ * it missed (audit 2026-09-03 P2). The claim cancels such rows as `stale`
+ * instead of sending them. Two days keeps a weekend-long pause harmless.
+ */
+export const NURTURE_STALE_SEND_HOURS = 48;

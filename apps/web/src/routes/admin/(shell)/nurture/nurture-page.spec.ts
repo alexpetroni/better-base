@@ -205,9 +205,10 @@ describe('/admin/nurture', () => {
 		[send] = await db.select().from(nurtureSends).where(eq(nurtureSends.id, 'np-send-1'));
 		expect(send).toMatchObject({ status: 'pending', attempts: 0, lastError: null });
 		// The parked list is empty now; a second retry of a pending row is refused.
-		expect((await load({ locals: locals(ADMIN) } as Parameters<Page['load']>[0])).parked).toEqual(
-			[]
-		);
+		const after = (await load({ locals: locals(ADMIN) } as Parameters<Page['load']>[0])) as {
+			parked: unknown[];
+		};
+		expect(after.parked).toEqual([]);
 		const again = await retry(actionEvent('retry', ADMIN, { id: 'np-send-1' }));
 		expect(isActionFailure(again) && again.status).toBe(400);
 	});

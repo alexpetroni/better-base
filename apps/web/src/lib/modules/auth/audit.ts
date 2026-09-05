@@ -13,6 +13,7 @@ export type AdminAuditAction =
 	| 'orders-export'
 	| 'media-delete'
 	| 'nurture-toggle'
+	| 'nurture-retry'
 	| 'legal-page-save';
 
 export async function recordAdminAudit(

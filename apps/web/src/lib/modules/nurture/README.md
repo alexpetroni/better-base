@@ -63,9 +63,30 @@ launch scale. A larger backlog simply drains over consecutive runs, oldest
   index, not by handler logic. `ON DELETE CASCADE` from `subscribers`: GDPR
   erasure removes enrollments and sends with the subscriber row.
 - `nurture_sends` — the queue. One row per (enrollment, step), materialized at
-  enrollment time with a computed `scheduled_at`. Statuses:
+  enrollment time with a computed `scheduled_at` and the `steps_hash` of the
+  sequence's steps it was planned against. Statuses:
   `pending → sending → sent`, with `failed` (parked for the operator after
-  `NURTURE_MAX_ATTEMPTS`), and `cancelled` (consent withdrawn / unsubscribe).
+  `NURTURE_MAX_ATTEMPTS`, or immediately on a permanent transport error —
+  the enrollment stays `active` until the operator's **retry** in
+  `/admin/nurture` re-queues it), and `cancelled` with `last_error` naming
+  why: consent withdrawn / unsubscribe / bounce / complaint (null), `stale`
+  (more than `NURTURE_STALE_SEND_HOURS` late when it became claimable — a
+  resumed pause never floods the missed steps), `replanned` (its step vanished
+  in a reseed).
+
+## Re-planning (FIX-13)
+
+The queue is not frozen at enrollment. Inside the claim, rows more than
+`NURTURE_STALE_SEND_HOURS` (48 h) past `scheduled_at` are cancelled as `stale`
+instead of sent; the claimed batch is then sent grouped by enrollment in step
+order, so a backlog never delivers step 2 before step 1. A reseed
+(`seedNurtureSequences`, `db:seed`) whose steps changed re-plans every pending
+row of an active enrollment whose `steps_hash` no longer matches: the row is
+re-scheduled from the enrollment instant with the new step at its index
+(attempts reset), cancelled as `replanned` when the step no longer exists, and
+new trailing steps get fresh rows. Delivered/in-flight/parked rows are history
+and untouched; rows with a NULL hash (planned before the column) are left
+alone.
 
 ## Consent (the GDPR-critical property)
 
@@ -90,12 +111,20 @@ enrollment instant clamps to it (an `offsetDays: 0` step with an already-past
 
 ## Failure handling
 
-The claim increments `attempts`. A failed send goes back to `pending` with
+The claim increments `attempts`. A retryable failure (Resend 429/5xx, network,
+timeout — `EmailTransportError.retryable`) goes back to `pending` with
 `scheduled_at = claim time + 15min × 4^(attempts−1)` (15m, 1h, 4h, 16h); after
 `NURTURE_MAX_ATTEMPTS = 5` it is parked as `failed` with the error recorded and
-shown in `/admin/nurture` — never an infinite loop. A crashed invocation leaves
-rows in `sending`; the claim re-takes those after `NURTURE_STALE_CLAIM_MINUTES`,
-and the `email_log` idempotency key guarantees the retry cannot double-deliver.
+shown in `/admin/nurture` — never an infinite loop. A permanent failure (any
+other 4xx: bad key, rejected address) parks immediately with Resend's body.
+Live sends inside a batch are paced by `NURTURE_SEND_PACE_MS` (500 ms; Resend
+allows ~2 req/s); dry runs are not. A crashed invocation leaves rows in
+`sending`; the claim re-takes those after `NURTURE_STALE_CLAIM_MINUTES`, and
+the `email_log` idempotency key guarantees the retry cannot double-deliver —
+a `skipped` outcome counts as sent only when the log row itself reads `sent`
+(or `dryrun` while the sender runs dry). Bounces and complaints reported by
+Resend's webhook (`/api/webhooks/resend`) withdraw the address and cancel its
+enrollments like an unsubscribe.
 
 ## Retention
 

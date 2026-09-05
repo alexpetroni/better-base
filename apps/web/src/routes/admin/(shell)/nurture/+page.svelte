@@ -108,6 +108,7 @@
 				<th class="px-3 py-2">{m.admin_nurture_parked_col_step()}</th>
 				<th class="px-3 py-2">{m.admin_nurture_parked_col_attempts()}</th>
 				<th class="px-3 py-2">{m.admin_nurture_parked_col_error()}</th>
+				<th class="px-3 py-2"></th>
 			</tr>
 		</thead>
 		<tbody>
@@ -122,6 +123,18 @@
 						<span class="block text-xs text-(--color-ink)/50"
 							>{formatDate(send.scheduledAt, 'medium-time')}</span
 						>
+					</td>
+					<td class="px-3 py-2 text-right">
+						<form method="POST" action="?/retry">
+							<input type="hidden" name="id" value={send.sendId} />
+							<button
+								type="submit"
+								data-testid="nurture-retry"
+								class="rounded bg-(--color-brand-soft) px-3 py-1 text-xs font-semibold hover:opacity-90"
+							>
+								{m.admin_nurture_retry()}
+							</button>
+						</form>
 					</td>
 				</tr>
 			{/each}

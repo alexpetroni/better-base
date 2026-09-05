@@ -24,7 +24,8 @@ export const GET: RequestHandler = async ({ request }) => {
 	// output is visible on a serverless deploy.
 	console.log(
 		`nurture-send claimed=${result.claimed} sent=${result.sent} retried=${result.retried} ` +
-			`parked=${result.parked} cancelled=${result.cancelled} completed=${result.completed}`
+			`parked=${result.parked} cancelled=${result.cancelled} stale=${result.stale} ` +
+			`completed=${result.completed}`
 	);
 	return json(result, { headers: NO_STORE });
 };

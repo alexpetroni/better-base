@@ -24,8 +24,10 @@ export {
 	listParkedSends,
 	listSequencesWithStats,
 	pruneNurtureEnrollments,
+	retryParkedSend,
 	seedNurtureSequences,
 	setSequenceActive,
+	stepsHash,
 	type NurtureDeps,
 	type ParkedSend,
 	type SequenceStats
