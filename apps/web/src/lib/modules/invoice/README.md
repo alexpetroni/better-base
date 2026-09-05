@@ -162,24 +162,59 @@ and the XML totals ALWAYS equal the stored record (asserted per document in
 tests — the record is the truth, EN 16931's recomputation is the
 approximation).
 
-`validateEFacturaXml` is an offline tripwire (structure, namespaces, BR-CO
-arithmetic, BR-O rules, snapshot agreement), NOT the official ANAF
-schematron; final acceptance happens at SPV submission. **Known gap**: the
-NEXT-6 snapshot stores flattened address strings, so the ISO 3166-2:RO county
-code (`CountrySubentity`) ANAF wants for RO addresses is not emitted — noted
-for the operator in DEPLOYMENT.md § e-Factura together with the enrollment
-steps. Submission itself is behind the `EFacturaSubmitter` seam
-(`efactura-submitter.ts`): the default is an explicit no-op (`skipped`) and
-asking for the real thing before implementing it (`ANAF_EFACTURA_ENABLED`)
-is a hard error — nothing ever fakes a submission.
+**CIUS-RO status (FIX-12).** The snapshot stores structured addresses, so
+both parties carry `StreetName`, `CityName`, `PostalZone`,
+`CountrySubentity` (ISO 3166-2:RO, `RO-CJ`…) and `Country`; a București
+address puts `SECTORn` in `CityName` under `RO-B` (the CIUS-RO rule). Under
+category O the buyer party carries no `PartyTaxScheme` (BR-O-2) and the
+exemption reason comes from its own snapshot column, never from a
+payment-terms note. Multi-rate documents emit one `TaxSubtotal` per
+(category, rate). `validateEFacturaXml` is an offline tripwire (structure,
+namespaces, BR-CO arithmetic, BR-O rules, the address rules above, snapshot
+agreement), NOT the official ANAF schematron. Two **golden fixtures** in
+`apps/web/tests/fixtures/efactura/` (`factura-cluj.xml` — a județ B2C buyer;
+`factura-bucuresti-sector-b2b.xml` — a București-sector B2B buyer) are
+asserted byte-for-byte by `efactura.spec.ts`, so any renderer change is a
+deliberate re-validation, never a drift. **They have NOT been run through
+ANAF's public validator from this repository** (no live service is called
+from the build); uploading both files to ANAF's e-Factura validator and
+recording the result is a LAUNCH-CHECKLIST step, and the first real SPV
+answers are the final acceptance.
+
+**Submission tracking (FIX-12).** SPV transmission is mandatory (B2B since
+2024, B2C since 2025-01-01) within **5 calendar days** of issuance, so it is
+tracked, not hoped for: every invoice and storno gets an
+`invoice_submissions` row (`pending`) in the issuing transaction
+(`submissions.ts`). `GET /api/cron/efactura-submit` drains due rows —
+`FOR UPDATE SKIP LOCKED` claim with a 15-minute lease, so two overlapping
+ticks never share a row — renders the XML into the fiscal bucket and hands
+it to the `EFacturaSubmitter` seam (`efactura-submitter.ts`): `submitted`
+is terminal with ANAF's index; a thrown submission is retried with doubling
+backoff (15 min, 6 h cap) and PARKED as `failed` after 5 attempts; the
+default no-op submitter answers `skipped`, which is not an attempt — the
+row stays pending, deferred an hour, and the XML is already stored for the
+manual SPV upload. Asking for the real submitter before implementing it
+(`ANAF_EFACTURA_ENABLED`) is a hard boot error — nothing ever fakes a
+submission. `/admin/orders` → "De trimis la ANAF" lists every order with an
+unsubmitted document and the calendar days left (negative = overdue). A
+download (customer or staff) only renders and stores; it never submits.
 
 ## Storage, retrieval, delivery
 
-- **Write-once storage** (`documents.ts`): rendered documents go to the S3
-  bucket under the private `invoices/` prefix (never `uploads/`, which
-  imgproxy exposes publicly), keyed `invoices/<invoiceId>.<pdf|xml>`, lazily
-  on first request. Determinism makes the write-once rule race-proof: a
-  concurrent re-render produces identical bytes.
+- **Private, versioned storage** (`documents.ts`, FIX-12): rendered
+  documents go to the **fiscal bucket** (`S3_INVOICE_BUCKET`, default
+  `<S3_BUCKET>-fiscal`; `getInvoiceStorage()`), never the media bucket —
+  under the default image provider that one is bound to a public domain and
+  R2 public access is not prefix-scoped (audit P0 #4). Keys are
+  `invoices/<invoiceId>.<rendererVersion>.<pdf|xml>`
+  (`INVOICE_PDF_RENDERER_VERSION`, `EFACTURA_RENDERER_VERSION`): a renderer
+  fix bumps the version and re-renders instead of freezing a defective file,
+  while the earlier file stays as the record of what was delivered.
+  Documents render on first request (download, email, export, or the
+  submission cron); determinism makes the write-once rule race-proof.
+  `pnpm storage:fiscal-migrate` moves whatever a pre-FIX-12 deploy wrote
+  under `invoices/` in the media bucket; `launch:check` proves the public
+  media origin does not serve `invoices/`.
 - **Retrieval** (`/api/invoices/[id]/[format]`): an admin session, or a
   signed short-lived token (`access.ts`, HMAC over invoice id + format +
   expiry under TOKEN_SECRET, TTL 15 min). Tokens are minted ONLY on the order
@@ -192,7 +227,11 @@ is a hard error — nothing ever fakes a submission.
   has a re-send action (`invoice-email` template) idempotency-keyed on
   (invoice id, page nonce). All sends honor `EMAIL_DRYRUN`.
 - **Accountant export** (`/admin/orders/export?month=YYYY-MM`): one zip per
-  month — `facturi.csv` (semicolon-separated, comma decimals: what a
-  Romanian-locale Excel import expects) plus every document as PDF and XML,
-  because bookkeeping consumes exactly that: a journal-entry index plus the
-  justifying documents.
+  month — `facturi.csv` (semicolon-separated, comma decimals, UTF-8 BOM:
+  what a Romanian-locale Excel import expects; one `baza_<rate>`/`tva_<rate>`
+  column pair per VAT rate present in the month; every text cell through the
+  shared `util/csv.ts`, which neutralises formula injection from
+  customer-entered names) plus every document as PDF and XML, because
+  bookkeeping consumes exactly that: a journal-entry index plus the
+  justifying documents. The month is the Romanian calendar month, selected
+  in SQL on `issued_at`.

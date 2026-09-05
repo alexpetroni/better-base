@@ -80,13 +80,27 @@ list applies later to better-life (with its own domain/accounts).
         work queue filter "Fără factură" lists them; issue each with the
         one-click button on the order page if the accountant did not already
         invoice them by hand.
-- [ ] e-Factura (ANAF): decide the interim process — the app produces the
-      CIUS-RO XML per invoice (downloadable from the order page / monthly
-      export) but does NOT submit it; a human uploads to SPV when the
-      obligation applies. For automated submission later: qualified
-      certificate + SPV enrollment + ANAF OAuth app + implementing the
-      `EFacturaSubmitter` adapter — exact steps in DEPLOYMENT.md §7
-      "Fiscal documents". Record who owns the SPV upload until then.
+- [ ] e-Factura (ANAF) — the duty is real and dated: every invoice and
+      storno MUST reach SPV within 5 calendar days of issuance (B2C included
+      since 2025-01-01). The app queues each document at issuance and
+      `/admin/orders` → "De trimis la ANAF" shows what is still due with the
+      days left, but it does NOT submit until a human completes the
+      enrollment (qualified certificate + SPV enrollment + ANAF OAuth app +
+      implementing the `EFacturaSubmitter` adapter — exact steps in
+      DEPLOYMENT.md §7 "Fiscal documents"). Until then: name the person who
+      uploads the XML (order page / monthly export) in the SPV web interface
+      every working day and checks the queue, and confirm the
+      `efactura-submit` cron is scheduled (below) so the queue is drained
+      the moment the adapter exists.
+- [ ] e-Factura XML validated against ANAF's public validator BEFORE the
+      first live invoice: upload BOTH golden fixtures from
+      `apps/web/tests/fixtures/efactura/` (`factura-cluj.xml`,
+      `factura-bucuresti-sector-b2b.xml`) to ANAF's e-Factura validator
+      (anaf.ro → e-Factura → "Validare XML") and record the result here; the
+      build only runs the offline validator and has NOT called ANAF. Then
+      validate the first real invoice's XML the same way. Any rejection is a
+      renderer bug: fix it and bump `EFACTURA_RENDERER_VERSION` so stored
+      documents re-render.
 
 ## DNS & TLS
 
@@ -111,6 +125,13 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] R2 bucket `bettersleep-media` created; scoped API token issued for the
       app (read+write). Only on the imgproxy provider: a second, read-only
       token for imgproxy.
+- [ ] R2 bucket `bettersleep-fiscal` created (invoice PDFs + e-Factura XML;
+      DEPLOYMENT.md §5), the same app token granted read+write on it,
+      `S3_INVOICE_BUCKET=bettersleep-fiscal` set, and NO public domain bound
+      to it. `pnpm launch:check` refuses a cloudflare deploy without it and
+      probes that the media domain does not serve `/invoices/`. If any
+      invoice was issued before this bucket existed, run
+      `pnpm storage:fiscal-migrate` once with the prod env.
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock).
 - [ ] `COURIER_PROVIDER=sameday` + `SAMEDAY_USERNAME`/`SAMEDAY_PASSWORD`/
@@ -216,6 +237,14 @@ in the split boxes.
       The seeded sequences are live-checked in `/admin/nurture` (deactivate
       any you do not want sending at launch — sends only leave while
       `EMAIL_DRYRUN=false`).
+- [ ] e-Factura submission queue, per target (§9): Vercel — `vercel.json`
+      already schedules `GET /api/cron/efactura-submit` hourly (same
+      `CRON_SECRET`); adapter-node — machine cron curls the same route
+      hourly. Verified once by hand: the authorized curl answers
+      `{"claimed":…,"submitted":0,"skipped":…,"retried":0,"parked":0}`
+      (`skipped` = no enrollment yet — the manual SPV upload above still
+      applies); someone watches `/admin/orders` → "De trimis la ANAF" for
+      red (overdue) badges and `parked` > 0.
 - [ ] One real AWB generated against the live Sameday account from an order
       with phone + county (DEPLOYMENT.md §7 "Shipping" step 4) — the adapter
       follows the public API but is unverified against a live account until

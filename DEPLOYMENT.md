@@ -45,6 +45,7 @@ documented dev values). Per-site values:
 | `DATABASE_URL` | `postgres://…/better_sleep` | `postgres://…/better_life` | One database per site, identical schema. |
 | `PUBLIC_SITE_URL` | `https://bettersleep.ro` | `https://betterlife.ro` | Canonical origin: links in emails, sitemap, OG tags, Stripe redirect URLs. Must be https in prod (session cookies derive `Secure` from it). |
 | `S3_BUCKET` | e.g. `bettersleep-media` | e.g. `betterlife-media` | One bucket per site. |
+| `S3_INVOICE_BUCKET` | e.g. `bettersleep-fiscal` | e.g. `betterlife-fiscal` | The PRIVATE bucket for invoice PDFs + e-Factura XML (§5). Required by `launch:check` under the `cloudflare` provider (the media bucket is public there); locally it defaults to `<S3_BUCKET>-fiscal`. Never bind it to a public domain. |
 | `BETTER_AUTH_SECRET` | unique 32+ random bytes | unique 32+ random bytes | `openssl rand -base64 32`. Signs staff sessions only. Rotating it logs staff out. |
 | `TOKEN_SECRET` | unique 32+ random bytes | unique 32+ random bytes | `openssl rand -base64 32`. Signs newsletter confirm links, chat session cookies and upload-confirm tickets. MUST differ from `BETTER_AUTH_SECRET` (boot refuses otherwise). Rotating it invalidates outstanding confirm links and chat sessions (users just start a fresh conversation). |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | per-site Stripe account or shared account | 〃 | See §6. |
@@ -68,7 +69,7 @@ Shared (may be identical on both sites):
 | `DEPLOY_TARGET` | unset (`node`) | Only for building the Vercel output locally; Vercel sets `VERCEL=1` itself (§12). |
 | `DB_DRIVER` | unset (`pg`) | `neon` selects the serverless WebSocket driver (§12). An unknown value refuses to boot. |
 | `DIRECT_DATABASE_URL` | unset | Migrations only: an unpooled connection for DDL (§12). Falls back to `DATABASE_URL`. |
-| `CRON_SECRET` | unset | Required only where the scheduled jobs (retention, shipment-status sync — §9) run over HTTP instead of machine cron (§12). |
+| `CRON_SECRET` | unset | Required only where the scheduled jobs (retention, shipment-status sync, nurture queue, e-Factura submission — §9) run over HTTP instead of machine cron (§12). |
 | `PUBLIC_ANALYTICS_PROVIDER` | unset | Optional. `plausible` or `umami`; unset = NO analytics script ships. When set, `PUBLIC_ANALYTICS_HOST` (service origin) and `PUBLIC_ANALYTICS_SITE_ID` (Plausible `data-domain` / Umami website id) are required — `launch:check` and the seam itself refuse a half-set trio. The script loads client-side ONLY after the visitor grants cookie consent, never on `/admin`. |
 
 The server validates the whole matrix at boot and **refuses to start** with a
@@ -213,6 +214,22 @@ What is public is the *original bytes at an unguessable key* (`uploads/<year>/
 Uploaded SVGs are sanitized at confirm time and stored with
 `Content-Disposition: attachment`, so a crafted SVG cannot execute on the
 media origin.
+
+**Fiscal documents get their own bucket.** R2 public access is per bucket,
+not per prefix, so anything in the media bucket is reachable through the
+custom domain — invoice PDFs and e-Factura XMLs (name, address, email) must
+not be there. Create a second bucket per site (e.g. `bettersleep-fiscal`),
+give the SAME API token Object Read & Write on it, set
+`S3_INVOICE_BUCKET=<bucket>`, and bind **no** public domain to it, ever.
+`launch:check` refuses a `cloudflare` deploy without `S3_INVOICE_BUCKET`,
+refuses `S3_INVOICE_BUCKET == S3_BUCKET`, and probes that
+`${MEDIA_PUBLIC_BASE_URL}/invoices/…` does not answer 200. If the deploy
+issued invoices before FIX-12 (documents under `invoices/` in the media
+bucket), run `pnpm storage:fiscal-migrate` once with the site's env: it
+moves every such object into the fiscal bucket (idempotent, never
+overwrites a private copy) and leaves the media bucket with no `invoices/`
+key. Locally `pnpm storage:init` creates both buckets (`<S3_BUCKET>-fiscal`
+stays private).
 
 ## 6. Image delivery (`IMAGE_PROVIDER`)
 
@@ -371,19 +388,34 @@ deterministic in-memory mock — never leave it empty in prod.
 ### Fiscal documents (invoice PDF + e-Factura XML)
 
 Every issued invoice renders deterministically to a PDF and a UBL 2.1
-(CIUS-RO) XML, stored write-once in the S3/R2 bucket under the private
-`invoices/` prefix (same bucket as media, different prefix — never reachable
-through the image provider). Nothing to deploy: rendering is pure JS inside the app (works on
-Vercel), the confirmation email attaches the PDF, customers reach their
-documents through signed links on the order success page, and
-`/admin/orders/export?month=YYYY-MM` gives the accountant a monthly zip
-(CSV index + all PDFs/XMLs). `TOKEN_SECRET` (already required) signs the
-customer download links.
+(CIUS-RO 1.0.1) XML, stored write-once in the **private fiscal bucket**
+(`S3_INVOICE_BUCKET`, §5 — never the media bucket, which the `cloudflare`
+provider binds to a public domain) under renderer-versioned keys
+(`invoices/<id>.<version>.<pdf|xml>`, so a renderer fix re-renders instead
+of freezing a defective file). Nothing else to deploy: rendering is pure JS
+inside the app (works on Vercel), the confirmation email attaches the PDF,
+customers reach their documents through signed links on the order success
+page, and `/admin/orders/export?month=YYYY-MM` gives the accountant a
+monthly zip (CSV index with UTF-8 BOM and per-rate columns + all
+PDFs/XMLs). `TOKEN_SECRET` (already required) signs the customer download
+links.
 
-**e-Factura submission to ANAF SPV is NOT automated** — it requires
-enrollment only a human can do. Until then the app produces the compliant
-XML artifact and an operator uploads it manually in the SPV web interface
-when required. To enable automated submission later, a human must:
+**The SPV duty.** Transmitting every invoice to ANAF through e-Factura is
+mandatory for this shop — B2B since 2024, B2C since 1 January 2025 — within
+**5 calendar days of issuance**; late or missing transmission is fined per
+document. It is therefore tracked, not left to memory: every invoice and
+storno gets an `invoice_submissions` row at issuance, `/admin/orders` →
+"De trimis la ANAF" lists what is still due with the calendar days left
+(red when overdue), and the hourly `GET /api/cron/efactura-submit` (§9,
+§12) renders the XML and pushes it through the `EFacturaSubmitter` seam
+with retry/park semantics (5 attempts, then parked for a human).
+
+**Automated submission is NOT implemented yet** — it requires enrollment
+only a human can do. Until then the default submitter answers `skipped`
+for every row (nothing is sent, nothing is faked, the row stays "de trimis")
+and an operator uploads each XML (order page / monthly export) in the SPV
+web interface **within the 5 days**, every working day. To enable automated
+submission, a human must:
 
 1. Obtain a **qualified digital certificate** for the company's legal
    representative (certSIGN/DigiSign/AlfaSign…).
@@ -398,11 +430,16 @@ when required. To enable automated submission later, a human must:
    before the adapter exists is a hard boot error by design — the app never
    fakes a submission.
 
-Known artifact gap (documented in `modules/invoice/README.md`): the XML
-omits the ISO 3166-2:RO county code (`CountrySubentity`) because the fiscal
-snapshot stores flattened address strings; ANAF's validator wants it for RO
-addresses. Resolve it together with the adapter work (extend the snapshot),
-or accept manual SPV upload with ANAF's web validation until then.
+**CIUS-RO status** (details in `modules/invoice/README.md`): since FIX-12
+the XML carries structured addresses (`CountrySubentity` as ISO 3166-2:RO,
+`PostalZone`, `SECTORn` city names for București), one `TaxSubtotal` per
+VAT rate, no buyer VAT identifier under category O, `OrderReference`,
+payment reference and prepaid amounts for card payments, and the share
+capital in the seller's legal-form field. It passes the repository's
+offline validator and is byte-stable against two golden fixtures, but it
+has **not** been run through ANAF's public validator from the build (no
+live service is called): the LAUNCH-CHECKLIST carries that step, and the
+first real SPV answers are the final acceptance.
 
 ### Shipping (courier & AWB)
 
@@ -500,13 +537,14 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 | --- | --- | --- |
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
 | hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every DUE in-flight AWB (bounded batch per run, oldest-synced first), updates shipment + fulfillment state (`delivered`/`returned`; a courier-side `cancelled` steps the order back to packed) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. A row whose lookup throws is backed off (15 min, doubling, 24 h cap) and flagged on `/admin`; the JSON answer carries `errors` and, on a credentials failure, `"aborted":"auth"` — alert on either (§7 "Sync health"). Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
+| hourly, e.g. `37 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit` | Drains the e-Factura submission queue (§7): claims a bounded batch of due `invoice_submissions` rows (25/run, `FOR UPDATE SKIP LOCKED` — an overlapping run cannot double-submit), renders the XML into the fiscal bucket and submits through the `EFacturaSubmitter` seam. Failures retry with backoff (15 min doubling, 6 h cap) and park after 5 attempts (`failed`, shown in `/admin/orders` → "De trimis la ANAF"). With no ANAF enrollment (the default no-op submitter) every row is `skipped` and re-checked hourly — the JSON answer then reads `{"claimed":n,"skipped":n,…}` and the manual SPV upload remains the operator's job. |
 | every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: claims a bounded batch of due sends (25/run), re-checks the marketing consent per send, mails through the idempotent email wrapper, retries failures with backoff and parks them after 5 attempts (visible in `/admin/nurture`). Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. Design notes: `src/lib/modules/nurture/README.md`. |
 
 Where no machine can run scripts (Vercel), the retention job is also
 available over HTTP at `GET /api/cron/chat-prune` — see §12. Both forms call
 `runRetentionSweep()` in `src/lib/server/retention.ts`, so they cannot drift
 apart (the sweep also expires closed nurture enrollments after 180 days). On
-Vercel all three routes are scheduled by `apps/web/vercel.json`.
+Vercel all four routes are scheduled by `apps/web/vercel.json`.
 
 On-demand (not cron): `pnpm subscriber:delete -- --email x@y.ro` for GDPR
 erasure requests (deletes the subscriber, unlinks quiz results, anonymizes
@@ -625,7 +663,7 @@ one host, which is exactly the coupling this seam removed.
 | `DB_DRIVER` | `neon` | Neon's serverless driver over WebSockets. HTTP is not an option: `db.transaction()` is used by the blog, shop and GDPR services. Also shrinks the pool to 1 connection per function instance (`DB_POOL_MAX` overrides). |
 | `DATABASE_URL` | Neon **pooled** URL (`…-pooler.…neon.tech/db?sslmode=require`) | Functions are short-lived; the pooler absorbs their connection churn. |
 | `DIRECT_DATABASE_URL` | Neon **unpooled** URL | Migrations only. DDL through PgBouncer's transaction mode is unreliable; `drizzle.config.ts` prefers this and falls back to `DATABASE_URL`. |
-| `CRON_SECRET` | `openssl rand -hex 32` | Guards the retention route below. Vercel Cron sends it as `Authorization: Bearer …` automatically. |
+| `CRON_SECRET` | `openssl rand -hex 32` | Guards the four cron routes below. Vercel Cron sends it as `Authorization: Bearer …` automatically. |
 | `ADDRESS_HEADER`, `XFF_DEPTH` | **leave unset** | Vercel resolves the client IP itself. Setting them here would let a caller spoof `getClientAddress()` and defeat every rate limit. |
 
 Everything else — `SITE_ID`, `PUBLIC_SITE_URL`, the S3/R2 block, the image
@@ -692,9 +730,10 @@ credentials too. All of these are idempotent — safe to re-run on later deploys
 ### Scheduled jobs
 
 `vercel.json` schedules `GET /api/cron/chat-prune` daily (retention),
-`GET /api/cron/shipment-sync` hourly (courier tracking poll — §9) and
-`GET /api/cron/nurture-send` every 15 minutes (nurture email queue — §9).
-All routes require `Authorization: Bearer $CRON_SECRET`; without
+`GET /api/cron/shipment-sync` hourly (courier tracking poll — §9),
+`GET /api/cron/nurture-send` every 15 minutes (nurture email queue — §9)
+and `GET /api/cron/efactura-submit` hourly (e-Factura submission queue —
+§7, §9). All routes require `Authorization: Bearer $CRON_SECRET`; without
 `CRON_SECRET` set they answer `503` rather than running unauthenticated.
 Verify once by hand:
 
@@ -705,6 +744,8 @@ curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipmen
 # {"polled":0,"updated":0,"errors":0}
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send
 # {"claimed":0,"sent":0,"retried":0,"parked":0,"cancelled":0,"completed":0}
+curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit
+# {"claimed":0,"submitted":0,"skipped":0,"retried":0,"parked":0}
 ```
 
 ### Verification
