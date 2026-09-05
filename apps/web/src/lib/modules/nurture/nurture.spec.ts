@@ -448,7 +448,9 @@ describe('drain: claim-then-send', () => {
 		const [send] = await sendsOf(enrollment.id);
 
 		// The previous invocation claimed the email_log key and died before the
-		// transport answered: the log row is `sending` and still FRESH.
+		// transport answered: the log row is `sending` and still FRESH. (The
+		// email sender's staleness window runs on the wall clock, not on the
+		// drain's injected `now`, so the log row is stamped against Date.now().)
 		await db.insert(emailLog).values({
 			id: `nur-inflight-${enrollment.id}`,
 			idempotencyKey: `nurture:${enrollment.id}:0`,
@@ -457,8 +459,8 @@ describe('drain: claim-then-send', () => {
 			subject: 'S',
 			data: {},
 			status: 'sending',
-			createdAt: new Date(NOW.getTime() - minutes(2)),
-			updatedAt: new Date(NOW.getTime() - minutes(2))
+			createdAt: new Date(Date.now() - minutes(2)),
+			updatedAt: new Date(Date.now() - minutes(2))
 		});
 		await db
 			.update(nurtureSends)
@@ -477,7 +479,7 @@ describe('drain: claim-then-send', () => {
 		// recorded as sent exactly when the log says so.
 		await db
 			.update(emailLog)
-			.set({ updatedAt: new Date(NOW.getTime() - minutes(11)) })
+			.set({ updatedAt: new Date(Date.now() - minutes(11)) })
 			.where(eq(emailLog.idempotencyKey, `nurture:${enrollment.id}:0`));
 		await db.update(nurtureSends).set({ scheduledAt: NOW }).where(eq(nurtureSends.id, send.id));
 		expect(await drainNurtureSends(drainDeps(), { now: NOW })).toMatchObject({ claimed: 1, sent: 1 });

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import type { ConsentKey } from '../crm/consent.ts';
 import { subscribers } from '../crm/schema.ts';
+import { emailLog } from '../email/schema.ts';
 import type { EmailSender } from '../email/service.ts';
 import {
 	NURTURE_MAX_ATTEMPTS,
@@ -28,7 +29,8 @@ import { cancelEnrollment, isMailable } from './service.ts';
  *
  * Crashed invocations leave `sending` rows; the claim re-takes them after
  * NURTURE_STALE_CLAIM_MINUTES, and the email idempotency key turns an
- * already-delivered retry into a no-op (`skipped` → recorded as sent).
+ * already-delivered retry into a no-op (`skipped` — recorded as sent only
+ * when the email_log row itself reads as delivered).
  */
 
 export interface NurtureDrainDeps {
@@ -163,11 +165,22 @@ export async function drainNurtureSends(
 			idempotencyKey: `nurture:${send.enrollmentId}:${send.stepIndex}`
 		});
 
-		if (outcome.status === 'error') {
+		// `skipped` means the email_log key was already claimed — by a previous
+		// attempt of THIS row. That is a delivery only when the log row says
+		// so: `sent`, or `dryrun` while the sender itself runs dry. An
+		// in-flight (`sending`) or failed log row is not (audit 2026-09-03).
+		let failure: string | null = null;
+		if (outcome.status === 'error') failure = outcome.error;
+		else if (outcome.status === 'skipped') {
+			const delivered = await logRowDelivered(deps, outcome.logId);
+			if (!delivered) failure = `email log row ${outcome.logId || '?'} is not delivered`;
+		}
+
+		if (failure !== null) {
 			if (send.attempts >= NURTURE_MAX_ATTEMPTS) {
 				await deps.db
 					.update(nurtureSends)
-					.set({ status: 'failed', lastError: outcome.error })
+					.set({ status: 'failed', lastError: failure })
 					.where(eq(nurtureSends.id, send.id));
 				result.parked += 1;
 			} else {
@@ -176,7 +189,7 @@ export async function drainNurtureSends(
 					.set({
 						status: 'pending',
 						scheduledAt: new Date(now.getTime() + retryDelayMs(send.attempts)),
-						lastError: outcome.error
+						lastError: failure
 					})
 					.where(eq(nurtureSends.id, send.id));
 				result.retried += 1;
@@ -213,4 +226,15 @@ export async function drainNurtureSends(
 	}
 
 	return result;
+}
+
+/** Is the email_log row a delivery from this sender's point of view? */
+async function logRowDelivered(deps: NurtureDrainDeps, logId: string): Promise<boolean> {
+	if (!logId) return false;
+	const [row] = await deps.db
+		.select({ status: emailLog.status })
+		.from(emailLog)
+		.where(eq(emailLog.id, logId));
+	if (!row) return false;
+	return row.status === 'sent' || (row.status === 'dryrun' && deps.email.dryRun);
 }

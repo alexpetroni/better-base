@@ -903,6 +903,7 @@ describe('webhook: atomicity — a partial failure commits nothing (audit Theme 
 		const event = await verifyStripeEvent(payload, signedHeader(payload), WEBHOOK_SECRET);
 
 		const throwingEmail: EmailSender = {
+			dryRun: false,
 			send: async () => {
 				throw new Error('email infrastructure down');
 			}
