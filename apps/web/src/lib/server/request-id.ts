@@ -10,16 +10,30 @@ import { redactLogPath } from './log.ts';
 export const REQUEST_ID_HEADER = 'x-request-id';
 
 /**
+ * Vercel ids are short tokens like `fra1::iad1::abcde-1725000000000-0123456789ab`;
+ * anything else in the header is not the platform's stamp.
+ */
+const VERCEL_ID_PATTERN = /^[A-Za-z0-9:-]{1,128}$/;
+
+/**
  * Vercel stamps every function invocation with `x-vercel-id` (visible in its
- * own request logs) — adopt it so our line and theirs share the key. A
- * CLIENT-supplied `x-request-id` is deliberately ignored: the correlation key
- * is ours to mint, never an attacker's to choose. Elsewhere: a UUID.
+ * own request logs) — adopt it there so our line and theirs share the key.
+ * Only there (FIX-17): on adapter-node the header can only come from the
+ * client, and — like a client-supplied `x-request-id`, which is ignored on
+ * every target — the correlation key is ours to mint, never an attacker's
+ * to choose. Elsewhere, or when the header is not a well-formed Vercel id:
+ * a UUID.
  */
 export function resolveRequestId(
 	headers: Headers,
-	random: () => string = () => crypto.randomUUID()
+	random: () => string = () => crypto.randomUUID(),
+	{ onVercel }: { onVercel: boolean }
 ): string {
-	return headers.get('x-vercel-id') || random();
+	if (onVercel) {
+		const stamped = headers.get('x-vercel-id');
+		if (stamped && VERCEL_ID_PATTERN.test(stamped)) return stamped;
+	}
+	return random();
 }
 
 /**

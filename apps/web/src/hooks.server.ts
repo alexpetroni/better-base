@@ -37,6 +37,8 @@ import '$lib/modules/chat/server';
 assertBootEnv({ ...env, PUBLIC_SITE_URL: publicEnv.PUBLIC_SITE_URL });
 
 const logRequests = requestLogEnabled(env);
+/** Only a Vercel function may adopt the platform's `x-vercel-id` (FIX-17). */
+const onVercel = Boolean(env.VERCEL);
 
 /**
  * Request id + request log (FIX-16, audit "Ops & platform"). OUTERMOST hook:
@@ -45,7 +47,7 @@ const logRequests = requestLogEnabled(env);
  * which is re-thrown untouched after being recorded.
  */
 const handleRequestId: Handle = async ({ event, resolve }) => {
-	const requestId = resolveRequestId(event.request.headers);
+	const requestId = resolveRequestId(event.request.headers, undefined, { onVercel });
 	event.locals.requestId = requestId;
 	const started = performance.now();
 	const log = (status: number) => {
@@ -189,7 +191,8 @@ export const handleError: HandleServerError = ({ error: err, event, status, mess
 	const errorId = crypto.randomUUID();
 	// `locals.requestId` is set by the outermost hook; an error thrown before
 	// handle runs at all (a malformed request) has none yet.
-	const requestId = event.locals.requestId ?? resolveRequestId(event.request.headers);
+	const requestId =
+		event.locals.requestId ?? resolveRequestId(event.request.headers, undefined, { onVercel });
 	const line = formatServerError({
 		error: err,
 		errorId,
