@@ -282,6 +282,44 @@ describe('AnthropicChatProvider', () => {
 			await expect(collect(ask(provider))).rejects.toThrow(/inactiv/i);
 		}, 3_000);
 
+		// FIX-17 (FIX-14 review, medium): the inactivity timer was armed BEFORE
+		// the request and merged into its signal, so an attempt whose headers
+		// took longer than inactivityMs was aborted before the SDK timeout and
+		// the configured retry never ran. Until the first event the budget must
+		// be the SDK's (timeout × attempts), inactivity only afterwards.
+		it('a slow first attempt is retried by the SDK, not aborted by the inactivity timer', async () => {
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const inactivityMs = 50;
+			let attempts = 0;
+			// First attempt: no headers for inactivityMs + 1, then a retryable 500;
+			// the retry answers a normal stream at once.
+			const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+				attempts += 1;
+				if (attempts === 1) {
+					await new Promise<void>((resolve, reject) => {
+						const t = setTimeout(resolve, inactivityMs + 1);
+						init?.signal?.addEventListener('abort', () => {
+							clearTimeout(t);
+							reject((init.signal as AbortSignal).reason);
+						});
+					});
+					return new Response('{"type":"error"}', {
+						status: 500,
+						headers: { 'content-type': 'application/json' }
+					});
+				}
+				return new Response(sseBody('Salut!', 'end_turn'), { status: 200, headers: sseHeaders });
+			}) as typeof fetch;
+			const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
+				timeoutMs: 2_000,
+				maxRetries: 1,
+				inactivityMs,
+				fetchFn
+			});
+			expect(await events(ask(provider))).toEqual([{ delta: 'Salut!' }]);
+			expect(attempts).toBe(2);
+		}, 5_000);
+
 		it('keeps the worst-case SDK budget under the route maxDuration (60 s)', () => {
 			expect(ANTHROPIC_MAX_RETRIES).toBe(1);
 			expect(ANTHROPIC_TIMEOUT_MS_DEFAULT * (ANTHROPIC_MAX_RETRIES + 1)).toBeLessThan(60_000);
