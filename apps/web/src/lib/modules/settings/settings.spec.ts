@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -19,6 +20,7 @@ import {
 } from './registry.ts';
 import { siteSettings } from './schema.ts';
 import {
+	autoMigratedVatSchedule,
 	createSettingsLoader,
 	loadSettings,
 	loadSettingsForAdmin,
@@ -368,5 +370,93 @@ describe('settings launch rule (integration)', () => {
 		expect(problems[0]).toMatch(/"company\.city".*sector/i);
 		await saveSettings({ db }, { 'company.city': 'Sector 2' }, STAFF.id);
 		expect(await settingsLaunchProblems({ db })).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// FIX-18: the auto-migrated standard-rate schedule (review 2026-09-05 #2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Replays the backfill statement of the committed migration 0024 — the one
+ * that turns a legacy `invoice.vatRateBp` row into a one-line schedule dated
+ * 2025-08-01 — against the current table, exactly as an upgrade would.
+ */
+async function replayVatBackfill(): Promise<void> {
+	const migration = readFileSync(
+		path.resolve(import.meta.dirname, '../../../drizzle/0024_vat_model.sql'),
+		'utf8'
+	);
+	const backfill = migration
+		.split('--> statement-breakpoint')
+		.find((statement) => statement.includes('INSERT INTO "site_settings"'));
+	if (!backfill) throw new Error('0024_vat_model.sql no longer carries the backfill INSERT');
+	await db.execute(sql.raw(backfill));
+}
+
+describe('auto-migrated VAT schedule detector (pure)', () => {
+	const at = new Date('2025-03-01T10:00:00Z');
+	const legacy = { key: 'invoice.vatRateBp', value: 1900, updatedAt: at };
+	const migrated = { key: 'invoice.vatStandardRates', value: '2025-08-01 19', updatedAt: at };
+
+	it('is true for the single 2025-08-01 line carrying the legacy rate that was never re-saved', () => {
+		expect(autoMigratedVatSchedule([legacy, migrated])).toBe(true);
+	});
+
+	it('is false once the operator re-saved the schedule (a later updated_at), even unchanged', () => {
+		const resaved = { ...migrated, updatedAt: new Date('2026-09-05T08:00:00Z') };
+		expect(autoMigratedVatSchedule([legacy, resaved])).toBe(false);
+	});
+
+	it('is false when the schedule was edited, has no legacy row, or is missing', () => {
+		const edited = { ...migrated, value: '2025-08-01 19\n2026-01-01 21' };
+		expect(autoMigratedVatSchedule([legacy, edited])).toBe(false);
+		expect(autoMigratedVatSchedule([legacy, { ...migrated, value: '2025-08-01 21' }])).toBe(false);
+		expect(autoMigratedVatSchedule([migrated])).toBe(false);
+		expect(autoMigratedVatSchedule([legacy])).toBe(false);
+		expect(autoMigratedVatSchedule([])).toBe(false);
+	});
+});
+
+describe('auto-migrated VAT schedule: launch rule and admin flag (integration)', () => {
+	beforeEach(async () => {
+		await db.delete(siteSettings);
+	});
+
+	it('an upgraded pre-2025-08 install is refused by launch:check until the schedule is saved', async () => {
+		await seedPlaceholderSettings(db);
+		await saveSettings({ db }, VALID_LAUNCH_VALUES, STAFF.id);
+		// The pre-FIX-12 installation: a saved 19 % rate, and no schedule row yet.
+		await db.delete(siteSettings).where(sql`${siteSettings.key} = 'invoice.vatStandardRates'`);
+		await db.insert(siteSettings).values({
+			key: 'invoice.vatRateBp',
+			value: 1900,
+			updatedAt: new Date('2025-03-01T10:00:00Z'),
+			updatedBy: STAFF.id
+		});
+		await replayVatBackfill();
+		expect((await loadSettings({ db }))['invoice.vatStandardRates']).toBe('2025-08-01 19');
+
+		const problems = await settingsLaunchProblems({ db });
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toMatch(/"invoice\.vatStandardRates".*migrat.*19/);
+		expect(problems[0]).toMatch(/\/admin\/settings/);
+		expect((await loadSettingsForAdmin({ db })).vatScheduleAutoMigrated).toBe(true);
+
+		// The operator opens Settings → Invoice, confirms the schedule and saves.
+		await saveSettings(
+			{ db },
+			{ 'invoice.vatStandardRates': '2025-08-01 19\n2026-01-01 21' },
+			STAFF.id
+		);
+		expect(await settingsLaunchProblems({ db })).toEqual([]);
+		expect((await loadSettingsForAdmin({ db })).vatScheduleAutoMigrated).toBe(false);
+	});
+
+	it('a schedule the operator saved themselves is never flagged', async () => {
+		await seedPlaceholderSettings(db);
+		await saveSettings({ db }, VALID_LAUNCH_VALUES, STAFF.id);
+		expect(await settingsLaunchProblems({ db })).toEqual([]);
+		expect((await loadSettingsForAdmin({ db })).vatScheduleAutoMigrated).toBe(false);
 	});
 });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -182,6 +183,42 @@ describe('/admin/settings save action', () => {
 		expect(
 			(await db.select().from(siteSettings)).find((row) => row.key === 'invoice.vatStandardRates')
 		).toBeUndefined();
+	});
+});
+
+describe('/admin/settings auto-migrated VAT schedule warning (FIX-18)', () => {
+	it('flags the schedule migration 0024 derived from a legacy rate until the group is saved', async () => {
+		await db.insert(siteSettings).values({
+			key: 'invoice.vatRateBp',
+			value: 1900,
+			updatedAt: new Date('2025-03-01T10:00:00Z'),
+			updatedBy: STAFF.id
+		});
+		const backfill = readFileSync(
+			path.resolve(import.meta.dirname, '../../../../../drizzle/0024_vat_model.sql'),
+			'utf8'
+		)
+			.split('--> statement-breakpoint')
+			.find((statement) => statement.includes('INSERT INTO "site_settings"'))!;
+		await db.execute(sql.raw(backfill));
+
+		type Data = { vatScheduleAutoMigrated: boolean };
+		const before = (await load(saveEvent({}) as unknown as Parameters<typeof load>[0])) as Data;
+		expect(before.vatScheduleAutoMigrated).toBe(true);
+
+		const result = await saveAction(
+			saveEvent({
+				group: 'invoice',
+				'invoice.seriesPrefix': 'BSL',
+				'invoice.nextNumber': '7',
+				'invoice.issuerPlace': 'București',
+				'invoice.vatStandardRates': '2025-08-01 19',
+				'invoice.paymentTermsNote': ''
+			})
+		);
+		expect(result).toEqual({ saved: true, group: 'invoice' });
+		const after = (await load(saveEvent({}) as unknown as Parameters<typeof load>[0])) as Data;
+		expect(after.vatScheduleAutoMigrated).toBe(false);
 	});
 });
 
