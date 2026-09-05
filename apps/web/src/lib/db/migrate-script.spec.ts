@@ -33,24 +33,34 @@ async function withAdmin(fn: (client: pg.Client) => Promise<void>): Promise<void
 	}
 }
 
+/**
+ * `DROP DATABASE` forces an immediate checkpoint, and that request queues
+ * behind whatever spread checkpoint the checkpointer is already in — on the
+ * compose volume the sync phase alone has taken 20–30 s right after the full
+ * suite's write load (`docker compose logs db | grep checkpoint`). Vitest's
+ * default 10 s hook timeout is not enough for that, so both hooks get the
+ * same budget as the migrate subprocess itself.
+ */
+const HOOK_TIMEOUT_MS = 120_000;
+
 beforeAll(async () => {
 	await withAdmin(async (client) => {
 		await client.query(`drop database if exists ${SCRATCH_DB} with (force)`);
 		await client.query(`create database ${SCRATCH_DB}`);
 	});
-});
+}, HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
 	await withAdmin(async (client) => {
 		await client.query(`drop database if exists ${SCRATCH_DB} with (force)`);
 	});
-});
+}, HOOK_TIMEOUT_MS);
 
 function migrateScript(): Promise<{ stdout: string; stderr: string }> {
 	return run('node', [path.join(scriptsDir, 'migrate.ts')], {
 		cwd: path.resolve(scriptsDir, '..'),
 		env: { ...process.env, DATABASE_URL: scratchUrl, DIRECT_DATABASE_URL: '' },
-		timeout: 120_000
+		timeout: HOOK_TIMEOUT_MS
 	});
 }
 
