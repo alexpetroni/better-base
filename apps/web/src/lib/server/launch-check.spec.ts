@@ -409,7 +409,9 @@ describe('fiscal privacy probe (integration)', () => {
 	}, 20_000);
 
 	it('reports an unreachable origin instead of throwing', async () => {
-		const problems = await probeFiscalPrivacy(probeEnv({ MEDIA_PUBLIC_BASE_URL: 'http://localhost:1' }));
+		const problems = await probeFiscalPrivacy(
+			probeEnv({ MEDIA_PUBLIC_BASE_URL: 'http://localhost:1' })
+		);
 		expect(problems.join('\n')).toMatch(/is not reachable from here/);
 	}, 20_000);
 
