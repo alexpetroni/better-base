@@ -4,6 +4,9 @@ import type { StaffRole } from '$lib/modules/auth';
 import type { SiteSettings } from '$lib/modules/settings';
 
 declare global {
+	/** Git commit of this build, injected by vite `define` (vite.config.ts) — see /api/health. */
+	const __BUILD_COMMIT__: string;
+
 	namespace App {
 		interface Error {
 			message: string;

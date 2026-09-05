@@ -1,5 +1,6 @@
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import tailwindcss from '@tailwindcss/vite';
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vitest/config';
 import nodeAdapter from '@sveltejs/adapter-node';
 import vercelAdapter from '@sveltejs/adapter-vercel';
@@ -27,8 +28,26 @@ loadRootEnv();
 const target = process.env.DEPLOY_TARGET ?? (process.env.VERCEL ? 'vercel' : 'node');
 const adapter = target === 'vercel' ? vercelAdapter({ runtime: 'nodejs22.x' }) : nodeAdapter();
 
+/**
+ * The git commit baked into the build, reported by the liveness probe
+ * (/api/health, FIX-16) so an operator can tell WHICH build answers. Vercel
+ * exposes it as an env var at build time; elsewhere ask git; a tarball
+ * without either reports 'unknown' rather than failing the build.
+ */
+function buildCommit(): string {
+	if (process.env.VERCEL_GIT_COMMIT_SHA) return process.env.VERCEL_GIT_COMMIT_SHA;
+	try {
+		return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+			.toString()
+			.trim();
+	} catch {
+		return 'unknown';
+	}
+}
+
 export default defineConfig({
 	envDir: '../../',
+	define: { __BUILD_COMMIT__: JSON.stringify(buildCommit()) },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

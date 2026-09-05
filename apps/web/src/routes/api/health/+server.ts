@@ -1,39 +1,23 @@
 import { json } from '@sveltejs/kit';
-import { getDb } from '$lib/db';
 import { getChatProvider } from '$lib/modules/chat/server';
-import { getStorage } from '$lib/modules/media/server';
-import { checkHealth } from '$lib/server/health';
+import { getSite } from '$lib/server/site';
 import type { RequestHandler } from './$types';
 
 /**
- * A dependency whose singleton cannot even be constructed (missing env) is
- * unhealthy, not a crash: the probe must answer 503 with a structured body,
- * never throw into a 500 (audit resilience #9).
+ * LIVENESS (FIX-16, audit "Health & logs"): "this process is up and serving
+ * this site at this build" — no I/O, so a storage or database blip can never
+ * make a load balancer drain an instance that could still serve every page.
+ * Point the uptime monitor and the readiness gate at /api/health/ready,
+ * which runs the dependency checks. The chat provider kind (FIX-14) is
+ * selected at boot, so reporting it costs nothing.
  */
-function tryConstruct<T>(construct: () => T): T | null {
-	try {
-		return construct();
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Ops probe: 200 when db + storage are reachable, 503 otherwise. Also names
- * the chat provider kind (FIX-14) — the barrel already selected it at boot,
- * so this cannot throw here.
- */
-export const GET: RequestHandler = async () => {
-	const report = await checkHealth({
-		db: tryConstruct(getDb),
-		storage: tryConstruct(getStorage)
-	});
-	return json(
+export const GET: RequestHandler = () =>
+	json(
 		{
-			status: report.healthy ? 'ok' : 'degraded',
-			checks: report.checks,
+			status: 'ok',
+			site: getSite().id,
+			commit: __BUILD_COMMIT__,
 			chatProvider: getChatProvider().kind
 		},
-		{ status: report.healthy ? 200 : 503, headers: { 'cache-control': 'no-store' } }
+		{ headers: { 'cache-control': 'no-store' } }
 	);
-};
