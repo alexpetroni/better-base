@@ -4,7 +4,6 @@ import type { EmailAttachment } from '../email/service.ts';
 import type { Storage } from '../media/storage.ts';
 import type { InvoiceDocFormat } from './access.ts';
 import { renderEFacturaXml } from './efactura.ts';
-import { noopEFacturaSubmitter, type EFacturaSubmitter } from './efactura-submitter.ts';
 import { invoiceDocumentFilename, type InvoiceDocumentModel } from './model.ts';
 import { renderInvoicePdf } from './pdf.ts';
 import { invoiceLines, invoices } from './schema.ts';
@@ -33,8 +32,6 @@ export function invoiceDocumentKey(invoiceId: string, format: InvoiceDocFormat):
 export interface InvoiceDocumentDeps {
 	db: Db;
 	storage: Pick<Storage, 'putObject' | 'statObject' | 'getObjectBytes'>;
-	/** ANAF submission seam; the no-op default reports `skipped`, never fakes. */
-	efactura?: EFacturaSubmitter;
 }
 
 /** The stored snapshot + the original's identification for a storno. */
@@ -68,7 +65,8 @@ async function renderDocument(model: InvoiceDocumentModel, format: InvoiceDocFor
 
 /**
  * Return the stored document's bytes, rendering and storing them on first
- * request. The first XML store also runs the e-Factura submission seam.
+ * request. Storing is all this does: ANAF submission is driven by the
+ * submission queue (submissions.ts), never by a customer or staff download.
  */
 export async function ensureInvoiceDocument(
 	deps: InvoiceDocumentDeps,
@@ -81,13 +79,6 @@ export async function ensureInvoiceDocument(
 
 	const bytes = await renderDocument(model, format);
 	await deps.storage.putObject(key, bytes, DOC_MIME[format]);
-	if (format === 'xml') {
-		await (deps.efactura ?? noopEFacturaSubmitter).submit({
-			invoiceId: model.invoice.id,
-			displayNumber: model.invoice.displayNumber,
-			xml: new TextDecoder().decode(bytes)
-		});
-	}
 	return bytes;
 }
 

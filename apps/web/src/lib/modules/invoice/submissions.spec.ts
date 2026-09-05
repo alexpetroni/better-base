@@ -101,6 +101,13 @@ async function insertPaidOrder(input: { status?: 'paid' | 'refunded'; refundAll?
 	return order;
 }
 
+/** Fiscal rows are append-only (triggers); TRUNCATE is the test-only reset. */
+async function resetOrders(): Promise<void> {
+	await db.execute(
+		sql`truncate table invoice_submissions, invoice_lines, invoices, order_events, order_items, orders cascade`
+	);
+}
+
 async function submissionsOf(orderId: string) {
 	return db
 		.select({
@@ -206,7 +213,7 @@ describe('the customer GET never submits', () => {
 
 describe('the cron drains pending submissions', () => {
 	it('renders, stores and submits; the row records the ANAF index', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const order = await insertPaidOrder();
 		await ensureInvoicesForOrder({ db }, order.id, 'test');
 		const [invoice] = await db.select().from(invoices).where(eq(invoices.orderId, order.id));
@@ -236,7 +243,7 @@ describe('the cron drains pending submissions', () => {
 	});
 
 	it('a `skipped` outcome (no enrollment) keeps the row pending, counts no attempt, defers it', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const order = await insertPaidOrder();
 		await ensureInvoicesForOrder({ db }, order.id, 'test');
 		const now = new Date();
@@ -263,7 +270,7 @@ describe('the cron drains pending submissions', () => {
 	});
 
 	it('a throwing submitter retries with backoff and parks after EFACTURA_MAX_ATTEMPTS', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const order = await insertPaidOrder();
 		await ensureInvoicesForOrder({ db }, order.id, 'test');
 		const failing: EFacturaSubmitter = {
@@ -306,7 +313,7 @@ describe('the cron drains pending submissions', () => {
 	});
 
 	it('two concurrent ticks submit every pending document exactly once', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const orderRows = await Promise.all(
 			Array.from({ length: 6 }, () => insertPaidOrder({ status: 'refunded', refundAll: true }))
 		);
@@ -333,7 +340,7 @@ describe('the cron drains pending submissions', () => {
 
 describe('/admin/orders "de trimis la ANAF"', () => {
 	it('lists orders with an unsubmitted document and the calendar days left', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const due = await insertPaidOrder();
 		const done = await insertPaidOrder();
 		const notInvoiced = await insertPaidOrder();
@@ -356,7 +363,7 @@ describe('/admin/orders "de trimis la ANAF"', () => {
 	});
 
 	it('a parked (failed) submission stays in the queue, and an old one shows negative days', async () => {
-		await db.delete(orders);
+		await resetOrders();
 		const order = await insertPaidOrder();
 		await ensureInvoicesForOrder({ db }, order.id, 'test');
 		const [invoice] = await db.select().from(invoices).where(eq(invoices.orderId, order.id));

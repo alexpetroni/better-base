@@ -1,6 +1,9 @@
 // Server module barrel: the fiscal-record schema, the issuance service and
 // the document layer (PDF/XML rendering, storage, signed access, e-Factura).
-export { invoiceLines, invoices, invoiceSeries } from './schema.ts';
+import { env } from '$env/dynamic/private';
+import { selectEFacturaSubmitter, type EFacturaSubmitter } from './efactura-submitter.ts';
+
+export { invoiceLines, invoices, invoiceSeries, invoiceSubmissions } from './schema.ts';
 export {
 	INVOICE_DOC_TOKEN_TTL_SECONDS,
 	invoiceDocPath,
@@ -26,6 +29,15 @@ export {
 	type EFacturaSubmitOutcome,
 	type EFacturaSubmitter
 } from './efactura-submitter.ts';
+export {
+	EFACTURA_DEADLINE_DAYS,
+	EFACTURA_MAX_ATTEMPTS,
+	efacturaDaysLeftSql,
+	recordPendingSubmissionInTx,
+	submitPendingEFactura,
+	type EFacturaDrainDeps,
+	type EFacturaDrainResult
+} from './submissions.ts';
 export {
 	invoiceDateIso,
 	invoiceDateRo,
@@ -56,3 +68,10 @@ export {
 	type IssuerSettingsProblem,
 	type PostalAddressSnapshot
 } from './service.ts';
+
+/** Env-bound submitter singleton: the no-op until a human enrolls with ANAF. */
+let submitterInstance: EFacturaSubmitter | undefined;
+export function getEFacturaSubmitter(): EFacturaSubmitter {
+	submitterInstance ??= selectEFacturaSubmitter(env);
+	return submitterInstance;
+}

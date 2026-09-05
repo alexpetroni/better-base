@@ -19,6 +19,7 @@ import type { SettingKey, SiteSettings } from '../settings/registry.ts';
 import { orderEvents, orderItems, orders, type OrderRow } from '../shop/schema.ts';
 import { invoiceDateIso } from './model.ts';
 import { invoiceLines, invoices, invoiceSeries, type InvoiceRow } from './schema.ts';
+import { recordPendingSubmissionInTx } from './submissions.ts';
 import {
 	computeLineAmounts,
 	partialStornoLineAmounts,
@@ -414,6 +415,8 @@ export async function issueInvoiceForOrderInTx(
 		);
 	}
 
+	// Queued for ANAF in the same transaction as the document (FIX-12).
+	await recordPendingSubmissionInTx(tx, invoice.id);
 	await appendFiscalOrderEvent(tx, {
 		orderId: order.id,
 		kind: 'invoice-issued',
@@ -584,6 +587,7 @@ export async function issueStornoForOrderInTx(
 			.values(lines.map((line) => ({ id: crypto.randomUUID(), invoiceId: storno.id, ...line })));
 	}
 
+	await recordPendingSubmissionInTx(tx, storno.id);
 	await appendFiscalOrderEvent(tx, {
 		orderId: order.id,
 		kind: 'storno-issued',

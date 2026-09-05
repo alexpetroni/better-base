@@ -32,6 +32,7 @@
 		{ id: 'action', label: m.admin_orders_filter_action() },
 		{ id: 'oversold', label: m.admin_orders_filter_oversold() },
 		{ id: 'invoice-missing', label: m.admin_orders_filter_invoice_missing() },
+		{ id: 'efactura-pending', label: m.admin_orders_filter_efactura_pending() },
 		{ id: 'all', label: m.admin_orders_filter_all() },
 		...FULFILLMENT_STATUSES.map((status) => ({ id: status, label: fulfillmentLabels[status]() }))
 	]);
@@ -181,6 +182,19 @@
 								class="ml-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
 							>
 								{m.admin_order_invoice_missing_badge()}
+							</span>
+						{/if}
+						{#if order.efacturaDaysLeft !== null}
+							<span
+								data-testid="order-row-efactura"
+								data-days-left={order.efacturaDaysLeft}
+								class="ml-1 rounded px-2 py-0.5 text-xs font-semibold {order.efacturaDaysLeft < 0
+									? 'bg-red-100 text-red-800'
+									: 'bg-amber-100 text-amber-800'}"
+							>
+								{order.efacturaDaysLeft < 0
+									? m.admin_order_efactura_overdue({ days: -order.efacturaDaysLeft })
+									: m.admin_order_efactura_due({ days: order.efacturaDaysLeft })}
 							</span>
 						{/if}
 					</td>

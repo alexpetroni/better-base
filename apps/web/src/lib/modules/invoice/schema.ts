@@ -160,3 +160,45 @@ export type InvoiceRow = typeof invoices.$inferSelect;
 export type InvoiceKind = InvoiceRow['kind'];
 export type InvoiceLineRow = typeof invoiceLines.$inferSelect;
 export type InvoiceSeriesRow = typeof invoiceSeries.$inferSelect;
+
+/**
+ * SPV submission tracking (FIX-12). Every issued document — invoice and
+ * storno — gets exactly one row, written in the SAME transaction as the
+ * document, so "issued but never queued" cannot exist. The e-Factura cron
+ * claims due rows (lease = `claimed_at`, stale after a few minutes), renders
+ * the XML into the fiscal bucket and hands it to the `EFacturaSubmitter`
+ * seam; the outcome lands here, never in object existence. `failed` means
+ * PARKED after `EFACTURA_MAX_ATTEMPTS` — a human decides what happens next.
+ */
+export const invoiceSubmissions = pgTable(
+	'invoice_submissions',
+	{
+		id: text('id').primaryKey(),
+		invoiceId: text('invoice_id')
+			.notNull()
+			.references(() => invoices.id),
+		status: text('status', { enum: ['pending', 'submitted', 'failed'] })
+			.notNull()
+			.default('pending'),
+		/** Failed submission attempts so far (a `skipped` outcome is not one). */
+		attempts: integer('attempts').notNull().default(0),
+		/** Lease taken by the cron tick processing this row; null when idle. */
+		claimedAt: timestamp('claimed_at', { withTimezone: true }),
+		/** Earliest next try (backoff after a failure, deferral after a skip). */
+		nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+		submittedAt: timestamp('submitted_at', { withTimezone: true }),
+		/** ANAF's upload index (the reference SPV answers with). */
+		anafIndex: text('anaf_index'),
+		/** The last failure's text; null once submitted. */
+		error: text('error'),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => [
+		uniqueIndex('invoice_submissions_invoice_uq').on(table.invoiceId),
+		index('invoice_submissions_status_idx').on(table.status, table.nextAttemptAt)
+	]
+);
+
+export type InvoiceSubmissionRow = typeof invoiceSubmissions.$inferSelect;
+export type InvoiceSubmissionStatus = InvoiceSubmissionRow['status'];

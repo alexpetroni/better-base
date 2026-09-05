@@ -5,7 +5,11 @@ import type { Db } from '../../db/client.ts';
 import { runOnce, type DbTx } from '../../server/event-ledger/core.ts';
 import { processedEvents, type ProcessedEventRow } from '../../server/event-ledger/schema.ts';
 import type { EmailAttachment, EmailSender } from '../email/service.ts';
-import { issueInvoiceForOrderInTx, issueStornoForOrderInTx } from '$lib/modules/invoice/server';
+import {
+	efacturaDaysLeftSql,
+	issueInvoiceForOrderInTx,
+	issueStornoForOrderInTx
+} from '$lib/modules/invoice/server';
 import { enrollFromOrderEmail } from '$lib/modules/nurture/server';
 import { loadSettings } from '$lib/modules/settings/server';
 import type { SiteSettings } from '../settings/registry.ts';
@@ -984,12 +988,14 @@ export function listEmptyCartEvents(
  *   one-click issue action;
  * - a single fulfillment status; or `all`.
  */
-export type OrderListFilter = 'all' | 'action' | 'oversold' | 'invoice-missing' | FulfillmentStatus;
+export type OrderListFilter =
+	'all' | 'action' | 'oversold' | 'invoice-missing' | 'efactura-pending' | FulfillmentStatus;
 
 export const ORDER_LIST_FILTERS: readonly OrderListFilter[] = [
 	'action',
 	'oversold',
 	'invoice-missing',
+	'efactura-pending',
 	'all',
 	...FULFILLMENT_STATUSES
 ];
@@ -1008,6 +1014,8 @@ const stornoNumbers = sql<
 	string | null
 >`(select string_agg(s.display_number, ', ' order by s.number) from invoices s where s.storno_of_invoice_id = ${orderInvoice.id})`;
 const reversedCents = sql<number>`coalesce((select sum(-s.gross_total_cents) from invoices s where s.storno_of_invoice_id = ${orderInvoice.id}), 0)::int`;
+/** Days left to submit the order's most urgent document to ANAF (FIX-12). */
+const efacturaDaysLeft = efacturaDaysLeftSql(orders.id);
 /** The single definition of "fiscal record incomplete" — filter and badge agree. */
 const fiscalIncomplete = sql<boolean>`case
 	when ${orders.status} = 'paid' then ${orderInvoice.id} is null
@@ -1024,6 +1032,8 @@ function orderFilterCondition(filter: OrderListFilter) {
 			return and(eq(orders.oversold, true), inArray(orders.fulfillmentStatus, NEEDS_ACTION_STATES));
 		case 'invoice-missing':
 			return fiscalIncomplete;
+		case 'efactura-pending':
+			return isNotNull(efacturaDaysLeft);
 		default:
 			return eq(orders.fulfillmentStatus, filter);
 	}
@@ -1038,6 +1048,8 @@ export type OrderListRow = OrderRow & {
 	reversedCents: number;
 	/** The fiscal record needs the operator: see `invoice-missing`. */
 	fiscalIncomplete: boolean;
+	/** Calendar days left for the SPV upload; null = nothing due at ANAF. */
+	efacturaDaysLeft: number | null;
 };
 
 export function listOrders(
@@ -1050,7 +1062,8 @@ export function listOrders(
 			invoiceNumber: orderInvoice.displayNumber,
 			stornoNumber: stornoNumbers,
 			reversedCents: reversedCents.mapWith(Number),
-			fiscalIncomplete: fiscalIncomplete.mapWith(Boolean)
+			fiscalIncomplete: fiscalIncomplete.mapWith(Boolean),
+			efacturaDaysLeft: efacturaDaysLeft.mapWith((value) => (value === null ? null : Number(value)))
 		})
 		.from(orders)
 		.leftJoin(

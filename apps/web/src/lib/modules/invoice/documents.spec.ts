@@ -12,7 +12,6 @@ import type { SettingJsonValue, SettingKey } from '../settings/registry.ts';
 import { buildCartMetadata } from '../shop/checkout.ts';
 import { orders } from '../shop/schema.ts';
 import { processStripeEvent, verifyStripeEvent, type WebhookDeps } from '../shop/webhook.ts';
-import type { EFacturaSubmitter } from './efactura-submitter.ts';
 import { validateEFacturaXml } from './efactura-validate.ts';
 import {
 	ensureInvoiceDocument,
@@ -22,11 +21,11 @@ import {
 	loadInvoiceModel,
 	type InvoiceDocumentDeps
 } from './documents.ts';
-import { invoices } from './schema.ts';
+import { invoices, invoiceSubmissions } from './schema.ts';
 import { ISSUER_ADDRESS_SETTINGS } from '../../../../tests/helpers/issuer-settings.ts';
 
 // Integration for the document layer: write-once storage semantics, the
-// e-Factura seam firing exactly once, the confirmation email carrying the
+// XML store never submitting, the confirmation email carrying the
 // invoice PDF in dry-run capture, idempotent re-sends — and the serverless
 // tripwire that no runtime code in the invoice path touches the filesystem.
 // Storage is an in-memory fake HERE (semantics under test, not MinIO — the
@@ -184,16 +183,13 @@ describe('write-once document storage', () => {
 		expect(validateEFacturaXml(new TextDecoder().decode(first!.xml), model!)).toEqual([]);
 	});
 
-	it('runs the e-Factura seam exactly once, on the first XML store', async () => {
+	// FIX-12: submission moved out of the download path. The XML store is a
+	// store; what reaches ANAF is decided by the submission queue (see
+	// submissions.spec.ts), so a download can never trigger a fiscal side
+	// effect — this replaces the pre-FIX-12 "seam fires on first XML store".
+	it('stores the XML without touching the submission queue', async () => {
 		const storage = memoryStorage();
-		const submissions: string[] = [];
-		const submitter: EFacturaSubmitter = {
-			async submit(submission) {
-				submissions.push(submission.displayNumber);
-				return { status: 'skipped', reason: 'test' };
-			}
-		};
-		const deps: InvoiceDocumentDeps = { db, storage, efactura: submitter };
+		const deps: InvoiceDocumentDeps = { db, storage };
 		const orderId = await orderViaWebhook({
 			db,
 			email: createEmailSender({ db, dryRun: true, from: 'test@example.ro' }),
@@ -203,7 +199,12 @@ describe('write-once document storage', () => {
 
 		await ensureInvoiceDocument(deps, (await loadInvoiceModel({ db }, invoice.id))!, 'xml');
 		await ensureInvoiceDocument(deps, (await loadInvoiceModel({ db }, invoice.id))!, 'xml');
-		expect(submissions).toEqual([invoice.displayNumber]);
+		expect(storage.puts).toEqual([invoiceDocumentKey(invoice.id, 'xml')]);
+		const [submission] = await db
+			.select()
+			.from(invoiceSubmissions)
+			.where(eq(invoiceSubmissions.invoiceId, invoice.id));
+		expect(submission).toMatchObject({ status: 'pending', attempts: 0, claimedAt: null });
 	});
 });
 
