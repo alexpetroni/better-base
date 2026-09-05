@@ -66,6 +66,11 @@ export {
 	type Result,
 	type UploadTicket
 } from './service.ts';
+export {
+	finalizeMediaObject,
+	IMMUTABLE_CACHE_CONTROL,
+	type MediaObjectSource
+} from '../../server/media-objects.ts';
 export { createStorage, type Storage, type StorageConfig } from './storage.ts';
 export { looksLikeSvg, sanitizeSvg } from './svg.ts';
 export {

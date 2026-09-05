@@ -48,8 +48,9 @@ const ALLOWED_TAGS = [
 	'feGaussianBlur',
 	'feMerge',
 	'feMergeNode',
-	'feOffset',
-	'style'
+	'feOffset'
+	// No `style`: its body is free-form CSS — `@import url(…)`, `url(http…)`
+	// fetch remote resources (FIX-15). Presentation attributes cover artwork.
 ];
 
 /**
@@ -123,12 +124,29 @@ export function sanitizeSvg(source: string): string {
 	return sanitizeHtml(source, {
 		allowedTags: ALLOWED_TAGS,
 		allowedAttributes: { '*': ALLOWED_ATTRS },
-		// `<style>` bodies survive as text; sanitize-html drops the tag's
-		// contents unless it is listed here.
 		allowedSchemes: [],
 		allowVulnerableTags: false,
-		parser: { lowerCaseTags: false, lowerCaseAttributeNames: false }
+		parser: { lowerCaseTags: false, lowerCaseAttributeNames: false },
+		transformTags: { '*': dropRemoteReferences }
 	});
+}
+
+/**
+ * An allowed attribute can still name a remote resource through CSS syntax:
+ * `style="fill:url(https://…)"`, `fill="url(https://…)"`, `@import`. Local
+ * `url(#id)` references (gradients, clip paths, markers) are what artwork
+ * uses, so only those survive.
+ */
+const REMOTE_CSS_REF = /@import|url\s*\(\s*['"]?\s*(?!#)/i;
+
+function dropRemoteReferences(
+	tagName: string,
+	attribs: Record<string, string>
+): { tagName: string; attribs: Record<string, string> } {
+	for (const [name, value] of Object.entries(attribs)) {
+		if (REMOTE_CSS_REF.test(value)) delete attribs[name];
+	}
+	return { tagName, attribs };
 }
 
 /** Cheap sniff for "this really is an SVG document" before sanitizing. */

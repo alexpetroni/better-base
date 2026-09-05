@@ -6,8 +6,14 @@ import { blurhashFromPng, BLURHASH_SOURCE_PX } from './blurhash.ts';
 import type { ImageProvider } from './image.ts';
 import { media, type MediaRow, type VideoProvider } from './schema.ts';
 import type { Storage } from './storage.ts';
-import { looksLikeSvg, sanitizeSvg } from './svg.ts';
-import { isAllowedImageMime, mediaKeyFor, validateUpload } from './validation.ts';
+import { finalizeMediaObject } from '../../server/media-objects.ts';
+import {
+	isAllowedImageMime,
+	mediaKeyFor,
+	pendingKeyFor,
+	validateUpload,
+	type AllowedImageMime
+} from './validation.ts';
 
 /**
  * Media service. Framework-free: deps (db + storage) are passed in so the
@@ -49,11 +55,18 @@ export interface MediaDeleteDeps extends MediaDeps {
 }
 
 export interface UploadTicket {
+	/** Quarantine key (`pending/…`) — the served key is decided at confirm. */
 	key: string;
 	uploadUrl: string;
 }
 
-/** Step 1 of an upload: validate the declared file and presign a direct PUT. */
+/**
+ * Step 1 of an upload: validate the declared file and presign a direct PUT
+ * into the quarantine prefix. The public origin never serves `pending/`
+ * (bucket policy locally, edge rule on R2), so whatever the browser — or
+ * anyone holding the URL for its 10-minute lifetime — puts there is inert
+ * until confirm produces the served object from it.
+ */
 export async function requestUpload(
 	deps: MediaDeps,
 	input: { filename: string; mime: string; size: number }
@@ -62,18 +75,18 @@ export async function requestUpload(
 	if (!validation.ok) {
 		return { ok: false, error: validation.reason === 'mime' ? 'invalid-mime' : 'invalid-size' };
 	}
-	const key = mediaKeyFor(input.filename, validation.mime, {
-		now: new Date(),
-		id: crypto.randomUUID()
-	});
+	const key = pendingKeyFor(validation.mime, crypto.randomUUID());
 	const uploadUrl = await deps.storage.presignPut(key, validation.mime, input.size);
 	return { ok: true, value: { key, uploadUrl } };
 }
 
 /**
- * Step 2, after the browser PUT succeeded: verify the object really landed
- * (size/mime enforced by the presigned signature, re-checked here), read its
- * dimensions server-side and record the row.
+ * Step 2, after the browser PUT into quarantine succeeded: verify the object
+ * really landed (size/mime enforced by the presigned signature, re-checked
+ * here), read its dimensions server-side, PRODUCE the served object under a
+ * fresh `uploads/` key (`finalizeMediaObject`), delete the quarantined one
+ * and record the row. The presigned URL stays valid for a while, but it now
+ * only ever writes to the quarantine key nobody serves or reads again.
  *
  * Deliberately not transactional (audit Theme B): storage is external, so the
  * only DB write is the single row insert. A failure here strands an orphan
@@ -91,10 +104,13 @@ export async function confirmUpload(
 	if (!validation.ok) {
 		return { ok: false, error: validation.reason === 'mime' ? 'invalid-mime' : 'invalid-size' };
 	}
+	const mime: AllowedImageMime = validation.mime;
 
+	// Originals are ≤ 15 MB: one read serves both the dimension probe and
+	// (for SVGs) the sanitizer.
+	const bytes = await deps.storage.getObjectBytes(input.key);
 	let dimensions: { width: number | null; height: number | null } = { width: null, height: null };
 	try {
-		const bytes = await deps.storage.getObjectBytes(input.key);
 		const size = imageSize(bytes);
 		if (size.width && size.height) {
 			dimensions = { width: Math.round(size.width), height: Math.round(size.height) };
@@ -103,32 +119,20 @@ export async function confirmUpload(
 		// Undetectable dimensions (e.g. an SVG without width/viewBox) are not fatal.
 	}
 
-	// SVGs are active content and no provider rasterizes them, so they are
-	// neutralized here — ONCE, at rest — rather than on every serve (audit M1).
-	// imgproxy used to do both halves on the way out; Cloudflare and direct
-	// hand the stored object to the browser untouched, so the stored object is
-	// what has to be safe:
-	//   1. scripts/handlers/remote refs stripped, and the clean bytes written
-	//      back over the original — the dangerous version stops existing;
-	//   2. `Content-Disposition: attachment`, so even a sanitizer miss
-	//      downloads instead of executing on the media origin.
-	if (stat.mime === 'image/svg+xml') {
-		try {
-			const source = new TextDecoder().decode(await deps.storage.getObjectBytes(input.key));
-			const clean = looksLikeSvg(source) ? sanitizeSvg(source) : '';
-			if (clean) await deps.storage.putObject(input.key, clean, stat.mime);
-			await deps.storage.setContentDisposition(input.key, 'attachment');
-		} catch {
-			// Non-fatal for the row, but the object may still be dangerous — the
-			// attachment header is the layer that holds either way, and a failed
-			// re-upload leaves the original in place rather than a corrupt one.
-		}
-	}
+	const key = mediaKeyFor(input.filename, mime, { now: new Date(), id: crypto.randomUUID() });
+	const outcome = await finalizeMediaObject(
+		deps.storage,
+		key,
+		mime,
+		mime === 'image/svg+xml' ? { bytes } : { pendingKey: input.key }
+	);
+	if (outcome === 'not-svg') return { ok: false, error: 'invalid-mime', detail: 'not an SVG' };
+	await deps.storage.deleteObject(input.key);
 
 	let blurhash: string | null = null;
-	if (deps.images?.transforms && stat.mime !== 'image/svg+xml') {
+	if (deps.images?.transforms && mime !== 'image/svg+xml') {
 		try {
-			blurhash = await computeBlurhash(deps.images, input.key);
+			blurhash = await computeBlurhash(deps.images, key);
 		} catch {
 			// Non-fatal: a corrupt or undecodable upload still confirms (the row
 			// just has no placeholder) and `pnpm media:blurhash` can retry later.
@@ -140,9 +144,9 @@ export async function confirmUpload(
 		.values({
 			id: crypto.randomUUID(),
 			kind: 'image',
-			key: input.key,
+			key,
 			filename: input.filename,
-			mime: stat.mime,
+			mime,
 			size: stat.size,
 			width: dimensions.width,
 			height: dimensions.height,

@@ -33,7 +33,20 @@ export function validateUpload(input: { mime: string; size: number }): UploadVal
 }
 
 /**
- * Build the storage key for a new upload: `uploads/<yyyy>/<mm>/<slug>-<id>.<ext>`.
+ * Quarantine prefix for in-flight uploads. A presigned PUT lands here and the
+ * public origin never serves it (bucket policy / edge rule); `confirmUpload`
+ * produces the served object under `mediaKeyFor` and deletes the pending one.
+ */
+export const PENDING_PREFIX = 'pending/';
+
+/** Quarantine key for one upload: `pending/<uuid>.<ext>`. */
+export function pendingKeyFor(mime: AllowedImageMime, id: string): string {
+	return `${PENDING_PREFIX}${id}.${ALLOWED_IMAGE_MIMES[mime]}`;
+}
+
+/**
+ * Build the SERVED storage key for a confirmed upload:
+ * `uploads/<yyyy>/<mm>/<slug>-<id>.<ext>`.
  * The slug comes from the original filename (safe chars only); the random id
  * makes keys collision-free. Keys stay [a-z0-9/._-] so they never need URL
  * escaping in imgproxy `plain/s3://…` source URLs.

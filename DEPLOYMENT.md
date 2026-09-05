@@ -212,9 +212,41 @@ fully private and imgproxy reads it with its own credentials.
 
 What is public is the *original bytes at an unguessable key* (`uploads/<year>/
 <month>/<slug>-<8 hex>.<ext>`), never a listing: grant `s3:GetObject` only.
-Uploaded SVGs are sanitized at confirm time and stored with
-`Content-Disposition: attachment`, so a crafted SVG cannot execute on the
-media origin.
+
+**Storage layout and the quarantine prefix (FIX-15).** The bucket holds three
+kinds of key:
+
+| prefix        | written by                         | served publicly |
+| ------------- | ---------------------------------- | --------------- |
+| `pending/`    | the browser's presigned PUT        | **never**       |
+| `uploads/`    | `confirmUpload` (finalize)         | yes             |
+| `seed/`       | `pnpm seed:demo` (finalize)        | yes             |
+
+A presigned PUT lands in `pending/<uuid>.<ext>` and stays valid for 10
+minutes. Confirm *produces* the served object from it — a server-side copy
+into a fresh `uploads/…` key for rasters, a sanitized re-write with
+`Content-Disposition: attachment` for SVGs, both with `Cache-Control:
+public, max-age=31536000, immutable` — then deletes the pending object. The
+presigned URL therefore never touches a served key: re-using it after
+confirm only recreates an orphan under `pending/` (nothing serves it, nothing
+reads it again). Content import and the seed write through the same finalize
+step, so every served image in the bucket has been through the sanitizer.
+
+The public origin MUST refuse `pending/`. Locally `pnpm storage:init` applies
+a bucket policy with an explicit `Deny s3:GetObject` on `pending/*` next to
+the public-read grant. On R2 the custom domain serves the whole bucket, so add
+a Cloudflare **WAF custom rule** on the zone:
+
+```
+(http.host eq "media.bettersleep.ro" and starts_with(http.request.uri.path, "/pending/"))
+→ Block
+```
+
+(one per site; put the rule above any cache rule). Optionally add an R2
+**object lifecycle rule** deleting `pending/` objects older than one day, to
+sweep abandoned uploads. Verify after deploy: a `curl -I
+https://media.<site>/pending/x.png` must not answer 200 (a 403 or 404 both
+mean the rule holds).
 
 **Fiscal documents get their own bucket.** R2 public access is per bucket,
 not per prefix, so anything in the media bucket is reachable through the
@@ -324,12 +356,16 @@ both sites' buckets.
 ### SVGs
 
 An SVG is active content and nothing rasterizes it. It is neutralized **at
-upload**, once, rather than on every serve: `confirmUpload` strips scripts,
-event handlers and remote references, writes the clean bytes back over the
-original, and sets `Content-Disposition: attachment` on the object. Both
-layers matter — the sanitizer removes the payload, the header means even a
-sanitizer miss downloads instead of executing on the media origin. imgproxy's
-`IMGPROXY_SANITIZE_SVG` stays on as a third layer on that target.
+upload**, once, rather than on every serve: the finalize step
+(`finalizeMediaObject`, shared by confirm, content import and the seed)
+strips scripts, event handlers, `<style>` blocks and every remote reference
+(`href`, `url(http…)`, `@import`), writes the clean bytes as the served
+object and sets `Content-Disposition: attachment` on it. The upload itself
+sits in the unserved `pending/` prefix until then (§5), so no un-sanitized
+SVG is ever reachable from the origin. Both layers matter — the sanitizer
+removes the payload, the header means even a sanitizer miss downloads
+instead of executing on the media origin. imgproxy's `IMGPROXY_SANITIZE_SVG`
+stays on as a third layer on that target.
 
 ### `direct` — local only
 
@@ -337,8 +373,9 @@ Serves the stored original untouched. This is why `docker compose up -d`
 brings up Postgres and MinIO only, and why the test suite needs no transformer:
 there is nothing to run. srcsets come back empty and blurhashes are skipped
 rather than faked, so what you see locally is honest about what it is.
-`pnpm storage:init` grants the bucket anonymous read so the browser can fetch
-originals; `pnpm media:blurhash` refuses to run on this provider.
+`pnpm storage:init` grants the bucket anonymous read (minus `pending/`, §5)
+so the browser can fetch originals; `pnpm media:blurhash` refuses to run on
+this provider.
 
 ## 7. Stripe (shop)
 

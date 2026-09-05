@@ -35,7 +35,7 @@ export interface ImgOptions {
 	 * Ask for `Content-Disposition: attachment` — used for SVGs, which stay
 	 * active content. Only imgproxy can apply it per-URL (`att:1`); the other
 	 * providers serve originals straight from storage, where the header is set
-	 * on the OBJECT at upload time instead (`storage.setContentDisposition`).
+	 * on the OBJECT at upload time instead (`finalizeMediaObject`).
 	 */
 	attachment?: boolean;
 }

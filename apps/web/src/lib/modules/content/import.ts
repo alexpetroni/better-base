@@ -3,6 +3,7 @@ import { pillars } from '../../db/schema/core.ts';
 import type { Db } from '../../db/client.ts';
 import { articlePillars, articles } from '../blog/schema.ts';
 import { media } from '../media/schema.ts';
+import { finalizeMediaObject } from '../../server/media-objects.ts';
 import { quizzes } from '../quiz/schema.ts';
 import { productPillars, products } from '../shop/schema.ts';
 import { remapMediaRefs, type ContentBundle, type MediaDescriptor } from './bundle.ts';
@@ -65,11 +66,12 @@ async function ensureMedia(
 		const key = d.key as string; // validated by parseBundle
 		const [existing] = await db.select().from(media).where(eq(media.key, key));
 		if (existing) return { targetId: existing.id, created: false };
-		await storage.putObject(
-			key,
-			Buffer.from(dataBase64 ?? '', 'base64'),
-			d.mime ?? 'application/octet-stream'
-		);
+		// The same finalize step as an admin upload: SVGs sanitized + attachment,
+		// rasters with the immutable cache header (FIX-15).
+		const outcome = await finalizeMediaObject(storage, key, d.mime ?? 'application/octet-stream', {
+			bytes: Buffer.from(dataBase64 ?? '', 'base64')
+		});
+		if (outcome === 'not-svg') throw new Error(`media ${key}: declared SVG is not an SVG document`);
 		const id = await freeMediaId(db, sourceId);
 		await db.insert(media).values({ ...columns, id });
 		return { targetId: id, created: true };

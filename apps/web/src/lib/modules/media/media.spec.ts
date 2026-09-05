@@ -20,6 +20,7 @@ import {
 	type MediaReferenceCheck
 } from './service.ts';
 import { createStorage } from './storage.ts';
+import { mediaKeyFor } from './validation.ts';
 
 // Integration test against the compose stack: Postgres (TEST_DATABASE_URL,
 // reset + re-migrated fresh) and MinIO — no image transformer, because the
@@ -42,6 +43,19 @@ let images: ImageProvider;
  */
 const uploadedBytes = new Map<string, Uint8Array>();
 
+/**
+ * The served key is minted at confirm (FIX-15: uploads land in quarantine
+ * first), so the fake is keyed by the filename slug the served key embeds —
+ * `uploads/<yyyy>/<mm>/<slug>-<8 hex>.<ext>` — rather than by the key itself.
+ */
+function servedSlug(filename: string): string {
+	const key = mediaKeyFor(filename, 'image/png', { now: new Date(0), id: 'ffffffff' });
+	return key.slice(key.lastIndexOf('/') + 1).replace(/-ffffffff\.png$/, '');
+}
+function slugOfKey(key: string): string {
+	return key.slice(key.lastIndexOf('/') + 1).replace(/-[0-9a-f]{8}\.[a-z0-9]+$/, '');
+}
+
 const TINY_PNG_B64 = (() => {
 	const png = new PNG({ width: 32, height: 20 });
 	png.data.fill(128);
@@ -52,7 +66,7 @@ const fakeTransformer: ImageProvider = {
 	name: 'imgproxy',
 	transforms: true,
 	url(key) {
-		const bytes = uploadedBytes.get(key);
+		const bytes = uploadedBytes.get(slugOfKey(key));
 		// Nothing uploaded under this key: an empty body, which fails to decode
 		// the same way a transformer's 404 would.
 		if (!bytes) return 'data:application/octet-stream;base64,';
@@ -105,10 +119,11 @@ afterAll(async () => {
 	await db?.$client.end();
 });
 
-async function uploadFixture(): Promise<{ key: string; size: number }> {
+/** Presign + PUT the fixture; `filename` is the one the caller confirms with. */
+async function uploadFixture(filename = 'Test Image.png'): Promise<{ key: string; size: number }> {
 	const bytes = await readFile(FIXTURE);
 	const ticket = await requestUpload(deps, {
-		filename: 'Test Image.png',
+		filename,
 		mime: 'image/png',
 		size: bytes.byteLength
 	});
@@ -120,7 +135,7 @@ async function uploadFixture(): Promise<{ key: string; size: number }> {
 		body: bytes
 	});
 	expect(put.status).toBe(200);
-	uploadedBytes.set(ticket.value.key, bytes);
+	uploadedBytes.set(servedSlug(filename), bytes);
 	return { key: ticket.value.key, size: bytes.byteLength };
 }
 
@@ -136,7 +151,6 @@ describe('upload flow (presign → PUT → confirm)', () => {
 		if (!result.ok) return;
 		expect(result.value).toMatchObject({
 			kind: 'image',
-			key,
 			filename: 'Test Image.png',
 			mime: 'image/png',
 			size,
@@ -145,6 +159,8 @@ describe('upload flow (presign → PUT → confirm)', () => {
 			height: 200,
 			createdBy: USER_ID
 		});
+		// The served key is minted at confirm, under uploads/ (FIX-15).
+		expect(result.value.key).toMatch(/^uploads\/\d{4}\/\d{2}\/test-image-[0-9a-f]{8}\.png$/);
 		// Confirm also encoded a blurhash from a tiny render.
 		expect(result.value.blurhash).toMatch(/^.{20,}$/);
 	});
@@ -163,7 +179,7 @@ describe('upload flow (presign → PUT → confirm)', () => {
 			body: garbage
 		});
 		expect(put.status).toBe(200);
-		uploadedBytes.set(ticket.value.key, garbage);
+		uploadedBytes.set(servedSlug('broken.png'), garbage);
 
 		const result = await confirmUpload(deps, {
 			key: ticket.value.key,
@@ -240,7 +256,7 @@ describe('upload flow (presign → PUT → confirm)', () => {
 			headers: { 'content-type': 'image/png' },
 			body: bytes
 		});
-		uploadedBytes.set(ticket.value.key, bytes);
+		uploadedBytes.set(servedSlug('immutable.png'), bytes);
 
 		const confirmed = await confirmUpload(deps, {
 			key: ticket.value.key,
@@ -272,7 +288,7 @@ describe('upload flow (presign → PUT → confirm)', () => {
 	});
 
 	it('rasters are served with an immutable cache header', async () => {
-		const { key } = await uploadFixture();
+		const { key } = await uploadFixture('c.png');
 		const confirmed = await confirmUpload(deps, { key, filename: 'c.png', createdBy: USER_ID });
 		if (!confirmed.ok) throw new Error(confirmed.error);
 		const served = await fetch(images.url(confirmed.value.key!));
@@ -295,10 +311,11 @@ describe('origin serving (the direct/cloudflare source URL)', () => {
 	// object itself, so "is the bucket actually readable without credentials"
 	// became a real, testable precondition rather than an imgproxy detail.
 	it('serves an uploaded image anonymously from the public origin', async () => {
-		const { key } = await uploadFixture();
-		await confirmUpload(deps, { key, filename: 't.png', createdBy: USER_ID });
+		const { key } = await uploadFixture('t.png');
+		const confirmed = await confirmUpload(deps, { key, filename: 't.png', createdBy: USER_ID });
+		if (!confirmed.ok) throw new Error(confirmed.error);
 
-		const res = await fetch(images.url(key));
+		const res = await fetch(images.url(confirmed.value.key!));
 		expect(res.status).toBe(200);
 		expect(res.headers.get('content-type')).toBe('image/png');
 	});
@@ -389,7 +406,7 @@ describe('backfillBlurhashes (pnpm media:blurhash)', () => {
 	it('fills legacy rows, skips failures, and is a no-op when re-run', async () => {
 		// Legacy row: confirmed without the imgproxy dep, like every pre-phase upload.
 		const legacyDeps: MediaDeps = { db: deps.db, storage: deps.storage };
-		const { key } = await uploadFixture();
+		const { key } = await uploadFixture('legacy.png');
 		const legacy = await confirmUpload(legacyDeps, {
 			key,
 			filename: 'legacy.png',
@@ -412,7 +429,7 @@ describe('backfillBlurhashes (pnpm media:blurhash)', () => {
 			headers: { 'content-type': 'image/png' },
 			body: garbage
 		});
-		uploadedBytes.set(badTicket.value.key, garbage);
+		uploadedBytes.set(servedSlug('bad.png'), garbage);
 		const bad = await confirmUpload(legacyDeps, {
 			key: badTicket.value.key,
 			filename: 'bad.png',
@@ -427,7 +444,7 @@ describe('backfillBlurhashes (pnpm media:blurhash)', () => {
 		);
 		expect(first.filled).toBeGreaterThanOrEqual(1);
 		expect(first.failed).toBeGreaterThanOrEqual(1);
-		expect(logged.join('\n')).toContain(badTicket.value.key);
+		expect(logged.join('\n')).toContain(bad.value.key); // the served key, not the quarantine one
 
 		const [filledRow] = await db.select().from(media).where(eq(media.id, legacy.value.id));
 		expect(filledRow.blurhash).toMatch(/^.{20,}$/);
@@ -441,7 +458,7 @@ describe('backfillBlurhashes (pnpm media:blurhash)', () => {
 
 describe('alt, delete and reference checks', () => {
 	it('updates alt text', async () => {
-		const { key } = await uploadFixture();
+		const { key } = await uploadFixture('a.png');
 		const created = await confirmUpload(deps, { key, filename: 'a.png', createdBy: USER_ID });
 		if (!created.ok) throw new Error('confirm failed');
 		const updated = await updateMediaAlt(deps, created.value.id, 'Un somn liniștit');
@@ -449,7 +466,7 @@ describe('alt, delete and reference checks', () => {
 	});
 
 	it('refuses deletion while referenced, deletes row + object afterwards', async () => {
-		const { key } = await uploadFixture();
+		const { key } = await uploadFixture('b.png');
 		const created = await confirmUpload(deps, { key, filename: 'b.png', createdBy: USER_ID });
 		if (!created.ok) throw new Error('confirm failed');
 		const id = created.value.id;

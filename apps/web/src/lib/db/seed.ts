@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { PILLARS_BY_SLUG } from '../config/pillars.ts';
 import { articlePillars, articles } from '../modules/blog/schema.ts';
 import { media } from '../modules/media/schema.ts';
+import { finalizeMediaObject } from '../server/media-objects.ts';
 import { DEFAULT_PAGES } from '../modules/pages/seed-pages.ts';
 import { ensurePage } from '../modules/pages/service.ts';
 import type { Storage } from '../modules/media/storage.ts';
@@ -125,7 +126,8 @@ export async function seedDemoProducts(db: Db, storage: Storage): Promise<number
 	for (const demo of DEMO_PRODUCTS) {
 		for (const image of [demo.cover, ...demo.gallery]) {
 			const bytes = Buffer.from(image.svg, 'utf8');
-			await storage.putObject(image.key, bytes, 'image/svg+xml');
+			// Same finalize step as an upload: sanitized, attachment, immutable (FIX-15).
+			await finalizeMediaObject(storage, image.key, 'image/svg+xml', { bytes });
 			await db
 				.insert(media)
 				.values({
