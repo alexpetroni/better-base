@@ -77,7 +77,14 @@ export const nurtureSends = pgTable(
 		attempts: integer('attempts').notNull().default(0),
 		claimedAt: timestamp('claimed_at', { withTimezone: true }),
 		sentAt: timestamp('sent_at', { withTimezone: true }),
-		lastError: text('last_error')
+		lastError: text('last_error'),
+		/**
+		 * Hash of the sequence's `steps` when this row was planned. A reseed
+		 * that changes the steps re-plans pending rows whose hash no longer
+		 * matches (service.ts `seedNurtureSequences`). NULL = planned before
+		 * the column existed; such rows are left as they are.
+		 */
+		stepsHash: text('steps_hash')
 	},
 	(table) => [
 		// The email idempotency key `nurture:<enrollmentId>:<stepIndex>` derives
