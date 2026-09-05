@@ -41,6 +41,7 @@ commands with `SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5433
 | `pnpm user:create -- --email … --role admin|editor [--name …]` | Prompts for the password (no echo). Piped: `printf '%s\n' "$PW" \| pnpm user:create -- … --password-stdin`. `--password` is refused on a terminal. |
 | `pnpm subscriber:delete -- --email …` | GDPR erasure. |
 | `pnpm chat:prune` | Retention (the cron route does the same). |
+| `pnpm efactura:requeue -- --all \| <invoiceId>` | Put e-Factura submissions parked after 5 failed attempts back in the cron's queue (same write as the order page's "Repune în coada ANAF" button). Fix the cause first (`DEPLOYMENT.md` §7). |
 | `pnpm launch:check [--dev] [--no-probe] [--target=node\|vercel] [--allow-mock-providers]` | Preflight: env rules, image + fiscal-privacy probes, site-settings placeholders. Warnings (`warning:` lines) are advisory. `DEPLOYMENT.md` §2/§12. |
 | `bash scripts/backup.sh [--dry-run]` | Nightly backup (dump + bucket sync); env in the script header. |
 | `bash scripts/dev-run.sh` / `dev-stop.sh` | Host helper: stack, migrate, seed, build, serve. |
@@ -52,7 +53,9 @@ Four routes, all `GET`, all behind `Authorization: Bearer $CRON_SECRET`
 (hourly), `nurture-send` (every 15 min), `efactura-submit` (hourly).
 `apps/web/vercel.json` schedules them on Vercel (Pro plan for sub-daily
 schedules); on adapter-node a machine cron curls them (`DEPLOYMENT.md` §9).
-Each declares `maxDuration = 60`. Backups: `.github/workflows/backup.yml`
+Each declares `maxDuration = 60`. `efactura-submit` parks a document after
+5 failed attempts; the order page button or `pnpm efactura:requeue` puts it
+back (the statutory 5-day clock does not stop). Backups: `.github/workflows/backup.yml`
 nightly 02:23 UTC, or the same script from a VPS cron.
 
 ## CI (`.github/workflows/ci.yml`)

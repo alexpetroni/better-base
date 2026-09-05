@@ -1,4 +1,4 @@
-# STATE — after FIX-16 (2026-09-05, branch `feat/vercel-neon`)
+# STATE — after FIX-17 (2026-09-05, branch `feat/vercel-neon`)
 
 Short by design (FIX-16): where the project is and what comes next. The
 dated history moved to `docs/CHANGELOG.md`; the map to `docs/ARCHITECTURE.md`;
@@ -7,7 +7,8 @@ commands and quirks to `docs/RUNBOOK.md`; tests to `docs/TESTING.md`.
 ## Where we are
 
 - Feature-complete for a better-sleep launch (NEXT-1…NEXT-10) and through
-  remediation batch 2 (FIX-9…FIX-16 against `docs/AUDIT-2026-09-03.md`).
+  remediation batch 2 (FIX-9…FIX-16 against `docs/AUDIT-2026-09-03.md`,
+  plus FIX-17 — the medium findings of the FIX-12…16 phase reviews).
   What remains is human work: accounts, legal texts, the live-provider
   rehearsals and the first ordered deploy (`LAUNCH-CHECKLIST.md`).
 - Two deployment targets from one build: adapter-node (VPS + compose-shaped
@@ -34,68 +35,54 @@ commands and quirks to `docs/RUNBOOK.md`; tests to `docs/TESTING.md`.
 5. Product gaps deliberately left: `docs/CHANGELOG.md` § "What this batch
    did NOT do" and the P2 items each FIX entry deferred.
 
-## Closed by FIX-16 (audit 2026-09-03)
+## Closed by FIX-17 (medium findings of the FIX-12…16 reviews, 2026-09-05)
 
-- **P0 #5 — no gate, no ordering**: `.github/workflows/ci.yml` (`gate` on
-  every PR/push with Postgres + MinIO, fresh-db `db:migrate`, `db:check`,
-  `test:unit`, both builds, `launch:check --target=vercel`; `e2e` on PRs
-  non-blocking; `migrate` needs `gate`, main only, `environment:
-  production`, per-site concurrency, `--ignore-scripts --filter web`,
-  fails closed; `deploy` needs `migrate`, `vercel pull/build/deploy
-  --prebuilt --prod`). `migrate.yml` deleted; `deploy/sites.json` is the
-  matrix (sleep entry). DEPLOYMENT §12 rewritten; checklist box added.
-- **Ops: PII in the error log** — `redactQueryParams` strips the
-  `params:` block from message and stack; `requestId` on the line;
-  `handleRequestId` outermost hook (`x-vercel-id` or UUID → `locals`,
-  echoed as `x-request-id`, shown on the error page); optional
-  `ERROR_REPORT_URL` sink via `@vercel/functions` `waitUntil`;
-  `LOG_REQUESTS` request line (default on for adapter-node).
-- **Ops: launch:check blesses a mock shop** — empty `STRIPE_SECRET_KEY`
-  fails outside `--dev`; `DB_DRIVER=neon` on `--target=node` fails;
-  warnings for vercel-without-neon, `DB_POOL_MAX > 2` on neon, no
-  `ERROR_REPORT_URL`. `.env.example` `CRON_SECRET` / `DB_POOL_MAX` comments.
-- **Ops: `maxDuration`** — verified landed in FIX-13 (four cron routes +
-  Stripe webhook export `config = { maxDuration: 60 }`).
-- **Ops: no backup/restore** — `scripts/backup.sh` (dump + rclone sync,
-  30/90-day retention, fiscal never expires, `--dry-run` under test),
-  `backup.yml`, `docs/RESTORE.md` (rehearsed locally: dump → fresh db →
-  `db:status` up to date → `launch:check` OK), R2 lifecycle guidance,
-  checklist box = 7 green nights + one verified restore.
-- **Ops: Neon path edges** — the on-connect `SET` is `applyNeonStatementTimeout`
-  (logs, never rejects unhandled); `pnpm db:role-timeout` (`ALTER ROLE
-  current_user SET statement_timeout`, idempotent, integration-tested);
-  `DB_POOL_CONNECTION_TIMEOUT_MS=15000` documented for Vercel; `/api/health`
-  = liveness (no I/O, site + commit + chat kind), `/api/health/ready` =
-  readiness (503 on a dead dependency; e2e funnel checks both).
-- **P2 migration contract** — `docs/MIGRATIONS.md`; `db:migrate` =
-  `scripts/migrate.ts` (polled `pg_try_advisory_lock(hashtext('better-base-migrate'))`
-  → `drizzle-kit migrate` → `scripts/migrate-concurrent.ts`); the
-  `site_settings.updated_by` index ships through the concurrent path
-  (`concurrent-indexes.ts`); `db:check` in the gate. Proven by racing two
-  script runs on a fresh scratch database. Note: a BLOCKING advisory lock
-  deadlocks against `CREATE INDEX CONCURRENTLY` (the waiter holds a
-  snapshot), hence the poll.
-- **P2 toolchain pins** — root `engines` `>=22.18 <23 || >=24`,
-  `.node-version` 22 (CI `node-version-file`; Vercel set to 22.x by hand),
-  `@types/node` 22 in web AND formcomp, formcomp on vite 8 / TS 6 /
-  vite-plugin-svelte 7 / kit 2.63 (check + tests green), `pnpm dedupe` (one
-  vite, one TypeScript, one `@types/node` in the lockfile),
-  `postgres:16.15`, MinIO release tag, actions pinned to SHAs,
-  `renovate.json`, `ENABLE_EXPERIMENTAL_COREPACK` + "no `NODE_ENV`"
-  documented.
-- **P2 health & logs** — above. **P2 secrets on the command line** —
-  `user:create` prompts (no echo) or `--password-stdin`; `--password` refused
-  on a TTY; runbook lines and `scripts/dev-run.sh` updated.
-- **P2 docs** — this split; `docs/NEXT-VERCEL-NEON.md` merged into
-  `docs/RUNBOOK.md` and deleted; root `README.md` + `CLAUDE.md`;
-  `apps/web/README.md` replaced; imgproxy-era statements corrected in
-  `ARCHITECTURE.md` (compose profiles) and flagged in `LAUNCH-DRY-RUN.md`.
+Plan: the FIX-17 phase plan under `docs/fixes/`. Five test-first commit pairs
+(`git log`: `test(…)` then `fix(…)`/`feat(…)`). **No migration**, no new env.
 
-Deferred / not done in this phase: the first Actions run and the Vercel
-dashboard flips (human, above); no Cloudflare-provider rehearsal (needs a
-zone). Nothing in the phase plan was disagreed with.
+- **e-Factura parked rows had no way back** (FIX-12 review) —
+  `requeueParkedSubmission({db}, invoiceId, {orderId?})`,
+  `requeueAllParkedSubmissions`, `listParkedSubmissionsForOrder` in
+  `modules/invoice/submissions.ts` (`UPDATE … SET status='pending',
+  attempts=0, next_attempt_at/error/claimed_at=NULL WHERE status='failed'`);
+  admin-only `?/requeue` on `/admin/orders/[id]` (button "Repune în coada
+  ANAF" under a parked document, audited as `efactura-requeue`, scoped to the
+  order's documents, in the authz route manifest); **new script**
+  `pnpm efactura:requeue -- --all | <invoiceId>` (root + web
+  `package.json`). DEPLOYMENT §7/§9, RUNBOOK, LAUNCH-CHECKLIST updated.
+- **Nurture reseed never re-sent a re-added step** (FIX-13 review) —
+  `replanSequenceSends` also selects rows cancelled as `replanned` and, when
+  the step index exists again, UPDATEs them back to `pending` with the new
+  `scheduledAt`/`stepsHash`, `attempts: 0`, `lastError: null` (the unique
+  `(enrollment_id, step_index)` index means such a step can never get a
+  second row).
+- **Chat inactivity timer defeated the retry** (FIX-14 review) — the
+  watchdog is two-phase: until the first stream event only a hard cap of
+  `firstEventTimeoutMs` = `timeoutMs × (maxRetries + 1) + inactivityMs`
+  (55 s by default, under `maxDuration = 60`) is armed, so the SDK's own
+  `timeout`/`maxRetries` run as configured; the 15 s inactivity timer is armed
+  from the first event on. `chat/README.md` rows corrected.
+- **Upload confirm trusted any key** (FIX-15 review) — `confirmUpload`
+  returns `not-found` / "not a pending upload" for any key outside
+  `PENDING_PREFIX` before touching storage.
+- **Request id adopted a client `x-vercel-id` everywhere** (FIX-16 review) —
+  `resolveRequestId(headers, random, { onVercel })` adopts the header only
+  with `env.VERCEL` set (threaded from `hooks.server.ts`) and only when it is
+  a `[A-Za-z0-9:-]{1,128}` token; otherwise a UUID. The old hook assertion
+  ("echoes the x-vercel-id") asserted the defect and was replaced.
 
-## Verification (this phase)
+Deferred / disagreed: nothing. Not in scope and untouched: everything else
+in those review verdicts (all rated low or informational).
 
-Filled in by the final docs commit — see `docs/CHANGELOG.md` for the previous
-phases' results.
+## Verification (FIX-17)
+
+- `pnpm lint && pnpm check && pnpm test:unit`: green — 131 files, 1245 tests
+  passed, 4 skipped (the pre-existing `skipIf(!PROXY)` driver-parity suite).
+  One flaky `migrate-script.spec.ts` hook timeout under the full parallel run
+  passed on re-run alone (5 s) and in the second full run.
+- Builds: adapter-node and `DEPLOY_TARGET=vercel DB_DRIVER=neon` both green.
+- Both sites boot from the adapter-node build (`SITE_ID=sleep` / `life`):
+  home 200, `/api/health` 200 with the site name; a request carrying
+  `x-vercel-id: spoofed` gets a UUID `x-request-id` back.
+- `pnpm efactura:requeue` smoke-tested against the dev database: usage error
+  and unknown invoice exit 1, `--all` reports the count (0).

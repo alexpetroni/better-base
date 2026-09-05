@@ -460,6 +460,18 @@ storno gets an `invoice_submissions` row at issuance, `/admin/orders` →
 §12) renders the XML and pushes it through the `EFacturaSubmitter` seam
 with retry/park semantics (5 attempts, then parked for a human).
 
+**A parked document (FIX-17).** After 5 failed attempts the row is `failed`
+and the cron never claims it again — but the 5-day clock keeps running. The
+order page (`/admin/orders/<id>`) shows the failure under the document
+("Trimiterea la ANAF a eșuat după N încercări: …") with a **"Repune în coada
+ANAF"** button (admin-only, audited as `efactura-requeue`): the row goes
+back to `pending` with the attempts reset and the next hourly tick submits
+it. The same from a shell, e.g. after the fiscal bucket or the ANAF
+credentials were fixed: `pnpm efactura:requeue -- --all` (every parked
+document) or `pnpm efactura:requeue -- <invoiceId>`. Fix the cause first
+(the error text is on the page and in `invoice_submissions.error`) —
+re-queuing a document that will fail again only burns another 5 attempts.
+
 **Automated submission is NOT implemented yet** — it requires enrollment
 only a human can do. Until then the default submitter answers `skipped`
 for every row (nothing is sent, nothing is faked, the row stays "de trimis")
@@ -612,7 +624,7 @@ sends at ~2/s.
 | --- | --- | --- |
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
 | hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every DUE in-flight AWB (bounded batch per run, oldest-synced first), updates shipment + fulfillment state (`delivered`/`returned`; a courier-side `cancelled` steps the order back to packed) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. A row whose lookup throws is backed off (15 min, doubling, 24 h cap) and flagged on `/admin`; the JSON answer carries `errors` and, on a credentials failure, `"aborted":"auth"` — alert on either (§7 "Sync health"). Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
-| hourly, e.g. `37 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit` | Drains the e-Factura submission queue (§7): claims a bounded batch of due `invoice_submissions` rows (25/run, `FOR UPDATE SKIP LOCKED` — an overlapping run cannot double-submit), renders the XML into the fiscal bucket and submits through the `EFacturaSubmitter` seam. Failures retry with backoff (15 min doubling, 6 h cap) and park after 5 attempts (`failed`, shown in `/admin/orders` → "De trimis la ANAF"). With no ANAF enrollment (the default no-op submitter) every row is `skipped` and re-checked hourly — the JSON answer then reads `{"claimed":n,"skipped":n,…}` and the manual SPV upload remains the operator's job. |
+| hourly, e.g. `37 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit` | Drains the e-Factura submission queue (§7): claims a bounded batch of due `invoice_submissions` rows (25/run, `FOR UPDATE SKIP LOCKED` — an overlapping run cannot double-submit), renders the XML into the fiscal bucket and submits through the `EFacturaSubmitter` seam. Failures retry with backoff (15 min doubling, 6 h cap) and park after 5 attempts (`failed`, shown in `/admin/orders` → "De trimis la ANAF"; re-queued from the order page or with `pnpm efactura:requeue`, §7). With no ANAF enrollment (the default no-op submitter) every row is `skipped` and re-checked hourly — the JSON answer then reads `{"claimed":n,"skipped":n,…}` and the manual SPV upload remains the operator's job. |
 | every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: cancels due rows more than 48 h late as `stale` (a resumed pause never floods the missed steps), claims a bounded batch of due sends (25/run), sends them grouped per enrollment in step order, re-checks the marketing consent per send, mails through the idempotent email wrapper (~500 ms between live sends), retries transient failures with backoff and parks them after 5 attempts — permanent Resend errors (4xx other than 429) park at once. Parked sends stay visible in `/admin/nurture` with a **retry** button; their enrollment stays active until then. Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. The JSON answer carries `stale`; alert when `parked` > 0. Design notes: `src/lib/modules/nurture/README.md`. |
 
 Where no machine can run scripts (Vercel), the retention job is also

@@ -90,7 +90,9 @@ list applies later to better-life (with its own domain/accounts).
       implementing the `EFacturaSubmitter` adapter — exact steps in
       DEPLOYMENT.md §7 "Fiscal documents"). Until then: name the person who
       uploads the XML (order page / monthly export) in the SPV web interface
-      every working day and checks the queue, and confirm the
+      every working day and checks the queue (a document parked after 5
+      failed automatic attempts is re-queued from the order page or with
+      `pnpm efactura:requeue` — DEPLOYMENT.md §7), and confirm the
       `efactura-submit` cron is scheduled (below) so the queue is drained
       the moment the adapter exists.
 - [ ] e-Factura XML validated against ANAF's public validator BEFORE the

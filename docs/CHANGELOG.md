@@ -5,10 +5,82 @@ records what that phase built, its verification results and what it
 deliberately deferred. For the current picture read `docs/STATE.md` (short),
 `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and `docs/TESTING.md`.
 
+## Remediation FIX-17 (medium findings of the FIX-12…16 phase reviews — batch 2, phase 9, 2026-09-05)
+
+See `docs/STATE.md` § "Closed by FIX-17" for this phase (and its
+verification); the next phase moves that section here when it writes its
+own. In one line: e-Factura parked-row re-queue (order page action +
+`pnpm efactura:requeue`), nurture reseed reopens `replanned` rows, chat
+inactivity timer armed only after the first event under a 55 s first-event
+cap, upload confirm accepts only `pending/` keys, request id adopts
+`x-vercel-id` only on Vercel. No migration, no new env.
+
 ## Remediation FIX-16 (audit 2026-09-03 P0 #5 + Ops & platform, P2 migration contract / pins / health / secrets / docs — batch 2, phase 8, 2026-09-05)
 
-See `docs/STATE.md` § "Closed by FIX-16" for this phase; the next phase
-moves that section here when it writes its own.
+Moved verbatim from `docs/STATE.md` by FIX-17.
+
+- **P0 #5 — no gate, no ordering**: `.github/workflows/ci.yml` (`gate` on
+  every PR/push with Postgres + MinIO, fresh-db `db:migrate`, `db:check`,
+  `test:unit`, both builds, `launch:check --target=vercel`; `e2e` on PRs
+  non-blocking; `migrate` needs `gate`, main only, `environment:
+  production`, per-site concurrency, `--ignore-scripts --filter web`,
+  fails closed; `deploy` needs `migrate`, `vercel pull/build/deploy
+  --prebuilt --prod`). `migrate.yml` deleted; `deploy/sites.json` is the
+  matrix (sleep entry). DEPLOYMENT §12 rewritten; checklist box added.
+- **Ops: PII in the error log** — `redactQueryParams` strips the
+  `params:` block from message and stack; `requestId` on the line;
+  `handleRequestId` outermost hook (`x-vercel-id` or UUID → `locals`,
+  echoed as `x-request-id`, shown on the error page); optional
+  `ERROR_REPORT_URL` sink via `@vercel/functions` `waitUntil`;
+  `LOG_REQUESTS` request line (default on for adapter-node).
+- **Ops: launch:check blesses a mock shop** — empty `STRIPE_SECRET_KEY`
+  fails outside `--dev`; `DB_DRIVER=neon` on `--target=node` fails;
+  warnings for vercel-without-neon, `DB_POOL_MAX > 2` on neon, no
+  `ERROR_REPORT_URL`. `.env.example` `CRON_SECRET` / `DB_POOL_MAX` comments.
+- **Ops: `maxDuration`** — verified landed in FIX-13 (four cron routes +
+  Stripe webhook export `config = { maxDuration: 60 }`).
+- **Ops: no backup/restore** — `scripts/backup.sh` (dump + rclone sync,
+  30/90-day retention, fiscal never expires, `--dry-run` under test),
+  `backup.yml`, `docs/RESTORE.md` (rehearsed locally: dump → fresh db →
+  `db:status` up to date → `launch:check` OK), R2 lifecycle guidance,
+  checklist box = 7 green nights + one verified restore.
+- **Ops: Neon path edges** — the on-connect `SET` is `applyNeonStatementTimeout`
+  (logs, never rejects unhandled); `pnpm db:role-timeout` (`ALTER ROLE
+  current_user SET statement_timeout`, idempotent, integration-tested);
+  `DB_POOL_CONNECTION_TIMEOUT_MS=15000` documented for Vercel; `/api/health`
+  = liveness (no I/O, site + commit + chat kind), `/api/health/ready` =
+  readiness (503 on a dead dependency; e2e funnel checks both).
+- **P2 migration contract** — `docs/MIGRATIONS.md`; `db:migrate` =
+  `scripts/migrate.ts` (polled `pg_try_advisory_lock(hashtext('better-base-migrate'))`
+  → `drizzle-kit migrate` → `scripts/migrate-concurrent.ts`); the
+  `site_settings.updated_by` index ships through the concurrent path
+  (`concurrent-indexes.ts`); `db:check` in the gate. Proven by racing two
+  script runs on a fresh scratch database. Note: a BLOCKING advisory lock
+  deadlocks against `CREATE INDEX CONCURRENTLY` (the waiter holds a
+  snapshot), hence the poll.
+- **P2 toolchain pins** — root `engines` `>=22.18 <23 || >=24`,
+  `.node-version` 22 (CI `node-version-file`; Vercel set to 22.x by hand),
+  `@types/node` 22 in web AND formcomp, formcomp on vite 8 / TS 6 /
+  vite-plugin-svelte 7 / kit 2.63 (check + tests green), `pnpm dedupe` (one
+  vite, one TypeScript, one `@types/node` in the lockfile),
+  `postgres:16.15`, MinIO release tag, actions pinned to SHAs,
+  `renovate.json`, `ENABLE_EXPERIMENTAL_COREPACK` + "no `NODE_ENV`"
+  documented.
+- **P2 health & logs** — above. **P2 secrets on the command line** —
+  `user:create` prompts (no echo) or `--password-stdin`; `--password` refused
+  on a TTY; runbook lines and `scripts/dev-run.sh` updated.
+- **P2 docs** — this split; `docs/NEXT-VERCEL-NEON.md` merged into
+  `docs/RUNBOOK.md` and deleted; root `README.md` + `CLAUDE.md`;
+  `apps/web/README.md` replaced; imgproxy-era statements corrected in
+  `ARCHITECTURE.md` (compose profiles) and flagged in `LAUNCH-DRY-RUN.md`.
+
+Deferred / not done in this phase: the first Actions run and the Vercel
+dashboard flips (human, above); no Cloudflare-provider rehearsal (needs a
+zone). Nothing in the phase plan was disagreed with.
+
+Verification (FIX-16): recorded in that phase's independent review verdict
+(runner state); the gate, both builds and both site boots were green at the
+phase boundary.
 
 ## Remediation FIX-15 (audit 2026-09-03 P1 "Media, content & blog" ×3, P1 hreflang, P2 quiz / content / media-ref / `?page=` — batch 2, phase 7)
 
