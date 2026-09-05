@@ -299,6 +299,7 @@
 			{:else}
 				<ul class="space-y-2">
 					{#each data.invoices as doc (doc.id)}
+						{@const parked = data.parkedSubmissions.find((row) => row.invoiceId === doc.id)}
 						<li data-testid="order-invoice" data-kind={doc.kind}>
 							<p class="font-mono font-semibold">{doc.displayNumber}</p>
 							<p class="text-xs text-(--color-ink)/60">
@@ -324,6 +325,24 @@
 									{m.admin_order_invoice_xml()}
 								</a>
 							</p>
+							{#if parked}
+								<p class="mt-1 text-xs text-red-700" data-testid="order-efactura-parked">
+									{m.admin_order_efactura_parked({
+										attempts: parked.attempts,
+										error: parked.error ?? '—'
+									})}
+								</p>
+								<form method="POST" action="?/requeue" class="mt-1">
+									<input type="hidden" name="invoiceId" value={doc.id} />
+									<button
+										type="submit"
+										data-testid="order-efactura-requeue"
+										class="rounded bg-(--color-brand-soft) px-3 py-1 text-xs font-semibold hover:opacity-90"
+									>
+										{m.admin_order_efactura_requeue()}
+									</button>
+								</form>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -338,6 +357,16 @@
 							{m.admin_order_invoice_resend()}
 						</button>
 					</form>
+				{/if}
+				{#if form?.requeued}
+					<p class="mt-2 text-xs text-green-700" data-testid="order-efactura-requeued">
+						{m.admin_order_efactura_requeued()}
+					</p>
+				{/if}
+				{#if form?.requeueError}
+					<p class="mt-2 text-xs text-red-700" data-testid="order-efactura-requeue-error">
+						{m.admin_order_efactura_requeue_error()}
+					</p>
 				{/if}
 				{#if form?.invoiceResent}
 					<p class="mt-2 text-xs text-green-700" data-testid="order-invoice-resent">

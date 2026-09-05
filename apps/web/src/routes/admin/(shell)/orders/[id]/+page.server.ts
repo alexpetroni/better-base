@@ -2,11 +2,14 @@ import { error, fail } from '@sveltejs/kit';
 import { env as publicEnv } from '$env/dynamic/public';
 import { getDb } from '$lib/db';
 import { getEmailSender } from '$lib/modules/email/server';
+import { recordAdminAudit } from '$lib/modules/auth';
 import {
 	ensureInvoicesForOrder,
 	invoicePdfAttachmentForOrder,
 	issuePartialStornoForOrder,
-	listInvoicesForOrder
+	listInvoicesForOrder,
+	listParkedSubmissionsForOrder,
+	requeueParkedSubmission
 } from '$lib/modules/invoice/server';
 import { getInvoiceStorage } from '$lib/modules/media/server';
 import { isFulfillmentStatus } from '$lib/modules/shop';
@@ -37,6 +40,9 @@ export const load: PageServerLoad = async ({ params }) => {
 		reversedCents: invoices
 			.filter((doc) => doc.kind === 'storno')
 			.reduce((sum, doc) => sum - doc.grossTotalCents, 0),
+		// e-Factura submissions parked after EFACTURA_MAX_ATTEMPTS (FIX-17): the
+		// page offers the re-queue button next to each.
+		parkedSubmissions: await listParkedSubmissionsForOrder({ db: getDb() }, params.id),
 		shipment: (await getShipmentForOrder({ db: getDb() }, params.id)) ?? null,
 		// One nonce per rendered page: the re-send form posts it back and the
 		// email idempotency key derives from (invoice id, nonce), so a double
@@ -206,5 +212,29 @@ export const actions: Actions = {
 			return fail(500, { resendError: 'send-failed' as const });
 		}
 		return { invoiceResent: true, resendSkipped: outcome.status === 'skipped' };
+	},
+
+	/**
+	 * Re-queue a parked e-Factura submission (FIX-17): back to `pending`, due
+	 * now, attempts reset, so the next cron tick claims it — the statutory
+	 * 5-day clock does not wait for manual SQL. Scoped to this order's
+	 * documents. Same defense-in-depth admin check as the other actions.
+	 */
+	requeue: async ({ request, params, locals }) => {
+		const user = requireAdmin(locals);
+
+		const form = await request.formData();
+		const invoiceId = formStr(form, 'invoiceId');
+		if (!invoiceId) return fail(400, { requeueError: 'invalid' as const });
+		const found = await requeueParkedSubmission({ db: getDb() }, invoiceId, {
+			orderId: params.id
+		});
+		if (!found) return fail(400, { requeueError: 'not-found' as const });
+		await recordAdminAudit(getDb(), {
+			actor: user.email,
+			action: 'efactura-requeue',
+			target: invoiceId
+		});
+		return { requeued: true };
 	}
 };

@@ -27,6 +27,7 @@
     "launch:check": "pnpm --filter web launch:check",
     "storage:init": "pnpm --filter web storage:init",
     "chat:prune": "pnpm --filter web chat:prune",
+    "efactura:requeue": "pnpm --filter web efactura:requeue",
     "media:blurhash": "pnpm --filter web media:blurhash",
     "content": "pnpm --filter web content",
     "content:init": "pnpm --filter web content:init",

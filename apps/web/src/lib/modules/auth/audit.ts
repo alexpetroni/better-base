@@ -14,6 +14,7 @@ export type AdminAuditAction =
 	| 'media-delete'
 	| 'nurture-toggle'
 	| 'nurture-retry'
+	| 'efactura-requeue'
 	| 'legal-page-save';
 
 export async function recordAdminAudit(

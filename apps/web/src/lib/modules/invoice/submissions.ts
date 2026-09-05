@@ -4,7 +4,7 @@ import type { Db } from '../../db/client.ts';
 import type { DbTx } from '../../server/event-ledger/core.ts';
 import { ensureInvoiceDocument, loadInvoiceModel, type InvoiceDocumentDeps } from './documents.ts';
 import type { EFacturaSubmitter } from './efactura-submitter.ts';
-import { invoiceSubmissions } from './schema.ts';
+import { invoices, invoiceSubmissions } from './schema.ts';
 
 /**
  * SPV submission queue (FIX-12, audit P1 "SPV submission is mandatory but
@@ -166,6 +166,82 @@ export async function submitPendingEFactura(
 		}
 	}
 	return result;
+}
+
+/** A document parked after EFACTURA_MAX_ATTEMPTS, as the order page lists it. */
+export interface ParkedSubmission {
+	invoiceId: string;
+	attempts: number;
+	error: string | null;
+}
+
+/** The order's parked (`failed`) submissions, oldest document first. */
+export async function listParkedSubmissionsForOrder(
+	deps: { db: Db },
+	orderId: string
+): Promise<ParkedSubmission[]> {
+	return deps.db
+		.select({
+			invoiceId: invoiceSubmissions.invoiceId,
+			attempts: invoiceSubmissions.attempts,
+			error: invoiceSubmissions.error
+		})
+		.from(invoiceSubmissions)
+		.innerJoin(invoices, eq(invoices.id, invoiceSubmissions.invoiceId))
+		.where(and(eq(invoices.orderId, orderId), eq(invoiceSubmissions.status, 'failed')))
+		.orderBy(asc(invoices.issuedAt), asc(invoices.number));
+}
+
+/** The re-queue write: back to `pending`, due now, attempts and error reset. */
+const REQUEUE_SET = {
+	status: 'pending' as const,
+	attempts: 0,
+	nextAttemptAt: null,
+	error: null,
+	claimedAt: null,
+	updatedAt: sql`now()`
+};
+
+/**
+ * Operator re-queue of ONE parked document (FIX-17; the order page's
+ * `requeue` action and `pnpm efactura:requeue <invoiceId>`): the next cron
+ * tick claims it again. Only a `failed` row changes — pending/submitted rows
+ * and unknown ids return false. `orderId` scopes the write to that order's
+ * documents (the page never re-queues another order's invoice).
+ */
+export async function requeueParkedSubmission(
+	deps: { db: Db },
+	invoiceId: string,
+	opts: { orderId?: string } = {}
+): Promise<boolean> {
+	const scope = opts.orderId
+		? inArray(
+				invoiceSubmissions.invoiceId,
+				deps.db.select({ id: invoices.id }).from(invoices).where(eq(invoices.orderId, opts.orderId))
+			)
+		: undefined;
+	const changed = await deps.db
+		.update(invoiceSubmissions)
+		.set(REQUEUE_SET)
+		.where(
+			and(
+				eq(invoiceSubmissions.invoiceId, invoiceId),
+				eq(invoiceSubmissions.status, 'failed'),
+				scope
+			)
+		)
+		.returning({ id: invoiceSubmissions.id });
+	return changed.length === 1;
+}
+
+/** `pnpm efactura:requeue --all`: every parked document; returns how many. */
+export async function requeueAllParkedSubmissions(deps: { db: Db }): Promise<number> {
+	const changed = await deps.db
+		.update(invoiceSubmissions)
+		.set(REQUEUE_SET)
+		.where(eq(invoiceSubmissions.status, 'failed'))
+		.returning({ id: invoiceSubmissions.id });
+	return changed.length;
 }
 
 /**

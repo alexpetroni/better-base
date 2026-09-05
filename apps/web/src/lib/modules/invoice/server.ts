@@ -33,10 +33,14 @@ export {
 	EFACTURA_DEADLINE_DAYS,
 	EFACTURA_MAX_ATTEMPTS,
 	efacturaDaysLeftSql,
+	listParkedSubmissionsForOrder,
 	recordPendingSubmissionInTx,
+	requeueAllParkedSubmissions,
+	requeueParkedSubmission,
 	submitPendingEFactura,
 	type EFacturaDrainDeps,
-	type EFacturaDrainResult
+	type EFacturaDrainResult,
+	type ParkedSubmission
 } from './submissions.ts';
 export {
 	invoiceDateIso,
