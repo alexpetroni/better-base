@@ -14,6 +14,8 @@
     "test:neon": "pnpm --filter web test:neon",
     "test:e2e": "pnpm --filter web test:e2e",
     "db:migrate": "pnpm --filter web db:migrate",
+    "db:migrate:concurrent": "pnpm --filter web db:migrate:concurrent",
+    "db:check": "pnpm --filter web db:check",
     "db:status": "pnpm --filter web db:status",
     "db:role-timeout": "pnpm --filter web db:role-timeout",
     "db:seed": "pnpm --filter web db:seed",
