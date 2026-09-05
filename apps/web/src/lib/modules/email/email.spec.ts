@@ -3,7 +3,7 @@ import path from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
-import { createResendTransport } from './resend.ts';
+import { createResendTransport, EmailTransportError } from './resend.ts';
 import { emailLog } from './schema.ts';
 import {
 	createEmailSender,
@@ -173,6 +173,54 @@ describe('resend transport request shape', () => {
 	});
 });
 
+// Audit 2026-09-03 P1: Resend errors were unclassified — a 403/422 (bad
+// key, rejected address) was retried 5× over ~21 h exactly like an outage.
+describe('resend transport error classification', () => {
+	const message: EmailMessage = {
+		from: 'a@b.ro',
+		to: 'x@y.ro',
+		subject: 's',
+		html: '<p>h</p>',
+		text: 't'
+	};
+	const respond = (status: number, body = `{"message":"status ${status}"}`) =>
+		(async () => new Response(body, { status })) as unknown as typeof fetch;
+
+	async function failure(fetchFn: typeof fetch) {
+		try {
+			await createResendTransport('re_key_not_real', fetchFn, 50).send(message);
+		} catch (err) {
+			return err as EmailTransportError;
+		}
+		throw new Error('expected the transport to throw');
+	}
+
+	it.each([429, 500, 502, 503])('%d is retryable (rate limit / outage)', async (status) => {
+		const err = await failure(respond(status));
+		expect(err).toBeInstanceOf(EmailTransportError);
+		expect(err.retryable).toBe(true);
+		expect(err.status).toBe(status);
+	});
+
+	it.each([400, 401, 403, 404, 422])('%d parks immediately, carrying the body', async (status) => {
+		const err = await failure(respond(status, `{"message":"why ${status}"}`));
+		expect(err).toBeInstanceOf(EmailTransportError);
+		expect(err.retryable).toBe(false);
+		expect(err.message).toContain(`why ${status}`);
+	});
+
+	it('a network failure and a timeout are retryable', async () => {
+		const network = await failure((async () => {
+			throw new TypeError('fetch failed');
+		}) as typeof fetch);
+		expect(network.retryable).toBe(true);
+		expect(network.message).toContain('fetch failed');
+		const timeout = await failure(hangingFetch);
+		expect(timeout.retryable).toBe(true);
+		expect(timeout.message).toMatch(/timeout/i);
+	});
+});
+
 describe('resend transport timeout', () => {
 	it('rejects when the API call exceeds the timeout instead of hanging (hung before the fix)', async () => {
 		const transport = createResendTransport('re_key_not_real', hangingFetch, 50);
@@ -302,6 +350,34 @@ describe('sendEmail idempotency (integration)', () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].status).toBe('sent');
 		expect(rows[0].error).toBeNull();
+	});
+
+	it('the error outcome carries the transport classification (unknown errors stay retryable)', async () => {
+		const parked = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'a@b.ro',
+			transport: createResendTransport(
+				're_key_not_real',
+				(async () => new Response('{"message":"invalid to"}', { status: 422 })) as typeof fetch
+			)
+		});
+		const outcome = await parked.send(input('classify-422'));
+		expect(outcome).toMatchObject({ status: 'error', retryable: false });
+		expect((await rowsFor('classify-422'))[0].error).toContain('invalid to');
+
+		const generic = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'a@b.ro',
+			transport: fakeTransport(async () => {
+				throw new Error('boom');
+			})
+		});
+		expect(await generic.send(input('classify-generic'))).toMatchObject({
+			status: 'error',
+			retryable: true
+		});
 	});
 
 	it('missing transport in real mode records an error instead of throwing', async () => {

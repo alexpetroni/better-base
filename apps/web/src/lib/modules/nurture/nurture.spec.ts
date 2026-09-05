@@ -5,11 +5,12 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
 import { subscribers } from '../crm/schema.ts';
 import { emailLog } from '../email/schema.ts';
+import { createResendTransport } from '../email/resend.ts';
 import { createEmailSender, type EmailSender } from '../email/service.ts';
 import { quizResults, quizzes } from '../quiz/schema.ts';
 import { drainNurtureSends, type NurtureDrainDeps } from './drain.ts';
 import type { NurtureSequenceDefinition, SequenceStep, SequenceTrigger } from './definition.ts';
-import { computeStepScheduledAt } from './schedule.ts';
+import { computeStepScheduledAt, NURTURE_SEND_PACE_MS } from './schedule.ts';
 import { nurtureEnrollments, nurtureSends, nurtureSequences } from './schema.ts';
 import {
 	cancelSubscriberNurture,
@@ -432,6 +433,66 @@ describe('drain: claim-then-send', () => {
 		const result = await drainNurtureSends(drainDeps(), { now: NOW });
 		expect(result).toMatchObject({ claimed: 1, sent: 1 });
 		expect((await emailLogTo(subscriber.email)).length).toBe(1);
+	});
+
+	// Audit 2026-09-03 P1: a 403/422 from Resend was retried 5× over ~21 h.
+	it('a non-retryable transport error parks the send immediately, keeping the body', async () => {
+		const rejecting = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'test@example.ro',
+			transport: createResendTransport(
+				're_key_not_real',
+				(async () =>
+					new Response('{"message":"recipient rejected"}', { status: 422 })) as typeof fetch
+			)
+		});
+		await makeSequence({
+			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
+		});
+		const subscriber = await makeSubscriber();
+		await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		const [enrollment] = await enrollmentsOf(subscriber.id);
+
+		const result = await drainNurtureSends(drainDeps({ email: rejecting }), { now: NOW });
+		expect(result).toMatchObject({ claimed: 1, parked: 1, retried: 0, sent: 0 });
+		const [send] = await sendsOf(enrollment.id);
+		expect(send.status).toBe('failed');
+		expect(send.attempts).toBe(1);
+		expect(send.lastError).toContain('recipient rejected');
+		// A parked send keeps the enrollment open for the operator's retry.
+		expect((await enrollmentsOf(subscriber.id))[0].status).toBe('active');
+	});
+
+	// Audit 2026-09-03 P1: 25 back-to-back sends vs Resend's 2 req/s.
+	it('paces live sends inside a batch (NURTURE_SEND_PACE_MS between transport calls, none in dry run)', async () => {
+		await makeSequence({
+			steps: [{ offsetDays: 0, templateKey: 'nurture', subject: 'S', paragraphs: ['P'] }]
+		});
+		for (let i = 0; i < 3; i += 1) {
+			const subscriber = await makeSubscriber();
+			await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		}
+		const live = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'test@example.ro',
+			transport: { send: async () => ({ providerId: 'p' }) }
+		});
+		const pace = vi.fn(async () => {});
+		const result = await drainNurtureSends(drainDeps({ email: live, pace }), { now: NOW });
+		expect(result.sent).toBe(3);
+		expect(pace).toHaveBeenCalledTimes(2);
+		expect(pace).toHaveBeenCalledWith(NURTURE_SEND_PACE_MS);
+
+		// Dry run touches no API: nothing to pace.
+		for (let i = 0; i < 2; i += 1) {
+			const subscriber = await makeSubscriber();
+			await enrollOnConsentConfirmed({ db }, subscriber.id, NOW);
+		}
+		const dryPace = vi.fn(async () => {});
+		expect((await drainNurtureSends(drainDeps({ pace: dryPace }), { now: NOW })).sent).toBe(2);
+		expect(dryPace).not.toHaveBeenCalled();
 	});
 
 	// Audit 2026-09-03 P1: the drain counted every `skipped` as sent. A crash
