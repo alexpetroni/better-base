@@ -419,9 +419,7 @@ describe('launch:check rules', () => {
 	});
 
 	it('passes a complete imgproxy (self-hosted) prod env too', () => {
-		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node', ...acknowledged })).toEqual(
-			[]
-		);
+		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node', ...acknowledged })).toEqual([]);
 	});
 
 	it('an imgproxy deploy may derive the fiscal bucket (no public media origin)', () => {
