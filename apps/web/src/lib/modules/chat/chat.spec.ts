@@ -316,6 +316,24 @@ describe('handleChatMessage', () => {
 	}, 5_000);
 });
 
+describe('abuse bounds (FIX-14)', () => {
+	it('a cookieless caller past the IP cap creates no session row (one per call before the fix)', async () => {
+		const d = deps({ rateConfig: { max: 2, windowMs: 60 * 60 * 1000 } });
+		const ip = '198.51.100.140';
+		for (let i = 0; i < 2; i++) {
+			const { outcome } = await roundTrip({ message: `mesaj ${i}`, ip }, d);
+			if (outcome.kind !== 'stream') throw new Error(`message ${i} unexpectedly ${outcome.kind}`);
+		}
+		const count = async () =>
+			(await db.select({ n: sql<number>`count(*)::int` }).from(chatSessions))[0].n;
+		const before = await count();
+
+		const blocked = await handleChatMessage(d, { message: 'mesaj 2', sessionToken: null, ip });
+		expect(blocked.kind).toBe('rate-limited');
+		expect(await count()).toBe(before);
+	});
+});
+
 describe('handleChatMessage stop events (FIX-14)', () => {
 	it('forwards a max_tokens stop and does not persist the truncated reply as an answer', async () => {
 		const truncating: ChatProvider = {
