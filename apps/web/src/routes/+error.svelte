@@ -20,4 +20,9 @@
 			ID: {page.error.errorId}
 		</p>
 	{/if}
+	{#if page.error?.requestId}
+		<p class="mt-1 text-xs text-(--color-ink)/50" data-testid="request-id">
+			Request: {page.error.requestId}
+		</p>
+	{/if}
 </div>

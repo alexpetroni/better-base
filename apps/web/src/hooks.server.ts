@@ -1,5 +1,15 @@
-import { error, json, redirect, text, type Handle, type HandleServerError } from '@sveltejs/kit';
+import {
+	error,
+	isHttpError,
+	isRedirect,
+	json,
+	redirect,
+	text,
+	type Handle,
+	type HandleServerError
+} from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
+import { waitUntil } from '@vercel/functions';
 import { env } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
 import { getTextDirection } from '$lib/paraglide/runtime';
@@ -9,7 +19,14 @@ import { getAuth, guardAdminPath, isStaffRole, routeIdPathname } from '$lib/modu
 import { createSettingsLoader } from '$lib/modules/settings/server';
 import { assertBootEnv } from '$lib/server/boot';
 import { isForbiddenCrossSiteForm } from '$lib/server/csrf';
+import { postErrorReport } from '$lib/server/error-report';
 import { formatServerError } from '$lib/server/log';
+import {
+	formatRequestLog,
+	REQUEST_ID_HEADER,
+	requestLogEnabled,
+	resolveRequestId
+} from '$lib/server/request-id';
 import { applySecurityHeaders } from '$lib/server/security-headers';
 // Side effect: selects the chat provider at boot — CHAT_PROVIDER=anthropic
 // without an ANTHROPIC_API_KEY fails fast instead of at the first message.
@@ -18,6 +35,42 @@ import '$lib/modules/chat/server';
 // Fail fast (audit resilience #10): refuse to boot on missing required env
 // instead of 500ing on first use. PUBLIC_SITE_URL lives in the public env.
 assertBootEnv({ ...env, PUBLIC_SITE_URL: publicEnv.PUBLIC_SITE_URL });
+
+const logRequests = requestLogEnabled(env);
+
+/**
+ * Request id + request log (FIX-16, audit "Ops & platform"). OUTERMOST hook:
+ * the id must exist before anything can fail, and the log line must record
+ * the final status — including a redirect()/error() thrown by an inner hook,
+ * which is re-thrown untouched after being recorded.
+ */
+const handleRequestId: Handle = async ({ event, resolve }) => {
+	const requestId = resolveRequestId(event.request.headers);
+	event.locals.requestId = requestId;
+	const started = performance.now();
+	const log = (status: number) => {
+		if (!logRequests) return;
+		console.error(
+			formatRequestLog({
+				method: event.request.method,
+				path: event.url.pathname,
+				status,
+				durationMs: performance.now() - started,
+				requestId
+			})
+		);
+	};
+	let response: Response;
+	try {
+		response = await resolve(event);
+	} catch (thrown) {
+		log(isHttpError(thrown) || isRedirect(thrown) ? thrown.status : 500);
+		throw thrown;
+	}
+	response.headers.set(REQUEST_ID_HEADER, requestId);
+	log(response.status);
+	return response;
+};
 
 /**
  * Security headers + the env-derived CSP half on every response (audit
@@ -118,6 +171,7 @@ const handleAdminGuard: Handle = async ({ event, resolve }) => {
 };
 
 export const handle: Handle = sequence(
+	handleRequestId,
 	handleSecurityHeaders,
 	handleCsrf,
 	handleParaglide,
@@ -133,15 +187,22 @@ export const handle: Handle = sequence(
  */
 export const handleError: HandleServerError = ({ error: err, event, status, message }) => {
 	const errorId = crypto.randomUUID();
-	console.error(
-		formatServerError({
-			error: err,
-			errorId,
-			status,
-			method: event.request.method,
-			path: event.url.pathname,
-			message
-		})
-	);
-	return { message, errorId };
+	// `locals.requestId` is set by the outermost hook; an error thrown before
+	// handle runs at all (a malformed request) has none yet.
+	const requestId = event.locals.requestId ?? resolveRequestId(event.request.headers);
+	const line = formatServerError({
+		error: err,
+		errorId,
+		status,
+		method: event.request.method,
+		path: event.url.pathname,
+		message,
+		requestId
+	});
+	console.error(line);
+	// Optional sink (FIX-16): posted after the response on Vercel via waitUntil
+	// (a no-op outside a Vercel function context, where the long-lived server
+	// simply lets the promise finish). postErrorReport never rejects.
+	if (env.ERROR_REPORT_URL) waitUntil(postErrorReport(env.ERROR_REPORT_URL, line));
+	return { message, errorId, requestId };
 };

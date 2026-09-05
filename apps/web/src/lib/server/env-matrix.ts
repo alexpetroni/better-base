@@ -75,7 +75,12 @@ export const ENV_MATRIX: readonly EnvVarSpec[] = [
 	// Vercel Cron authenticates against the retention route with the bearer
 	// secret (DEPLOYMENT.md §12).
 	{ name: 'DIRECT_DATABASE_URL', vercel: true, devDefaultPatterns: [COMPOSE_DB_CREDENTIALS] },
-	{ name: 'CRON_SECRET', vercel: true }
+	{ name: 'CRON_SECRET', vercel: true },
+	// Observability (FIX-16): optional error sink and the request log switch.
+	// Neither is required anywhere; launch:check WARNS when the sink is unset
+	// so a production deploy without one is a decision, not an oversight.
+	{ name: 'ERROR_REPORT_URL' },
+	{ name: 'LOG_REQUESTS' }
 ];
 
 /** Variable names required for a deploy target (boot vars, plus Vercel extras). */

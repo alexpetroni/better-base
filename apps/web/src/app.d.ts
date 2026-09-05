@@ -9,6 +9,8 @@ declare global {
 			message: string;
 			/** Correlates the user-visible error with the structured server log line. */
 			errorId?: string;
+			/** The request's `x-request-id` (FIX-16) — the same key the log line carries. */
+			requestId?: string;
 		}
 		interface Locals {
 			/** Authenticated staff user, resolved by hooks.server.ts on /admin requests. */
@@ -24,6 +26,11 @@ declare global {
 			 * to the client ONLY via `clientSafeSettings(...)`.
 			 */
 			settings: () => Promise<SiteSettings>;
+			/**
+			 * Per-request correlation id (FIX-16): `x-vercel-id` on Vercel, a UUID
+			 * elsewhere. Echoed as the `x-request-id` response header.
+			 */
+			requestId: string;
 		}
 		interface PageData {
 			/**
