@@ -36,6 +36,12 @@ export function isRetryableStatus(status: number): boolean {
  * must reject — the sender records the failure as an `error` log row and the
  * caller moves on — never pin the request (the shop webhook awaits this
  * inline). Failures are thrown as `EmailTransportError`, classified.
+ *
+ * Every call carries the message's email_log key as `Idempotency-Key`
+ * (FIX-18, review 2026-09-05 #4): when the timeout fires AFTER Resend has
+ * accepted the message, the retry of the same log row repeats the same key
+ * and Resend answers with the original send instead of delivering twice
+ * (its window is 24 h — longer than the queue's whole retry schedule).
  */
 export function createResendTransport(
 	apiKey: string,
@@ -50,7 +56,8 @@ export function createResendTransport(
 					method: 'POST',
 					headers: {
 						authorization: `Bearer ${apiKey}`,
-						'content-type': 'application/json'
+						'content-type': 'application/json',
+						'Idempotency-Key': message.idempotencyKey
 					},
 					body: JSON.stringify({
 						from: message.from,

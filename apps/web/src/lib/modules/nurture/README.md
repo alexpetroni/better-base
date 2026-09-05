@@ -119,10 +119,16 @@ shown in `/admin/nurture` — never an infinite loop. A permanent failure (any
 other 4xx: bad key, rejected address) parks immediately with Resend's body.
 Live sends inside a batch are paced by `NURTURE_SEND_PACE_MS` (500 ms; Resend
 allows ~2 req/s); dry runs are not. A crashed invocation leaves rows in
-`sending`; the claim re-takes those after `NURTURE_STALE_CLAIM_MINUTES`, and
-the `email_log` idempotency key guarantees the retry cannot double-deliver —
-a `skipped` outcome counts as sent only when the log row itself reads `sent`
-(or `dryrun` while the sender runs dry). Bounces and complaints reported by
+`sending`; the claim re-takes those after `NURTURE_STALE_CLAIM_MINUTES`. The
+`email_log` idempotency key stops the APP from asking Resend twice for a row
+that already reads `sent` — a `skipped` outcome counts as sent only when the
+log row itself reads `sent` (or `dryrun` while the sender runs dry). It does
+not, by itself, cover a request Resend accepted but we timed out on (an
+`error` row that IS retried): for that the same key travels as Resend's
+`Idempotency-Key` header on every attempt (FIX-18), and Resend returns the
+original send for a repeated key within its 24 h window — the retry schedule
+above (≈ 21 h to the fifth attempt) fits inside it. Beyond that window a
+retry could deliver again; nothing in the app pretends otherwise. Bounces and complaints reported by
 Resend's webhook (`/api/webhooks/resend`) withdraw the address and cancel its
 enrollments like an unsubscribe.
 

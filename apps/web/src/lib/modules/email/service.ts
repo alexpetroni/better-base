@@ -28,6 +28,12 @@ export interface EmailMessage {
 	attachments?: EmailAttachment[];
 	/** Extra headers the template asked for (List-Unsubscribe on marketing mail). */
 	headers?: Record<string, string>;
+	/**
+	 * The email_log row's key, forwarded to the provider as its idempotency
+	 * key (FIX-18): a retry of the same row after a transport timeout is the
+	 * SAME request to Resend, never a second delivery.
+	 */
+	idempotencyKey: string;
 }
 
 /** What actually delivers mail: the Resend adapter in prod, a fake in tests. */
@@ -197,7 +203,8 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					html: rendered.html,
 					text: rendered.text,
 					attachments: input.attachments,
-					headers: rendered.headers
+					headers: rendered.headers,
+					idempotencyKey: input.idempotencyKey
 				});
 				await markStatus(claimed.id, { status: 'sent', providerId });
 				return { status: 'sent', logId: claimed.id };
