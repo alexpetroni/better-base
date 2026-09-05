@@ -305,6 +305,45 @@ describe('upload flow (presign → PUT → confirm)', () => {
 		});
 		expect(result).toMatchObject({ ok: false, error: 'not-found' });
 	});
+
+	// FIX-17 (FIX-15 review, medium): confirm copied whatever key it was handed
+	// into a fresh uploads/ key and then DELETED the original. The signed
+	// ticket binds the key today, but a ticket minted before that deploy for
+	// an `uploads/…` key — or any future caller — would remove a served object
+	// an existing media row points at. Only quarantine keys may be confirmed.
+	it('refuses to confirm a served (uploads/) key: no copy, no delete, no row', async () => {
+		const copies: string[] = [];
+		const deletes: string[] = [];
+		const served = 'uploads/2026/07/already-served-0123abcd.png';
+		const bytes = await readFile(FIXTURE);
+		// A storage where the served object EXISTS — the exact state in which
+		// the old code would have copied it and deleted the original.
+		const recording = {
+			...deps.storage,
+			statObject: async (key: string) =>
+				key === served ? { size: bytes.byteLength, mime: 'image/png' } : null,
+			getObjectBytes: async () => new Uint8Array(bytes),
+			copyObject: async (from: string) => {
+				copies.push(from);
+			},
+			putObject: async (key: string) => {
+				copies.push(key);
+			},
+			deleteObject: async (key: string) => {
+				deletes.push(key);
+			}
+		} as unknown as MediaDeps['storage'];
+
+		const result = await confirmUpload(
+			{ ...deps, storage: recording },
+			{ key: served, filename: 'already-served.png', createdBy: USER_ID }
+		);
+		expect(result).toMatchObject({ ok: false, error: 'not-found', detail: 'not a pending upload' });
+		expect(copies).toEqual([]);
+		expect(deletes).toEqual([]);
+		const rows = await db.select().from(media).where(eq(media.filename, 'already-served.png'));
+		expect(rows).toEqual([]);
+	});
 });
 
 describe('origin serving (the direct/cloudflare source URL)', () => {
