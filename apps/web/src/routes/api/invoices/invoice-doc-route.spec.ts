@@ -6,8 +6,11 @@ import { isHttpError } from '@sveltejs/kit';
 import { createDb, type Db } from '../../../lib/db/client.ts';
 import { signInvoiceDocToken, type InvoiceDocFormat } from '../../../lib/modules/invoice/access.ts';
 import { invoiceLines, invoices } from '../../../lib/modules/invoice/schema.ts';
-import { storageConfigFromEnv } from '../../../lib/modules/media/env.ts';
-import { createStorage } from '../../../lib/modules/media/storage.ts';
+import {
+	invoiceStorageConfigFromEnv,
+	storageConfigFromEnv
+} from '../../../lib/modules/media/env.ts';
+import { createStorage, type Storage } from '../../../lib/modules/media/storage.ts';
 import { createSettingsLoader } from '../../../lib/modules/settings/service.ts';
 import { orders } from '../../../lib/modules/shop/schema.ts';
 import { tokenSecretFrom } from '../../../lib/server/secrets.ts';
@@ -35,6 +38,8 @@ vi.mock('$lib/db', async (importOriginal) => {
 
 let db: Db;
 let secret: string;
+let mediaStorage: Storage;
+let fiscalStorage: Storage;
 type Route = typeof import('./[id]/[format]/+server.ts');
 let get: Route['GET'];
 
@@ -88,14 +93,18 @@ beforeAll(async () => {
 	await db.execute(sql`create schema public`);
 	await migrate(db, { migrationsFolder: path.resolve(import.meta.dirname, '../../../../drizzle') });
 
-	// A fresh compose stack has no bucket yet (same bootstrap as storage:init).
-	const storage = createStorage(storageConfigFromEnv(process.env));
-	await storage.ensureBucket();
-	// The bucket outlives test runs: drop the fixture's documents so this run
+	// A fresh compose stack has no buckets yet (same bootstrap as storage:init):
+	// the media bucket and the PRIVATE fiscal bucket documents live in (FIX-12).
+	mediaStorage = createStorage(storageConfigFromEnv(process.env));
+	fiscalStorage = createStorage(invoiceStorageConfigFromEnv(process.env));
+	await mediaStorage.ensureBucket();
+	await fiscalStorage.ensureBucket();
+	// The buckets outlive test runs: drop the fixture's documents so this run
 	// exercises the current renderer, not a stored render from an older one.
 	for (const id of [INVOICE_ID, OTHER_INVOICE_ID]) {
 		for (const format of ['pdf', 'xml'] as const) {
-			await storage.deleteObject(invoiceDocumentKey(id, format));
+			await mediaStorage.deleteObject(invoiceDocumentKey(id, format));
+			await fiscalStorage.deleteObject(invoiceDocumentKey(id, format));
 		}
 	}
 
@@ -206,6 +215,17 @@ describe('GET /api/invoices/[id]/[format]', () => {
 		const xml = await response.text();
 		const model = await loadInvoiceModel({ db }, INVOICE_ID);
 		expect(validateEFacturaXml(xml, model!)).toEqual([]);
+	});
+
+	// FIX-12 (audit P0 #4): the media bucket is bound to a public domain under
+	// the default provider, so a fiscal document must never be written there.
+	it('stores the rendered documents in the fiscal bucket, never the media bucket', async () => {
+		for (const format of ['pdf', 'xml'] as const) {
+			const key = invoiceDocumentKey(INVOICE_ID, format);
+			expect(await fiscalStorage.statObject(key)).not.toBeNull();
+			expect(await mediaStorage.statObject(key)).toBeNull();
+		}
+		expect(fiscalStorage.bucket).not.toBe(mediaStorage.bucket);
 	});
 
 	it('refuses anonymous requests without a token', async () => {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { bootEnvProblems, REQUIRED_BOOT_ENV } from './boot.ts';
 import { devDefaultProblem, ENV_MATRIX, requiredEnvFor, type DeployTarget } from './env-matrix.ts';
-import { imageProbeBlocker, launchCheckProblems, probeImages } from './launch-check.ts';
+import {
+	fiscalProbeBlocker,
+	imageProbeBlocker,
+	launchCheckProblems,
+	probeFiscalPrivacy,
+	probeImages
+} from './launch-check.ts';
 
 /** A prod-shaped env every rule passes on; cases knock single values out. */
 function prodEnv(): Record<string, string | undefined> {
@@ -15,6 +21,10 @@ function prodEnv(): Record<string, string | undefined> {
 		S3_ACCESS_KEY: 'r2-access-key-id',
 		S3_SECRET_KEY: 'r2-secret-access-key',
 		S3_BUCKET: 'bettersleep-media',
+		// FIX-12: fiscal documents live in their own PRIVATE bucket; under the
+		// cloudflare provider the media bucket is publicly bound, so this is
+		// required there (DEPLOYMENT.md §5).
+		S3_INVOICE_BUCKET: 'bettersleep-fiscal',
 		// The Vercel-target default: Cloudflare transforms in front of the public
 		// R2 origin, no transformer box of our own (DEPLOYMENT.md §6).
 		IMAGE_PROVIDER: 'cloudflare',
@@ -195,6 +205,16 @@ const CASES: Array<{
 		message: /ANTHROPIC_API_KEY is required when CHAT_PROVIDER=anthropic/
 	},
 	{
+		name: 'a cloudflare deploy without a private fiscal bucket',
+		mutate: (env) => delete env.S3_INVOICE_BUCKET,
+		message: /S3_INVOICE_BUCKET is required when IMAGE_PROVIDER=cloudflare/
+	},
+	{
+		name: 'a fiscal bucket that is the media bucket',
+		mutate: (env) => (env.S3_INVOICE_BUCKET = env.S3_BUCKET),
+		message: /S3_INVOICE_BUCKET must not be the media bucket/
+	},
+	{
 		name: 'a vercel target without CRON_SECRET',
 		target: 'vercel',
 		mutate: (env) => delete env.CRON_SECRET,
@@ -219,6 +239,12 @@ describe('launch:check rules', () => {
 
 	it('passes a complete imgproxy (self-hosted) prod env too', () => {
 		expect(launchCheckProblems(imgproxyProdEnv(), { target: 'node' })).toEqual([]);
+	});
+
+	it('an imgproxy deploy may derive the fiscal bucket (no public media origin)', () => {
+		const env = imgproxyProdEnv();
+		delete env.S3_INVOICE_BUCKET;
+		expect(launchCheckProblems(env, { target: 'node' })).toEqual([]);
 	});
 
 	it.each(CASES)('flags $name', ({ target, base, mutate, message }) => {
@@ -363,5 +389,34 @@ describe('image probe (integration)', () => {
 
 	it('declines to probe when the storage credentials are incomplete', () => {
 		expect(imageProbeBlocker({ ...process.env, S3_BUCKET: '' })).toMatch(/S3_\* incomplete/);
+	});
+});
+
+// FIX-12 (audit P0 #4): whatever bucket is bound to the public media origin,
+// nothing under `invoices/` may be readable there. Locally the media bucket
+// IS public (the `direct` provider needs it), so the probe must report it —
+// proof that the probe detects a leak, not a green built on a private MinIO.
+describe('fiscal privacy probe (integration)', () => {
+	function probeEnv(overrides: Record<string, string | undefined> = {}) {
+		const origin = `${process.env.S3_ENDPOINT?.replace(/\/$/, '')}/${process.env.S3_BUCKET}`;
+		return { ...process.env, MEDIA_PUBLIC_BASE_URL: origin, ...overrides };
+	}
+
+	it('reports a public media origin that serves invoices/, and cleans up', async () => {
+		const problems = await probeFiscalPrivacy(probeEnv());
+		expect(problems.join('\n')).toMatch(/invoices\/.* is PUBLICLY readable/);
+		expect(problems.join('\n')).not.toMatch(/cleanup failed/);
+	}, 20_000);
+
+	it('reports an unreachable origin instead of throwing', async () => {
+		const problems = await probeFiscalPrivacy(probeEnv({ MEDIA_PUBLIC_BASE_URL: 'http://localhost:1' }));
+		expect(problems.join('\n')).toMatch(/is not reachable from here/);
+	}, 20_000);
+
+	it('declines to probe without a public media origin or storage credentials', () => {
+		expect(fiscalProbeBlocker({ ...process.env, MEDIA_PUBLIC_BASE_URL: '' })).toMatch(
+			/MEDIA_PUBLIC_BASE_URL is not set/
+		);
+		expect(fiscalProbeBlocker(probeEnv({ S3_BUCKET: '' }))).toMatch(/S3_\* incomplete/);
 	});
 });

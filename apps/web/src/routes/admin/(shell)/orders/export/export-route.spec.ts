@@ -6,7 +6,10 @@ import { isHttpError } from '@sveltejs/kit';
 import { unzipSync } from 'fflate';
 import { createDb, type Db } from '../../../../../lib/db/client.ts';
 import { invoiceLines, invoices } from '../../../../../lib/modules/invoice/schema.ts';
-import { storageConfigFromEnv } from '../../../../../lib/modules/media/env.ts';
+import {
+	invoiceStorageConfigFromEnv,
+	storageConfigFromEnv
+} from '../../../../../lib/modules/media/env.ts';
 import { createStorage } from '../../../../../lib/modules/media/storage.ts';
 import { createSettingsLoader } from '../../../../../lib/modules/settings/service.ts';
 
@@ -74,6 +77,7 @@ beforeAll(async () => {
 		migrationsFolder: path.resolve(import.meta.dirname, '../../../../../../drizzle')
 	});
 	await createStorage(storageConfigFromEnv(process.env)).ensureBucket();
+	await createStorage(invoiceStorageConfigFromEnv(process.env)).ensureBucket();
 
 	const base = {
 		series: 'EXP',
