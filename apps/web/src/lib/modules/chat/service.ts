@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { asc, desc, eq, lt, sql } from 'drizzle-orm';
+import { desc, eq, lt, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
 import {
 	consumeRateLimit,
@@ -10,7 +10,7 @@ import type { ChatMessage, ChatProvider } from './provider.ts';
 import { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
 import { chatMessages, chatRateLimits, chatSessions, type ChatSessionRow } from './schema.ts';
 import { signSessionToken, verifySessionToken } from './token.ts';
-import { capHistory, validateChatMessage } from './validate.ts';
+import { capHistory, HISTORY_LIMIT, validateChatMessage } from './validate.ts';
 
 /** Output cap sent to the provider per assistant reply. */
 export const CHAT_MAX_TOKENS = 1024;
@@ -121,13 +121,16 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 		.values({ id: randomUUID(), sessionId: session.id, role: 'user', content: validated.message });
 	await bumpMessageCount(db, session.id);
 
-	// History (including the message just stored), capped for the provider.
+	// History (including the message just stored): the newest HISTORY_LIMIT
+	// rows read in one bounded query (as `getChatHistory` does), flipped back
+	// to chronological order, then role-aligned for the provider.
 	const rows = await db
 		.select({ role: chatMessages.role, content: chatMessages.content })
 		.from(chatMessages)
 		.where(eq(chatMessages.sessionId, session.id))
-		.orderBy(asc(chatMessages.createdAt), asc(chatMessages.id));
-	const history = capHistory(rows as ChatMessage[]);
+		.orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+		.limit(HISTORY_LIMIT);
+	const history = capHistory((rows as ChatMessage[]).reverse());
 
 	async function* respond(): AsyncIterable<string> {
 		let full = '';

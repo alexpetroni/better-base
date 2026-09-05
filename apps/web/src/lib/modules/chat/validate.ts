@@ -17,7 +17,15 @@ export function validateChatMessage(raw: unknown): MessageValidation {
 	return { ok: true, message };
 }
 
-/** Pure: cap the history sent to the provider to the most recent messages. */
+/**
+ * Pure: cap the history sent to the provider to the most recent messages,
+ * then drop any leading non-`user` turns — the Messages API rejects a
+ * conversation whose first turn is `assistant`, and a newest-N window over
+ * alternating turns starts with one every other message (FIX-14).
+ */
 export function capHistory(messages: ChatMessage[], limit: number = HISTORY_LIMIT): ChatMessage[] {
-	return messages.length <= limit ? messages : messages.slice(-limit);
+	const capped = messages.length <= limit ? messages : messages.slice(-limit);
+	const firstUser = capped.findIndex((m) => m.role === 'user');
+	if (firstUser <= 0) return firstUser === 0 ? capped : [];
+	return capped.slice(firstUser);
 }

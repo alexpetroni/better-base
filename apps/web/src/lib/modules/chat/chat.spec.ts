@@ -181,7 +181,11 @@ describe('handleChatMessage', () => {
 		}
 
 		const last = seen.at(-1)!;
-		expect(last).toHaveLength(HISTORY_LIMIT);
+		// 23 rows are stored when the provider is called (the reply is not yet);
+		// the newest 20 start with an assistant turn, which is dropped so the
+		// window the API sees starts with a user turn (FIX-14).
+		expect(last).toHaveLength(HISTORY_LIMIT - 1);
+		expect(last[0]).toEqual({ role: 'user', content: 'mesaj 2' });
 		// The newest user message is included; the oldest turns fell off.
 		expect(last.at(-1)).toEqual({ role: 'user', content: 'mesaj 11' });
 		expect(last.some((m) => m.content === 'mesaj 0')).toBe(false);

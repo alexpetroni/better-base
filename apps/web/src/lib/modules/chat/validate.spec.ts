@@ -43,11 +43,13 @@ describe('capHistory', () => {
 	});
 
 	it('keeps only the most recent messages beyond the limit', () => {
-		const history = Array.from({ length: HISTORY_LIMIT + 7 }, (_, i) => message(i));
+		// An even offset so the newest-20 window starts on a user turn and the
+		// cap is exact (odd offsets additionally drop the leading assistant).
+		const history = Array.from({ length: HISTORY_LIMIT + 8 }, (_, i) => message(i));
 		const capped = capHistory(history);
 		expect(capped).toHaveLength(HISTORY_LIMIT);
-		expect(capped[0]).toEqual(message(7));
-		expect(capped.at(-1)).toEqual(message(HISTORY_LIMIT + 6));
+		expect(capped[0]).toEqual(message(8));
+		expect(capped.at(-1)).toEqual(message(HISTORY_LIMIT + 7));
 	});
 });
 
