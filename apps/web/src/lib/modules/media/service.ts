@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm';
-import { imageSize } from 'image-size';
+import { disableTypes, imageSize, types as imageSizeTypes } from 'image-size';
 import type { Db } from '../../db/client.ts';
 import type { Result as ResultOf } from '../../util/result.ts';
 import { blurhashFromPng, BLURHASH_SOURCE_PX } from './blurhash.ts';
@@ -15,6 +15,20 @@ import {
 	validateUpload,
 	type AllowedImageMime
 } from './validation.ts';
+
+/**
+ * image-size formats the upload gate can actually admit (`ALLOWED_IMAGE_MIMES`:
+ * jpg/png/webp/avif/gif/svg — avif is image-size's `heif` family). Every other
+ * parser is switched off up front (FIX-18, review 2026-09-05 #5): image-size
+ * ≤ 2.0.2 carries unpatched infinite-loop advisories in its ICNS, JXL and HEIF
+ * parsers (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq; no fixed release is
+ * published) and detection goes by magic bytes, not by the declared mime — so a
+ * crafted ICNS/JXL body behind an `image/png` content type would otherwise
+ * reach the vulnerable parser. HEIF stays on because avif uploads need it;
+ * that residual exposure is recorded in docs/STATE.md.
+ */
+const IMAGE_SIZE_TYPES_IN_USE = new Set(['jpg', 'png', 'webp', 'heif', 'gif', 'svg']);
+disableTypes(imageSizeTypes.filter((type) => !IMAGE_SIZE_TYPES_IN_USE.has(type)));
 
 /**
  * Media service. Framework-free: deps (db + storage) are passed in so the

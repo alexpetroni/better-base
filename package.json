@@ -14,6 +14,7 @@
     "lint": "pnpm -r --if-present lint",
     "check": "pnpm -r --if-present check",
     "test:unit": "pnpm -r --if-present test:unit",
+    "gate": "pnpm lint && pnpm check && pnpm test:unit && pnpm audit --prod --audit-level=high",
     "test:neon": "pnpm --filter web test:neon",
     "test:e2e": "pnpm --filter web test:e2e",
     "db:migrate": "pnpm --filter web db:migrate",

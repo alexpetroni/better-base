@@ -25,7 +25,7 @@ commands with `SITE_ID=life DATABASE_URL=postgres://better:better@localhost:5433
 
 | Command | What / notes |
 | --- | --- |
-| `pnpm lint && pnpm check && pnpm test:unit` | The gate. Also CI's `gate` job. |
+| `pnpm gate` (= `pnpm lint && pnpm check && pnpm test:unit && pnpm audit --prod --audit-level=high`) | The gate. Also CI's `gate` job. The audit step fails on any high/critical advisory in production dependencies; advisories with no upstream fix are accepted by id in `pnpm-workspace.yaml` (`auditConfig.ignoreGhsas`) with the reason in `docs/STATE.md` — never by lowering the level. |
 | `pnpm test:e2e` | Builds, runs both preview servers (4173 sleep / 4174 life), playwright. Needs both databases migrated. |
 | `pnpm test:neon` | The unit/integration suite on `DB_DRIVER=neon` over the local proxy. |
 | `pnpm build` / `DEPLOY_TARGET=vercel pnpm build` | adapter-node (`apps/web/build/`) / adapter-vercel (`.vercel/output`). |

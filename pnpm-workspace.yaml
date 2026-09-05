@@ -4,3 +4,11 @@ packages:
 allowBuilds:
   '@tailwindcss/oxide': true
   esbuild: true
+
+# `pnpm audit --prod --audit-level=high` runs in the gate (FIX-18). Advisories
+# listed here have NO published fix; each is recorded with its reason and the
+# in-code mitigation in docs/STATE.md. Remove an id the moment a fix ships.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-w3rx-r6r6-pgpr # image-size ≤2.0.2 ICNS loop — parser disabled in media/service.ts
+    - GHSA-5p2g-fcmc-qvqq # image-size ≤2.0.2 JXL/HEIF loops — JXL disabled; HEIF needed for avif
