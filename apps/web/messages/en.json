@@ -371,6 +371,8 @@
 	"chat_input_label": "Your message",
 	"chat_retry": "Try again",
 	"chat_reply_failed": "The reply was interrupted.",
+	"chat_reply_truncated": "The reply was cut short. Try again for a shorter answer.",
+	"chat_reply_declined": "The assistant could not answer this question.",
 	"footer_legal_aria": "Legal links",
 	"legal_cui_label": "CUI",
 	"legal_regcom_label": "Trade Registry no.",

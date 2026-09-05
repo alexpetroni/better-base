@@ -128,7 +128,7 @@ describe('MockChatProvider', () => {
 	it('stops streaming when the abort signal fires (client disconnected)', async () => {
 		const provider = createMockChatProvider();
 		const abort = new AbortController();
-		const chunks: string[] = [];
+		const chunks: ChatStreamEvent[] = [];
 		for await (const chunk of provider.stream([{ role: 'user', content: 'Salut!' }], {
 			system: 's',
 			maxTokens: 10,
@@ -165,6 +165,7 @@ describe('AnthropicChatProvider', () => {
 		})) as typeof fetch;
 
 	it('times out instead of hanging when the API never responds (hung before the fix)', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
 		const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
 			timeoutMs: 50,
 			maxRetries: 0,
@@ -238,7 +239,10 @@ describe('AnthropicChatProvider', () => {
 			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const fetchFn = (async () =>
 				new Response(
-					JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }),
+					JSON.stringify({
+						type: 'error',
+						error: { type: 'rate_limit_error', message: 'slow down' }
+					}),
 					{ status: 429, headers: { 'content-type': 'application/json' } }
 				)) as typeof fetch;
 			const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
@@ -259,13 +263,17 @@ describe('AnthropicChatProvider', () => {
 		it('aborts a stream that goes silent (inactivity timeout) instead of hanging', async () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const encoder = new TextEncoder();
-			// message_start arrives, then the socket stays open and silent.
-			const body = new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(encoder.encode(sseBody('', 'end_turn').split('\n\n')[0] + '\n\n'));
-				}
-			});
-			const fetchFn = (async () => new Response(body, { status: 200, headers: sseHeaders })) as typeof fetch;
+			// message_start arrives, then the socket stays open and silent. Like
+			// real fetch, the body read rejects once the request signal aborts.
+			const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+				const body = new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(encoder.encode(sseBody('', 'end_turn').split('\n\n')[0] + '\n\n'));
+						init?.signal?.addEventListener('abort', () => controller.error(init.signal!.reason));
+					}
+				});
+				return new Response(body, { status: 200, headers: sseHeaders });
+			}) as typeof fetch;
 			const provider = createAnthropicChatProvider('sk-ant-test-not-real', {
 				maxRetries: 0,
 				inactivityMs: 50,

@@ -22,8 +22,21 @@ export interface ChatStreamOptions {
 	signal?: AbortSignal;
 }
 
+/**
+ * Why a reply ended early: the model hit `maxTokens` (truncated) or declined
+ * to answer (refusal). A normal end yields no stop event at all.
+ */
+export type ChatStopReason = 'max_tokens' | 'refusal';
+
+/**
+ * One streamed event, shaped like the SSE frame the widget receives: text
+ * deltas, then optionally ONE terminal stop event (FIX-14). Implementations
+ * never emit a delta after a stop.
+ */
+export type ChatStreamEvent = { delta: string } | { stop: ChatStopReason };
+
 export interface ChatProvider {
-	/** Which implementation is live — asserted by tests, logged nowhere else. */
+	/** Which implementation is live — asserted by tests, logged once at boot and in /api/health. */
 	readonly kind: 'mock' | 'anthropic';
-	stream(messages: ChatMessage[], options: ChatStreamOptions): AsyncIterable<string>;
+	stream(messages: ChatMessage[], options: ChatStreamOptions): AsyncIterable<ChatStreamEvent>;
 }

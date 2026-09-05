@@ -371,6 +371,8 @@
 	"chat_input_label": "Mesajul tău",
 	"chat_retry": "Reîncearcă",
 	"chat_reply_failed": "Răspunsul a fost întrerupt.",
+	"chat_reply_truncated": "Răspunsul a fost tăiat. Reîncearcă pentru un răspuns mai scurt.",
+	"chat_reply_declined": "Asistentul nu a putut răspunde la această întrebare.",
 	"footer_legal_aria": "Linkuri legale",
 	"legal_cui_label": "CUI",
 	"legal_regcom_label": "Reg. Com.",

@@ -8,6 +8,8 @@
 		content: string;
 		/** Streaming broke off mid-reply — the content is incomplete. */
 		failed?: boolean;
+		/** The provider ended the reply early: truncated (max_tokens) or declined (refusal). */
+		stop?: 'max_tokens' | 'refusal';
 	}
 
 	let { variant = 'widget' }: { variant?: 'widget' | 'page' } = $props();
@@ -75,6 +77,9 @@
 			const reader = res.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
+			// Exactly one terminal frame (done | stop | error) ends a healthy
+			// stream; a connection that closes without one broke off (FIX-14).
+			let terminal = false;
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
@@ -85,7 +90,12 @@
 				for (const frame of frames) {
 					const data = frame.split('\n').find((line) => line.startsWith('data: '));
 					if (!data) continue;
-					let payload: { delta?: string; error?: string };
+					let payload: {
+						delta?: string;
+						error?: string;
+						done?: boolean;
+						stop?: 'max_tokens' | 'refusal';
+					};
 					try {
 						payload = JSON.parse(data.slice(6));
 					} catch {
@@ -93,8 +103,11 @@
 					}
 					if (payload.delta) messages[assistantIndex].content += payload.delta;
 					if (payload.error) errorText = payload.error;
+					if (payload.stop) messages[assistantIndex].stop = payload.stop;
+					if (payload.done || payload.stop || payload.error) terminal = true;
 				}
 			}
+			if (!terminal) errorText = CHAT_ERRORS.stream;
 		} catch {
 			errorText = CHAT_ERRORS.stream;
 		} finally {
@@ -126,7 +139,7 @@
 		const lastUser = messages.findLast((msg) => msg.role === 'user');
 		if (!lastUser) return;
 		const last = messages.at(-1);
-		if (last?.role === 'assistant' && last.failed) messages.pop();
+		if (last?.role === 'assistant' && (last.failed || last.stop)) messages.pop();
 		await deliver(lastUser.content);
 	}
 
@@ -160,20 +173,27 @@
 				data-testid="chat-message"
 				data-role={message.role}
 				data-failed={message.failed ? 'true' : undefined}
+				data-stop={message.stop}
 				class="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap {message.role === 'user'
 					? 'ml-auto bg-(--color-brand) text-white'
-					: 'bg-(--color-brand-soft)/40'} {message.failed ? 'border border-red-300' : ''}"
+					: 'bg-(--color-brand-soft)/40'} {message.failed || message.stop
+					? 'border border-red-300'
+					: ''}"
 			>
 				{message.content}
 				{#if message.failed}
 					<span class="mt-1 block text-xs text-red-700">{m.chat_reply_failed()}</span>
+				{:else if message.stop === 'max_tokens'}
+					<span class="mt-1 block text-xs text-red-700">{m.chat_reply_truncated()}</span>
+				{:else if message.stop === 'refusal'}
+					<span class="mt-1 block text-xs text-red-700">{m.chat_reply_declined()}</span>
 				{/if}
 			</div>
 		{/each}
 		{#if errorText}
 			<p class="text-sm text-red-700" data-testid="chat-error">{errorText}</p>
 		{/if}
-		{#if !busy && messages.at(-1)?.failed}
+		{#if !busy && (messages.at(-1)?.failed || messages.at(-1)?.stop)}
 			<button
 				type="button"
 				data-testid="chat-retry"

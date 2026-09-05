@@ -6,14 +6,19 @@ import {
 	pruneStaleRateLimits,
 	type RateLimitConfig
 } from '../../server/rate-limit/core.ts';
-import type { ChatMessage, ChatProvider } from './provider.ts';
+import type { ChatMessage, ChatProvider, ChatStreamEvent } from './provider.ts';
 import { CHAT_RATE_LIMIT, ipRateKey, sessionRateKey } from './rate-limit.ts';
 import { chatMessages, chatRateLimits, chatSessions, type ChatSessionRow } from './schema.ts';
 import { signSessionToken, verifySessionToken } from './token.ts';
 import { capHistory, HISTORY_LIMIT, validateChatMessage } from './validate.ts';
 
-/** Output cap sent to the provider per assistant reply. */
-export const CHAT_MAX_TOKENS = 1024;
+/**
+ * Output cap sent to the provider per assistant reply. Sized for the advice
+ * persona (a few short paragraphs of Romanian, which tokenizes at roughly
+ * 3 chars/token) with thinking disabled, so every token is visible text —
+ * see the chat README "Provider settings" (FIX-14).
+ */
+export const CHAT_MAX_TOKENS = 2048;
 
 export const CHAT_RETENTION_DAYS = 30;
 
@@ -50,10 +55,11 @@ export type ChatOutcome =
 	| {
 			kind: 'stream';
 			/**
-			 * Assistant reply chunks. The assistant message is persisted only
-			 * after the iterable is fully consumed.
+			 * Assistant reply events. The assistant message is persisted only
+			 * after the iterable is fully consumed AND the reply ended normally
+			 * (a truncated or declined reply — a `stop` event — is not stored).
 			 */
-			stream: AsyncIterable<string>;
+			stream: AsyncIterable<ChatStreamEvent>;
 			sessionId: string;
 			/** Signed cookie value to (re)set on the response. */
 			sessionToken: string;
@@ -132,19 +138,23 @@ export async function handleChatMessage(deps: ChatDeps, input: ChatInput): Promi
 		.limit(HISTORY_LIMIT);
 	const history = capHistory((rows as ChatMessage[]).reverse());
 
-	async function* respond(): AsyncIterable<string> {
+	async function* respond(): AsyncIterable<ChatStreamEvent> {
 		let full = '';
-		for await (const chunk of provider.stream(history, {
+		let stopped = false;
+		for await (const event of provider.stream(history, {
 			system: systemPrompt,
 			maxTokens: CHAT_MAX_TOKENS,
 			signal: input.signal
 		})) {
-			full += chunk;
-			yield chunk;
+			if ('delta' in event) full += event.delta;
+			else stopped = true;
+			yield event;
 		}
 		// Client disconnected mid-reply: the user message stays (accurate), but
-		// a reply nobody received must not be persisted as if it were.
-		if (input.signal?.aborted) return;
+		// a reply nobody received must not be persisted as if it were. Same
+		// for a truncated/declined reply (FIX-14): the widget shows it as such
+		// with a retry, and the history must not carry it as an answer.
+		if (input.signal?.aborted || stopped) return;
 		await db
 			.insert(chatMessages)
 			.values({ id: randomUUID(), sessionId: session.id, role: 'assistant', content: full });

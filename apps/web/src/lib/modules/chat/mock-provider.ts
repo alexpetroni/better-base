@@ -57,7 +57,7 @@ export function createMockChatProvider(): ChatProvider {
 			for (const word of reply.split(/(?<= )/)) {
 				// Client disconnected: stop like the real provider would.
 				if (options?.signal?.aborted) return;
-				yield word;
+				yield { delta: word };
 			}
 		}
 	};
