@@ -240,6 +240,14 @@ describe('parseBundle', () => {
 		expect(parseBundle(quizWithoutPayload).ok).toBe(false);
 	});
 
+	// FIX-15 (audit P2): unknown keys used to spread straight into the insert.
+	it('rejects unknown keys at every level', () => {
+		expect(parseBundle(articleBundle({ extra: true })).ok).toBe(false);
+		const article = (articleBundle() as { article: Record<string, unknown> }).article;
+		expect(parseBundle(articleBundle({ article: { ...article, createdBy: 'x' } })).ok).toBe(false);
+		expect(parseBundle(articleBundle({ media: [{ ...IMAGE, createdAt: 'now' }] })).ok).toBe(false);
+	});
+
 	it('round-trips through JSON', () => {
 		const parsed = parseBundle(JSON.parse(JSON.stringify(articleBundle())));
 		expect(parsed.ok).toBe(true);

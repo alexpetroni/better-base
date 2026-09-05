@@ -161,19 +161,29 @@ describe('importContentDirs', () => {
 		expect(rows.map((r) => r.slug).sort()).toEqual(['a-common', 'b-common', 'c-site']);
 	});
 
-	it('lets a site bundle update a common one of the same slug', async () => {
+	// FIX-15: create-only by default. A site bundle of the same slug used to
+	// silently overwrite the common one (and, on re-run, any admin edit);
+	// now it is skipped unless the run opts into `overwrite`.
+	it('skips a site bundle whose slug already exists unless overwrite is set', async () => {
 		const dirs = contentDirsFor(base, 'sleep');
 		await writeBundle(dirs[0], 'a.json', articleBundle('shared', 'Common title'));
 		await writeBundle(dirs[1], 'a.json', articleBundle('shared', 'Site title'));
 
 		const summary = await importContentDirs(deps, dirs);
-
 		expect(summary.results.map((r) => (r.ok ? r.summary.action : r.error))).toEqual([
 			'created',
-			'updated'
+			'skipped'
 		]);
 		const [row] = await db.select().from(articles).where(eq(articles.slug, 'shared'));
-		expect(row.title).toBe('Site title');
+		expect(row.title).toBe('Common title');
+
+		const overwrite = await importContentDirs(deps, dirs, { overwrite: true });
+		expect(overwrite.results.map((r) => (r.ok ? r.summary.action : r.error))).toEqual([
+			'updated',
+			'updated'
+		]);
+		const [after] = await db.select().from(articles).where(eq(articles.slug, 'shared'));
+		expect(after.title).toBe('Site title');
 	});
 
 	it('is idempotent: re-running creates no duplicate rows or media', async () => {
@@ -190,7 +200,7 @@ describe('importContentDirs', () => {
 		const second = await importContentDirs(deps, dirs);
 		expect(second).toMatchObject({ imported: 2, failed: 0 });
 
-		expect(second.results.every((r) => r.ok && r.summary.action === 'updated')).toBe(true);
+		expect(second.results.every((r) => r.ok && r.summary.action === 'skipped')).toBe(true);
 		expect((await db.select().from(articles).where(eq(articles.slug, 'idem'))).length).toBe(1);
 		expect((await db.select().from(products).where(eq(products.slug, 'perna-idem'))).length).toBe(
 			1
@@ -200,7 +210,7 @@ describe('importContentDirs', () => {
 		);
 		// Second pass reuses the uploaded object instead of re-uploading it.
 		const productRun = second.results.find((r) => path.basename(r.file) === 'product.json');
-		expect(productRun).toMatchObject({ ok: true, summary: { mediaCreated: 0, mediaReused: 1 } });
+		expect(productRun).toMatchObject({ ok: true, summary: { mediaCreated: 0, mediaReused: 0 } });
 	});
 
 	it('reports a broken file and keeps importing the rest', async () => {

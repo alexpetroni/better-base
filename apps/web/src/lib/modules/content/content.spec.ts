@@ -19,6 +19,7 @@ import { productPillars, products } from '../shop/schema.ts';
 import type { ContentBundle } from './bundle.ts';
 import { exportContent, type ContentDeps } from './export.ts';
 import { importContent } from './import.ts';
+import { withDbFault } from '../../../../tests/helpers/db-fault.ts';
 
 // The cross-site content sharing round trip, tested exactly as it will be
 // used: TWO databases (source A gets all 9 pillars like better-life, target B
@@ -184,12 +185,18 @@ describe('article export → import between two databases', () => {
 			.where(eq(articlePillars.articleId, imported.id));
 		expect(joins.map((j) => j.pillarId)).toEqual([somnB]);
 
+		// FIX-15: import is create-only by default — an existing slug is reported
+		// as skipped and nothing is written; `overwrite` opts into the update.
 		const second = await importContent(depsB, wire);
 		expect(second.ok).toBe(true);
 		if (!second.ok) return;
-		expect(second.value.action).toBe('updated');
-		expect(second.value.mediaCreated).toBe(0);
-		expect(second.value.mediaReused).toBe(2);
+		expect(second.value.action).toBe('skipped');
+		const third = await importContent(depsB, wire, { overwrite: true });
+		expect(third.ok).toBe(true);
+		if (!third.ok) return;
+		expect(third.value.action).toBe('updated');
+		expect(third.value.mediaCreated).toBe(0);
+		expect(third.value.mediaReused).toBe(2);
 		const [articleCount] = await dbB
 			.select({ n: count() })
 			.from(articles)
@@ -205,6 +212,84 @@ describe('article export → import between two databases', () => {
 			.from(articlePillars)
 			.where(eq(articlePillars.articleId, imported.id));
 		expect(joinsAfter).toHaveLength(1);
+	});
+
+	it('without overwrite an existing slug is skipped and admin edits survive', async () => {
+		const exported = await exportContent(depsA, { type: 'article', slug: 'articol-partajat' });
+		if (!exported.ok) throw new Error(exported.error);
+		const wire = JSON.parse(JSON.stringify(exported.value));
+		await dbB
+			.update(articles)
+			.set({ title: 'Titlu editat în B', status: 'draft' })
+			.where(eq(articles.slug, 'articol-partajat'));
+
+		const skipped = await importContent(depsB, wire);
+		expect(skipped.ok).toBe(true);
+		if (!skipped.ok) return;
+		expect(skipped.value).toMatchObject({ action: 'skipped', slug: 'articol-partajat' });
+		const [kept] = await dbB.select().from(articles).where(eq(articles.slug, 'articol-partajat'));
+		expect(kept.title).toBe('Titlu editat în B');
+		expect(kept.status).toBe('draft');
+
+		const overwritten = await importContent(depsB, wire, { overwrite: true });
+		expect(overwritten.ok).toBe(true);
+		const [replaced] = await dbB
+			.select()
+			.from(articles)
+			.where(eq(articles.slug, 'articol-partajat'));
+		expect(replaced.title).toBe('Articol partajat');
+		expect(replaced.status).toBe('published');
+	});
+
+	// FIX-15 (audit P2 'import not atomic'): a dropped connection between the
+	// row insert and the join rows left a published article with no pillars.
+	it('writes the row and its pillar rows in one transaction', async () => {
+		const exported = await exportContent(depsA, { type: 'article', slug: 'articol-partajat' });
+		if (!exported.ok) throw new Error(exported.error);
+		const wire: ContentBundle = JSON.parse(JSON.stringify(exported.value));
+		wire.article.slug = 'articol-atomic';
+
+		const { db: faulty, fault } = withDbFault(dbB, 'insert', articlePillars);
+		fault.arm();
+		await expect(importContent({ ...depsB, db: faulty }, wire)).rejects.toThrow(/injected/);
+		fault.disarm();
+		expect(fault.hits).toBe(1);
+		expect(await dbB.select().from(articles).where(eq(articles.slug, 'articol-atomic'))).toEqual(
+			[]
+		);
+	});
+
+	// FIX-15 (audit P2 'export order non-deterministic'): the same content
+	// exported twice must produce the same file — media by key, pillars by sort.
+	it('exports media ordered by key and pillars in canonical sort order', async () => {
+		await insertImage(dbA, storageA, 'content-a-order-z', 'uploads/content-spec/order-z.png');
+		await insertImage(dbA, storageA, 'content-a-order-a', 'uploads/content-spec/order-a.png');
+		await dbA.insert(articles).values({
+			id: 'content-a-order-article',
+			slug: 'articol-ordine',
+			title: 'Ordine',
+			bodyMd: '![z](media:content-a-order-z)\n\n![a](media:content-a-order-a)',
+			coverMediaId: 'content-a-order-z',
+			status: 'draft'
+		});
+		// Joined in the reverse of canonical order (A seeds somn LAST, after nutritie).
+		await dbA.insert(articlePillars).values([
+			{ articleId: 'content-a-order-article', pillarId: await pillarIdBySlug(dbA, 'somn') },
+			{ articleId: 'content-a-order-article', pillarId: await pillarIdBySlug(dbA, 'nutritie') }
+		]);
+
+		const exported = await exportContent(depsA, { type: 'article', slug: 'articol-ordine' });
+		if (!exported.ok) throw new Error(exported.error);
+		expect(exported.value.media.map((m) => m.key)).toEqual([
+			'uploads/content-spec/order-a.png',
+			'uploads/content-spec/order-z.png'
+		]);
+		const [nutritie, somn] = await Promise.all([
+			dbA.select().from(pillars).where(eq(pillars.slug, 'nutritie')),
+			dbA.select().from(pillars).where(eq(pillars.slug, 'somn'))
+		]);
+		expect(nutritie[0].sort).toBeLessThan(somn[0].sort);
+		expect(exported.value.pillars).toEqual(['nutritie', 'somn']);
 	});
 
 	it('remaps media ids when the source id is taken by a different row in the target', async () => {

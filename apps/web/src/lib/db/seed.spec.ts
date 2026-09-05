@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { resolveSiteConfig } from '../config/index.ts';
 import { createDb, type Db } from './client.ts';
@@ -10,6 +10,7 @@ import { media } from '../modules/media/schema.ts';
 import { createStorage } from '../modules/media/storage.ts';
 import { quizzes } from '../modules/quiz/schema.ts';
 import { productPillars, products } from '../modules/shop/schema.ts';
+import { DEMO_PRODUCTS } from '../modules/shop/seed-products.ts';
 import { pillars } from './schema/core.ts';
 import { seedDemoArticles, seedDemoProducts, seedDemoQuiz, seedPillars } from './seed.ts';
 
@@ -126,5 +127,56 @@ describe('seedDemoQuiz', () => {
 		expect(rows[0].status).toBe('published');
 		expect(rows[0].pillarId).not.toBeNull();
 		expect(rows[0].scoring.bands).toHaveLength(3);
+	});
+});
+
+// FIX-15 (audit P1 'db:seed overwrites live data despite "safe to re-run"'):
+// re-running the demo seed reset stock/prices/status and reverted admin
+// edits. Demo content is create-only now — like ensurePage.
+describe('re-running the demo seed after admin edits', () => {
+	it('leaves an edited article body and status untouched', async () => {
+		await seedDemoArticles(db);
+		await db
+			.update(articles)
+			.set({ bodyMd: 'Text editat de admin.', status: 'draft' })
+			.where(eq(articles.slug, 'igiena-somnului-7-reguli'));
+
+		await expect(seedDemoArticles(db)).resolves.toBe(0);
+		const [row] = await db
+			.select()
+			.from(articles)
+			.where(eq(articles.slug, 'igiena-somnului-7-reguli'));
+		expect(row.bodyMd).toBe('Text editat de admin.');
+		expect(row.status).toBe('draft');
+		expect(await db.select().from(articles)).toHaveLength(3);
+	});
+
+	it('leaves edited product stock, price and status untouched', async () => {
+		const storage = createStorage(storageConfigFromEnv(process.env));
+		await seedDemoProducts(db, storage);
+		await db
+			.update(products)
+			.set({ stock: 1, priceCents: 12345, status: 'archived' })
+			.where(eq(products.slug, DEMO_PRODUCTS[0].slug));
+		await db
+			.update(media)
+			.set({ alt: 'alt editat' })
+			.where(eq(media.id, DEMO_PRODUCTS[0].cover.id));
+
+		await expect(seedDemoProducts(db, storage)).resolves.toBe(0);
+		const [row] = await db.select().from(products).where(eq(products.slug, DEMO_PRODUCTS[0].slug));
+		expect(row).toMatchObject({ stock: 1, priceCents: 12345, status: 'archived' });
+		const [cover] = await db.select().from(media).where(eq(media.id, DEMO_PRODUCTS[0].cover.id));
+		expect(cover.alt).toBe('alt editat');
+		expect(await db.select().from(products)).toHaveLength(3);
+	});
+
+	it('leaves an unpublished quiz unpublished', async () => {
+		await seedDemoQuiz(db);
+		await db.update(quizzes).set({ status: 'draft' }).where(eq(quizzes.slug, 'evaluare-somn'));
+		await seedDemoQuiz(db);
+		const [row] = await db.select().from(quizzes).where(eq(quizzes.slug, 'evaluare-somn'));
+		expect(row.status).toBe('draft');
+		expect(await db.select().from(quizzes)).toHaveLength(1);
 	});
 });
