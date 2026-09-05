@@ -11,7 +11,9 @@ import { createEmailSender } from '../email/service.ts';
 import { hasConsent } from '../crm/consent.ts';
 import { subscribers } from '../crm/schema.ts';
 import { unsubscribeByToken } from '../crm/service.ts';
+import { media } from '../media/schema.ts';
 import { claimQuizResult, type QuizFunnelDeps } from './funnel.ts';
+import { quizzesMediaReferenceCheck } from './media-ref.ts';
 import { quizResults, quizzes, type QuizRow, type StoredAnswer } from './schema.ts';
 import type { ScoringConfig } from './scoring.ts';
 import {
@@ -207,6 +209,39 @@ describe('quiz lifecycle', () => {
 		await unpublishQuiz(deps, quiz.id);
 		expect(await getQuizBySlug(deps, quiz.slug)).toBeNull();
 		expect(await getQuizBySlug(deps, quiz.slug, { includeDrafts: true })).not.toBeNull();
+	});
+});
+
+// FIX-15 (audit P2): quiz intros embed media too, but no reference check
+// guarded them — the library could delete an image a live quiz shows.
+describe('media reference check', () => {
+	it('reports intro references by id and key, titled or not', async () => {
+		const rows = [
+			['qm-id', 'uploads/q/id.png'],
+			['qm-key', 'uploads/q/key.png'],
+			['qm-free', 'uploads/q/free.png']
+		];
+		for (const [id, key] of rows) {
+			await db.insert(media).values({
+				id,
+				kind: 'image',
+				key,
+				filename: 'q.png',
+				mime: 'image/png',
+				size: 1,
+				alt: '',
+				createdBy: USER_ID
+			});
+		}
+		const created = await createQuiz(deps, { title: 'Cu imagini', createdBy: USER_ID });
+		if (!created.ok) throw new Error('createQuiz failed');
+		await updateQuiz(deps, created.value.id, {
+			introMd: 'Intro ![a](media:qm-id "Titlu") și ![b](media:uploads/q/key.png)'
+		});
+
+		expect(await quizzesMediaReferenceCheck.isReferenced(db, 'qm-id')).toBe(true);
+		expect(await quizzesMediaReferenceCheck.isReferenced(db, 'qm-key')).toBe(true);
+		expect(await quizzesMediaReferenceCheck.isReferenced(db, 'qm-free')).toBe(false);
 	});
 });
 

@@ -18,7 +18,7 @@ Storage layout (`storage.ts`, `validation.ts`, `$lib/server/media-objects.ts`):
 - `uploads/<yyyy>/<mm>/<slug>-<8 hex>.<ext>` — served originals, minted by
   `confirmUpload`, which produces the object through `finalizeMediaObject`
   (server-side copy for rasters, sanitized re-write + `Content-Disposition:
-  attachment` for SVGs, `Cache-Control: immutable` for both) and then deletes
+attachment` for SVGs, `Cache-Control: immutable` for both) and then deletes
   the pending object. Content import and `pnpm seed:demo` (`seed/…` keys)
   write through the same finalize step. A key's bytes never change; replacing
   an image is a new upload → new key → new row.

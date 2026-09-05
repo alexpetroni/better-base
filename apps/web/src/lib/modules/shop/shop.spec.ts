@@ -158,13 +158,17 @@ describe('products media reference check (audit data HIGH-3)', () => {
 		await insertImage('pm-desc-id', 'uploads/p/desc-id.png');
 		await insertImage('pm-desc-key', 'uploads/p/desc-key.png');
 		await insertImage('pm-free', 'uploads/p/free.png');
+		await insertImage('pm-titled', 'uploads/p/titled.png');
 
 		const row = await makeProduct({ name: 'Produs cu media' });
 		await updateProduct(deps, row.id, {
 			coverMediaId: 'pm-cover',
 			gallery: ['pm-gallery'],
-			descriptionMd: 'detalii ![a](media:pm-desc-id) și ![b](media:uploads/p/desc-key.png)'
+			descriptionMd:
+				'detalii ![a](media:pm-desc-id) și ![b](media:uploads/p/desc-key.png) ![t](media:pm-titled "Titlu")'
 		});
+		// A titled ref (FIX-15: the LIKE guard missed it).
+		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-titled')).toBe(true);
 
 		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-cover')).toBe(true);
 		expect(await productsMediaReferenceCheck.isReferenced(db, 'pm-gallery')).toBe(true);

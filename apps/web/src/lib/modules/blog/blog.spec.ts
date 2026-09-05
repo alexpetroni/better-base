@@ -276,15 +276,24 @@ describe('media integration', () => {
 		await insertImage('m-cover', 'uploads/x/cover.png');
 		await insertImage('m-body', 'uploads/x/body.png');
 		await insertImage('m-free', 'uploads/x/free.png');
+		await insertImage('m-titled', 'uploads/x/titled.png');
+		await insertImage('m-prefix', 'uploads/x/prefix.png');
+		await insertImage('m-prefixed', 'uploads/x/prefixed.png');
 
 		const a = await makeArticle('Articol cu media');
 		await updateArticle(deps, a.id, {
 			coverMediaId: 'm-cover',
-			bodyMd: 'text ![x](media:uploads/x/body.png)'
+			// A titled ref (FIX-15: the LIKE guard missed it) and an id that is a
+			// prefix of a referenced one (must not count as referenced).
+			bodyMd:
+				'text ![x](media:uploads/x/body.png) ![t](media:m-titled "Titlu") ![p](media:m-prefixed)'
 		});
 
 		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-cover')).toBe(true);
 		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-body')).toBe(true);
+		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-titled')).toBe(true);
+		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-prefixed')).toBe(true);
+		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-prefix')).toBe(false);
 		expect(await articlesMediaReferenceCheck.isReferenced(db, 'm-free')).toBe(false);
 	});
 });

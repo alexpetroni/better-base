@@ -126,6 +126,14 @@ describe('imageSources', () => {
 		expect(sources.src).not.toContain('webp');
 	});
 
+	// FIX-15 (audit P2): the admin library decoded a blurhash PNG per row per
+	// editor load; thumbnails can opt out of the placeholder.
+	it.each(ALL)('decodes the blurhash placeholder unless told not to (%s)', (_n, provider) => {
+		const withHash = { ...row, blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' };
+		expect(imageSources(provider, withHash, { w: 240 }).placeholder).toMatch(/^data:image\/png/);
+		expect(imageSources(provider, withHash, { w: 240, placeholder: false }).placeholder).toBeNull();
+	});
+
 	it.each(ALL)('throws for a row without a storage key (%s)', (_n, provider) => {
 		expect(() =>
 			imageSources(provider, { key: null, width: null, height: null, alt: '' }, { w: 100 })

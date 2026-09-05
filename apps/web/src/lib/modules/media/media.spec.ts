@@ -14,6 +14,7 @@ import {
 	confirmUpload,
 	createVideoEmbed,
 	deleteMedia,
+	listMedia,
 	requestUpload,
 	updateMediaAlt,
 	type MediaDeps,
@@ -453,6 +454,28 @@ describe('backfillBlurhashes (pnpm media:blurhash)', () => {
 		const second = await backfillBlurhashes({ db, images: fakeTransformer }, {});
 		expect(second.filled).toBe(0);
 		expect(second.failed).toBe(first.failed);
+	});
+});
+
+// FIX-15 (audit P2 'admin media library unbounded'): the library and the
+// picker read every row on each editor load. Listing is paginated now.
+describe('listMedia pagination', () => {
+	it('pages newest-first with totals, and an empty page past the end', async () => {
+		const first = await listMedia({ db }, { page: 1, pageSize: 2 });
+		expect(first.items).toHaveLength(2);
+		expect(first.total).toBeGreaterThanOrEqual(3);
+		expect(first.pageCount).toBe(Math.ceil(first.total / 2));
+		expect(first.page).toBe(1);
+		const [a, b] = first.items;
+		expect(a.createdAt.getTime()).toBeGreaterThanOrEqual(b.createdAt.getTime());
+
+		const second = await listMedia({ db }, { page: 2, pageSize: 2 });
+		expect(second.items.map((r) => r.id)).not.toContain(a.id);
+		expect(second.page).toBe(2);
+
+		const beyond = await listMedia({ db }, { page: first.pageCount + 5, pageSize: 2 });
+		expect(beyond.items).toEqual([]);
+		expect(beyond.total).toBe(first.total);
 	});
 });
 

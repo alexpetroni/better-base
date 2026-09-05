@@ -6,6 +6,11 @@ import { MEDIA_REFERENCE_CHECKS } from './media-library.ts';
 // check (or a tree-shake/import-order change) fails here, not in production.
 describe('MEDIA_REFERENCE_CHECKS', () => {
 	it('wires every media-referencing module into deleteMedia', () => {
-		expect(MEDIA_REFERENCE_CHECKS.map((c) => c.name).sort()).toEqual(['articles', 'products']);
+		// quizzes joined in FIX-15 (intro markdown embeds media too).
+		expect(MEDIA_REFERENCE_CHECKS.map((c) => c.name).sort()).toEqual([
+			'articles',
+			'products',
+			'quizzes'
+		]);
 	});
 });
