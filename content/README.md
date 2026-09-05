@@ -1,7 +1,7 @@
 # Initial content
 
-Content bundles imported into a fresh database. `pnpm db:seed` reads them
-after seeding pillars and demo content; `pnpm content:init` re-runs just this
+Content bundles imported into a fresh database. `pnpm seed:base` (and
+`pnpm db:seed`) reads them after seeding pillars; `pnpm content:init` re-runs just this
 step against an existing database.
 
 ## Layout
@@ -93,4 +93,7 @@ key (`article` / `quiz` / `product`).
   `life`-only content stays out of the `sleep` site. Pass `--allow-untagged` to
   `pnpm content import-dir` to override.
 - **One bad file doesn't stop the rest.** Failures are reported per file and the
-  run continues, but `pnpm db:seed` exits non-zero if any file failed.
+  run continues, but `pnpm seed:base` exits non-zero if any file failed.
+- Import is create-only: a bundle whose slug already exists in the database
+  is skipped (reported as such) so re-running never reverts admin edits;
+  `pnpm content import-dir --overwrite` replaces existing items on purpose.

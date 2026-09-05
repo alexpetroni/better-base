@@ -27,7 +27,8 @@ export interface InitDirSummary {
 
 /**
  * The bundle directories for a site, in import order: shared content first,
- * then site-specific (so a site-local file can update a common item).
+ * then site-specific (a site-local file of the same slug replaces the common
+ * one only under `overwrite`; by default the first one in wins).
  * `baseDir` is the repo's `content/` directory.
  */
 export function contentDirsFor(baseDir: string, siteId: string): string[] {
@@ -54,8 +55,9 @@ async function bundleFiles(dir: string): Promise<string[] | null> {
 /**
  * Import every bundle in `dirs`, in order, one file at a time.
  *
- * Idempotent: each file goes through `importContent`, which upserts by slug
- * and matches media by storage key — re-running imports nothing twice.
+ * Idempotent: each file goes through `importContent`, which creates missing
+ * slugs, skips existing ones (unless `overwrite`) and matches media by
+ * storage key — re-running imports nothing twice and reverts nothing.
  *
  * A bad file (unreadable, invalid JSON, malformed bundle, refused import) is
  * recorded in `results` and the run CONTINUES, so one broken bundle cannot
@@ -114,6 +116,9 @@ export function formatInitResult(result: InitFileResult): string {
 	const name = path.basename(result.file);
 	if (!result.ok) return `  ✗ ${name} — ${result.error}`;
 	const s = result.summary;
+	if (s.action === 'skipped') {
+		return `  – ${name} — skipped ${s.type} "${s.slug}" (exists; --overwrite replaces)`;
+	}
 	const untagged = s.pillarsTagged.length ? '' : ' [UNTAGGED — invisible in listings]';
 	return `  ✓ ${name} — ${s.action} ${s.type} "${s.slug}" (media: ${s.mediaCreated} new, ${s.mediaReused} reused)${untagged}`;
 }

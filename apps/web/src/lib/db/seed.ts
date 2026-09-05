@@ -45,7 +45,7 @@ export async function seedPillars(db: Db, pillarSlugs: string[]): Promise<number
 /**
  * Three published demo articles (ro), tagged to the `somn` pillar — both sites
  * activate it, so dev environments always have visible blog content.
- * Idempotent: fixed ids + upsert-by-slug, re-running never duplicates.
+ * Fixed ids; created only when the slug is missing.
  */
 const DEMO_ARTICLES = [
 	{
@@ -82,7 +82,8 @@ const DEMO_ARTICLES = [
 
 /**
  * The demo-able sleep screening quiz, published and tagged `somn` (active on
- * both sites). Idempotent: fixed id + upsert-by-slug.
+ * both sites). Create-only (FIX-15): a re-run never touches an existing row,
+ * so an admin's edits or unpublish survive `pnpm seed:demo`.
  */
 export async function seedDemoQuiz(db: Db): Promise<string> {
 	const errors = validateForPublish(SLEEP_QUIZ_SEED.formSchema, SLEEP_QUIZ_SEED.scoring);
@@ -110,22 +111,30 @@ export async function seedDemoQuiz(db: Db): Promise<string> {
 	await db
 		.insert(quizzes)
 		.values({ id, ...values })
-		.onConflictDoUpdate({ target: quizzes.slug, set: { ...values, updatedAt: new Date() } });
+		.onConflictDoNothing({ target: quizzes.slug });
 	return SLEEP_QUIZ_SEED.slug;
 }
 
 /**
  * Three active demo products (ro), tagged `somn`, with SVG placeholder
- * images uploaded to storage. Idempotent: fixed media/product ids + fixed
- * storage keys + upsert-by-slug; re-running never duplicates.
+ * images uploaded to storage. Create-only (FIX-15): fixed media/product ids
+ * and storage keys, `onConflictDoNothing` by slug/id — a re-run creates what
+ * is missing and never resets stock, price, status or an edited alt. Returns
+ * the number of products created.
  */
 export async function seedDemoProducts(db: Db, storage: Storage): Promise<number> {
 	const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
 	if (!somn) throw new Error('Cannot seed demo products: the "somn" pillar is not seeded');
 
+	let created = 0;
 	for (const demo of DEMO_PRODUCTS) {
 		for (const image of [demo.cover, ...demo.gallery]) {
 			const bytes = Buffer.from(image.svg, 'utf8');
+			const [existing] = await db
+				.select({ id: media.id })
+				.from(media)
+				.where(eq(media.id, image.id));
+			if (existing) continue;
 			// Same finalize step as an upload: sanitized, attachment, immutable (FIX-15).
 			await finalizeMediaObject(storage, image.key, 'image/svg+xml', { bytes });
 			await db
@@ -141,10 +150,7 @@ export async function seedDemoProducts(db: Db, storage: Storage): Promise<number
 					height: image.height,
 					alt: image.alt
 				})
-				.onConflictDoUpdate({
-					target: media.id,
-					set: { alt: image.alt, filename: image.filename, size: bytes.byteLength }
-				});
+				.onConflictDoNothing({ target: media.id });
 		}
 
 		const values = {
@@ -160,33 +166,42 @@ export async function seedDemoProducts(db: Db, storage: Storage): Promise<number
 		const [row] = await db
 			.insert(products)
 			.values({ id: demo.id, ...values })
-			.onConflictDoUpdate({ target: products.slug, set: { ...values, updatedAt: new Date() } })
-			.returning();
+			.onConflictDoNothing({ target: products.slug })
+			.returning({ id: products.id });
+		if (!row) continue;
+		created++;
 		await db
 			.insert(productPillars)
 			.values({ productId: row.id, pillarId: somn.id })
 			.onConflictDoNothing();
 	}
-	return DEMO_PRODUCTS.length;
+	return created;
 }
 
+/**
+ * Create-only (FIX-15), like `ensurePage`: an article whose slug exists is
+ * left exactly as the admin last saved it. Returns the number created.
+ */
 export async function seedDemoArticles(db: Db): Promise<number> {
 	const [somn] = await db.select().from(pillars).where(eq(pillars.slug, 'somn'));
 	if (!somn) throw new Error('Cannot seed demo articles: the "somn" pillar is not seeded');
 
+	let created = 0;
 	for (const demo of DEMO_ARTICLES) {
 		const { id, ...content } = demo;
 		const [row] = await db
 			.insert(articles)
 			.values({ id, ...content, status: 'published' })
-			.onConflictDoUpdate({ target: articles.slug, set: { ...content, status: 'published' } })
-			.returning();
+			.onConflictDoNothing({ target: articles.slug })
+			.returning({ id: articles.id });
+		if (!row) continue;
+		created++;
 		await db
 			.insert(articlePillars)
 			.values({ articleId: row.id, pillarId: somn.id })
 			.onConflictDoNothing();
 	}
-	return DEMO_ARTICLES.length;
+	return created;
 }
 
 /**

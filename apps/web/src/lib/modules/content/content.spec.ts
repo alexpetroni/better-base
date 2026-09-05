@@ -350,7 +350,9 @@ describe('quiz export → import', () => {
 		const first = await importContent(depsB, wire);
 		expect(first.ok ? first.value.action : first).toBe('created');
 		const second = await importContent(depsB, wire);
-		expect(second.ok ? second.value.action : second).toBe('updated');
+		expect(second.ok ? second.value.action : second).toBe('skipped'); // create-only (FIX-15)
+		const third = await importContent(depsB, wire, { overwrite: true });
+		expect(third.ok ? third.value.action : third).toBe('updated');
 
 		const rows = await dbB.select().from(quizzes).where(eq(quizzes.slug, 'chestionar-partajat'));
 		expect(rows).toHaveLength(1);
@@ -393,7 +395,9 @@ describe('product export → import', () => {
 		const first = await importContent(depsB, wire);
 		expect(first.ok ? first.value.action : first).toBe('created');
 		const second = await importContent(depsB, wire);
-		expect(second.ok ? second.value.action : second).toBe('updated');
+		expect(second.ok ? second.value.action : second).toBe('skipped'); // create-only (FIX-15)
+		const third = await importContent(depsB, wire, { overwrite: true });
+		expect(third.ok ? third.value.action : third).toBe('updated');
 
 		const rows = await dbB.select().from(products).where(eq(products.slug, 'produs-partajat'));
 		expect(rows).toHaveLength(1);

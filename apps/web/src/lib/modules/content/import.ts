@@ -17,12 +17,19 @@ export interface ImportOptions {
 	 * hard failure (`missing-pillars`).
 	 */
 	allowUntagged?: boolean;
+	/**
+	 * Replace an item whose slug already exists (FIX-15). Off by default:
+	 * import is create-only, so re-running `content:init` or `db:seed` on a
+	 * live site never reverts admin edits — an existing slug is reported as
+	 * `skipped` and nothing (no media either) is written for it.
+	 */
+	overwrite?: boolean;
 }
 
 export interface ImportSummary {
 	type: ContentBundle['type'];
 	slug: string;
-	action: 'created' | 'updated';
+	action: 'created' | 'updated' | 'skipped';
 	mediaCreated: number;
 	mediaReused: number;
 	/** Pillar slugs actually tagged in the target database. */
@@ -107,14 +114,35 @@ async function resolvePillars(
 	};
 }
 
+/** The bundle's own slug, whichever payload it carries. */
+function bundleSlug(bundle: ContentBundle): string {
+	if (bundle.type === 'article') return bundle.article.slug;
+	if (bundle.type === 'quiz') return bundle.quiz.slug;
+	return bundle.product.slug;
+}
+
+async function slugExists(db: Db, bundle: ContentBundle): Promise<boolean> {
+	const slug = bundleSlug(bundle);
+	const table = bundle.type === 'article' ? articles : bundle.type === 'quiz' ? quizzes : products;
+	const [row] = await db.select({ id: table.id }).from(table).where(eq(table.slug, slug));
+	return row !== undefined;
+}
+
 /**
  * Import a bundle into the target database + bucket (both come from `deps`).
- * Idempotent by slug: an existing item is updated in place, a missing one is
- * created; re-importing the same bundle changes nothing and duplicates nothing.
+ * Keyed by slug: a missing item is created; an existing one is left alone
+ * (`skipped`) unless `overwrite` is set, in which case it is updated in
+ * place. Re-importing the same bundle therefore changes nothing and
+ * duplicates nothing either way.
  *
  * A bundle whose pillar slugs are ALL absent from the target database is
  * refused before anything is written (the item would be untagged → invisible
  * in every listing) unless `allowUntagged` is set.
+ *
+ * The row and its pillar join rows are written in ONE transaction (FIX-15):
+ * a dropped connection can no longer leave a published article with zero
+ * pillars. Media objects are uploaded before it (storage cannot join a
+ * transaction); an orphaned upload is harmless and reused by the next run.
  */
 export async function importContent(
 	deps: ContentDeps,
@@ -132,6 +160,22 @@ export async function importContent(
 			detail:
 				`none of the bundle's pillars (${bundle.pillars.join(', ')}) exist in the target ` +
 				`database — the imported item would be invisible; pass --allow-untagged to import anyway`
+		};
+	}
+
+	// Create-only unless told otherwise: an existing slug is reported, not touched.
+	if (!options.overwrite && (await slugExists(db, bundle))) {
+		return {
+			ok: true,
+			value: {
+				type: bundle.type,
+				slug: bundleSlug(bundle),
+				action: 'skipped',
+				mediaCreated: 0,
+				mediaReused: 0,
+				pillarsTagged: tagged,
+				pillarsSkipped: skipped
+			}
 		};
 	}
 
@@ -185,27 +229,30 @@ export async function importContent(
 			coverMediaId: cover.value,
 			publishedAt: a.publishedAt ? new Date(a.publishedAt) : null
 		};
-		const [existing] = await db.select().from(articles).where(eq(articles.slug, a.slug));
-		let articleId: string;
-		let action: 'created' | 'updated';
-		if (existing) {
-			articleId = existing.id;
-			action = 'updated';
-			await db
-				.update(articles)
-				.set({ ...fields, updatedAt: new Date() })
-				.where(eq(articles.id, articleId));
-		} else {
-			articleId = crypto.randomUUID();
-			action = 'created';
-			await db.insert(articles).values({ id: articleId, ...fields });
-		}
-		await db.delete(articlePillars).where(eq(articlePillars.articleId, articleId));
-		if (tagged.length) {
-			await db
-				.insert(articlePillars)
-				.values(tagged.map((slug) => ({ articleId, pillarId: pillarIds.get(slug) as number })));
-		}
+		const action = await db.transaction(async (tx) => {
+			const [existing] = await tx.select().from(articles).where(eq(articles.slug, a.slug));
+			let articleId: string;
+			let action: 'created' | 'updated';
+			if (existing) {
+				articleId = existing.id;
+				action = 'updated';
+				await tx
+					.update(articles)
+					.set({ ...fields, updatedAt: new Date() })
+					.where(eq(articles.id, articleId));
+			} else {
+				articleId = crypto.randomUUID();
+				action = 'created';
+				await tx.insert(articles).values({ id: articleId, ...fields });
+			}
+			await tx.delete(articlePillars).where(eq(articlePillars.articleId, articleId));
+			if (tagged.length) {
+				await tx
+					.insert(articlePillars)
+					.values(tagged.map((slug) => ({ articleId, pillarId: pillarIds.get(slug) as number })));
+			}
+			return action;
+		});
 		return { ok: true, value: summary(a.slug, action) };
 	}
 
@@ -250,29 +297,32 @@ export async function importContent(
 		coverMediaId: cover.value,
 		gallery
 	};
-	const [existing] = await db.select().from(products).where(eq(products.slug, p.slug));
-	let productId: string;
-	let action: 'created' | 'updated';
-	if (existing) {
-		// Stripe catalog ids belong to the TARGET site's Stripe account — keep
-		// them; the next admin save re-syncs the (possibly new) price. Checkout
-		// is unaffected either way: sessions snapshot prices from our rows.
-		productId = existing.id;
-		action = 'updated';
-		await db
-			.update(products)
-			.set({ ...fields, updatedAt: new Date() })
-			.where(eq(products.id, productId));
-	} else {
-		productId = crypto.randomUUID();
-		action = 'created';
-		await db.insert(products).values({ id: productId, ...fields });
-	}
-	await db.delete(productPillars).where(eq(productPillars.productId, productId));
-	if (tagged.length) {
-		await db
-			.insert(productPillars)
-			.values(tagged.map((slug) => ({ productId, pillarId: pillarIds.get(slug) as number })));
-	}
+	const action = await db.transaction(async (tx) => {
+		const [existing] = await tx.select().from(products).where(eq(products.slug, p.slug));
+		let productId: string;
+		let action: 'created' | 'updated';
+		if (existing) {
+			// Stripe catalog ids belong to the TARGET site's Stripe account — keep
+			// them; the next admin save re-syncs the (possibly new) price. Checkout
+			// is unaffected either way: sessions snapshot prices from our rows.
+			productId = existing.id;
+			action = 'updated';
+			await tx
+				.update(products)
+				.set({ ...fields, updatedAt: new Date() })
+				.where(eq(products.id, productId));
+		} else {
+			productId = crypto.randomUUID();
+			action = 'created';
+			await tx.insert(products).values({ id: productId, ...fields });
+		}
+		await tx.delete(productPillars).where(eq(productPillars.productId, productId));
+		if (tagged.length) {
+			await tx
+				.insert(productPillars)
+				.values(tagged.map((slug) => ({ productId, pillarId: pillarIds.get(slug) as number })));
+		}
+		return action;
+	});
 	return { ok: true, value: summary(p.slug, action) };
 }

@@ -231,9 +231,14 @@ in the split boxes.
       run green once by hand (Actions → migrate → Run workflow) — its log
       prints the applied migration list (§12 "CI migrations").
 - [ ] First-deploy setup ran from a checkout with the prod env:
-      `pnpm db:seed`, `pnpm content:init`, `pnpm media:blurhash` (image
+      `pnpm seed:base` (pillars, pages, settings, initial content — safe to
+      re-run, never reverts admin edits), `pnpm media:blurhash` (image
       placeholders for imported media; idempotent), `pnpm user:create`
-      (§12 "Deploy order"; §4 for adapter-node).
+      (§12 "Deploy order"; §4 for adapter-node). `pnpm seed:demo` was NOT
+      run against production (demo articles/quiz/products).
+- [ ] Media host refuses the upload quarantine: `curl -I
+      https://media.<site>/pending/x.png` is not 200 — the WAF rule from
+      DEPLOYMENT.md §5 is in place (R2 serves the whole bucket otherwise).
 - [ ] Retention job, per target:
       - adapter-node: machine cron runs `pnpm chat:prune` daily (§9).
       - Vercel: `CRON_SECRET` set in the project env — `vercel.json` already

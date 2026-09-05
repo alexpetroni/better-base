@@ -1,7 +1,8 @@
-import type { ArticleRow } from '../blog/schema.ts';
-import type { MediaRow } from '../media/schema.ts';
-import type { QuizRow } from '../quiz/schema.ts';
-import type { ProductRow } from '../shop/schema.ts';
+import { getTableColumns, type Table } from 'drizzle-orm';
+import { articles, type ArticleRow } from '../blog/schema.ts';
+import { media, type MediaRow } from '../media/schema.ts';
+import { quizzes, type QuizRow } from '../quiz/schema.ts';
+import { products, type ProductRow } from '../shop/schema.ts';
 import { isRecord } from '../../util/object.ts';
 import { isAllowedVatRateBp } from '../../util/vat-rates.ts';
 
@@ -186,8 +187,29 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
 
+/**
+ * The keys a bundle may carry — exactly the row columns minus the excluded
+ * set (FIX-15). Import spreads payloads into inserts, so a stray key used to
+ * become a column name; now it is a malformed bundle.
+ */
+const BUNDLE_KEYS = ['version', 'type', 'pillars', 'media', 'article', 'quiz', 'product'];
+
+function columnKeys(table: Table, excluded: readonly string[]): string[] {
+	return Object.keys(getTableColumns(table)).filter((k) => !excluded.includes(k));
+}
+
+const ARTICLE_KEYS = columnKeys(articles, BUNDLE_EXCLUDED_COLUMNS.article);
+const QUIZ_KEYS = columnKeys(quizzes, BUNDLE_EXCLUDED_COLUMNS.quiz);
+const PRODUCT_KEYS = columnKeys(products, BUNDLE_EXCLUDED_COLUMNS.product);
+const MEDIA_KEYS = [...columnKeys(media, BUNDLE_EXCLUDED_COLUMNS.media), 'dataBase64'];
+
+function onlyKeys(raw: Record<string, unknown>, allowed: string[]): boolean {
+	return Object.keys(raw).every((k) => allowed.includes(k));
+}
+
 function validMediaDescriptor(raw: unknown): raw is MediaDescriptor {
 	if (!isRecord(raw) || typeof raw.id !== 'string' || typeof raw.alt !== 'string') return false;
+	if (!onlyKeys(raw, MEDIA_KEYS)) return false;
 	if (!optionalString(raw.blurhash)) return false;
 	if (raw.kind === 'image') {
 		return (
@@ -213,6 +235,7 @@ function validMediaDescriptor(raw: unknown): raw is MediaDescriptor {
 function validArticle(raw: unknown): raw is ArticleContent {
 	return (
 		isRecord(raw) &&
+		onlyKeys(raw, ARTICLE_KEYS) &&
 		typeof raw.slug === 'string' &&
 		raw.slug.length > 0 &&
 		typeof raw.title === 'string' &&
@@ -229,6 +252,7 @@ function validArticle(raw: unknown): raw is ArticleContent {
 function validQuiz(raw: unknown): raw is QuizContent {
 	return (
 		isRecord(raw) &&
+		onlyKeys(raw, QUIZ_KEYS) &&
 		typeof raw.slug === 'string' &&
 		raw.slug.length > 0 &&
 		typeof raw.title === 'string' &&
@@ -243,6 +267,7 @@ function validQuiz(raw: unknown): raw is QuizContent {
 function validProduct(raw: unknown): raw is ProductContent {
 	return (
 		isRecord(raw) &&
+		onlyKeys(raw, PRODUCT_KEYS) &&
 		typeof raw.slug === 'string' &&
 		raw.slug.length > 0 &&
 		typeof raw.name === 'string' &&
@@ -263,6 +288,8 @@ export type ParseBundleResult = { ok: true; bundle: ContentBundle } | { ok: fals
 /** Structural validation of a parsed JSON value. Returns a typed bundle or a human-readable error. */
 export function parseBundle(raw: unknown): ParseBundleResult {
 	if (!isRecord(raw)) return { ok: false, error: 'Bundle must be a JSON object.' };
+	const unknown = Object.keys(raw).filter((k) => !BUNDLE_KEYS.includes(k));
+	if (unknown.length) return { ok: false, error: `Unknown bundle key(s): ${unknown.join(', ')}.` };
 	if (raw.version !== CONTENT_BUNDLE_VERSION) {
 		return { ok: false, error: `Unsupported bundle version (expected ${CONTENT_BUNDLE_VERSION}).` };
 	}

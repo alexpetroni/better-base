@@ -28,8 +28,8 @@ loadRootEnv();
 
 const USAGE = `Usage:
   pnpm content export --type article|quiz|product --slug <slug> [--out file.json]
-  pnpm content import <file.json> [--allow-untagged]
-  pnpm content import-dir [dir] [--allow-untagged]
+  pnpm content import <file.json> [--allow-untagged] [--overwrite]
+  pnpm content import-dir [dir] [--allow-untagged] [--overwrite]
 
 import-dir imports every *.json bundle in a directory, in filename order.
 With no argument it imports the active site's initial-content directories —
@@ -38,7 +38,11 @@ uses. Missing directories are skipped.
 
 Import refuses a bundle whose pillar slugs are ALL absent from the target
 database (the item would be untagged and invisible in every listing);
---allow-untagged imports it anyway.`;
+--allow-untagged imports it anyway.
+
+Import is create-only: an item whose slug already exists in the target is
+skipped (reported, never modified), so re-running never reverts admin edits.
+--overwrite replaces existing items with the bundle's content instead.`;
 
 function fail(message: string): never {
 	console.error(message);
@@ -83,14 +87,15 @@ try {
 		const { positionals, values } = parseArgs({
 			args: argv,
 			allowPositionals: true,
-			options: { 'allow-untagged': { type: 'boolean' } }
+			options: { 'allow-untagged': { type: 'boolean' }, overwrite: { type: 'boolean' } }
 		});
 		const base = process.env.CONTENT_DIR ?? path.resolve(import.meta.dirname, '../../../content');
 		const dirs = positionals[0]
 			? [path.resolve(positionals[0])]
 			: contentDirsFor(base, resolveSiteConfig(process.env.SITE_ID).id);
 		const summary = await importContentDirs(deps, dirs, {
-			allowUntagged: values['allow-untagged'] === true
+			allowUntagged: values['allow-untagged'] === true,
+			overwrite: values.overwrite === true
 		});
 		if (!summary.dirs.length) fail(`No such directory: ${dirs.join(', ')}`);
 		for (const result of summary.results) console.log(formatInitResult(result));
@@ -103,7 +108,7 @@ try {
 		const { positionals, values } = parseArgs({
 			args: argv,
 			allowPositionals: true,
-			options: { 'allow-untagged': { type: 'boolean' } }
+			options: { 'allow-untagged': { type: 'boolean' }, overwrite: { type: 'boolean' } }
 		});
 		const file = positionals[0];
 		if (!file) fail(USAGE);
@@ -116,14 +121,21 @@ try {
 		const parsed = parseBundle(raw);
 		if (!parsed.ok) fail(`Invalid bundle: ${parsed.error}`);
 		const result = await importContent(deps, parsed.bundle, {
-			allowUntagged: values['allow-untagged'] === true
+			allowUntagged: values['allow-untagged'] === true,
+			overwrite: values.overwrite === true
 		});
 		if (!result.ok)
 			fail(`Import failed: ${result.error}${result.detail ? ` (${result.detail})` : ''}`);
 		const s = result.value;
-		console.log(
-			`${s.action === 'created' ? 'Created' : 'Updated'} ${s.type} "${s.slug}" — media: ${s.mediaCreated} uploaded, ${s.mediaReused} already present; pillars tagged: ${s.pillarsTagged.join(', ') || '(none)'}`
-		);
+		if (s.action === 'skipped') {
+			console.log(
+				`Skipped ${s.type} "${s.slug}" — it already exists in the target (pass --overwrite to replace it)`
+			);
+		} else {
+			console.log(
+				`${s.action === 'created' ? 'Created' : 'Updated'} ${s.type} "${s.slug}" — media: ${s.mediaCreated} uploaded, ${s.mediaReused} already present; pillars tagged: ${s.pillarsTagged.join(', ') || '(none)'}`
+			);
+		}
 		if (s.pillarsSkipped.length) {
 			console.error(
 				`WARNING: pillar(s) not present in the target database were skipped: ${s.pillarsSkipped.join(', ')}` +

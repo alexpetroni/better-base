@@ -165,8 +165,9 @@ createdb better_sleep      # (or CREATE DATABASE in psql; owner = app user)
 
 # from the repo, with the site's env loaded:
 pnpm db:migrate            # applies apps/web/drizzle/*.sql (additive, committed)
-pnpm db:seed               # idempotent: pillars for SITE_ID, legal pages,
-                           #   demo article/quiz/products (skip on prod? see note)
+pnpm seed:base             # pillars for SITE_ID, legal pages, placeholder settings,
+                           #   nurture sequences, initial content from content/
+pnpm seed:demo             # demo article/quiz/products — dev and staging only
 pnpm user:create -- --email you@site.ro --password '…min 12 chars…' --role admin
 ```
 
@@ -174,17 +175,22 @@ Notes:
 
 - `pnpm db:migrate` must run on every deploy that ships new migrations. It is
   safe to re-run (drizzle tracks applied migrations).
-- Seeding is idempotent. It upserts the site's pillars (required), creates the
-  two legal pages **only if missing** (edits in /admin/pages are never
-  overwritten), and upserts demo content. For a clean production launch you
-  may delete the demo articles/quiz/products in the admin afterwards, or keep
-  them until real content lands. Seeding demo products needs the bucket to
-  exist (it uploads placeholder covers).
-- Seeding also inserts `PLACEHOLDER — …` rows for the launch-required site
-  settings (company identification, ANPC/SOL links, invoice series) — only
-  where missing, so values saved in `/admin/settings` are never overwritten.
-  Replace every placeholder before launch; `pnpm launch:check` refuses to
-  pass while one stands.
+- **`pnpm seed:base` is safe to re-run on a live site** (FIX-15). It upserts
+  the site's pillars (required) and nurture sequence definitions (the
+  operator's active flag survives); everything an admin can edit is
+  create-only: the two legal pages, the `PLACEHOLDER — …` site settings
+  (company identification, ANPC/SOL links, invoice series — replace every
+  placeholder before launch; `pnpm launch:check` refuses to pass while one
+  stands) and the initial content bundles under `content/` (an existing slug
+  is skipped and reported; `pnpm content import-dir --overwrite` replaces
+  on purpose).
+- **`pnpm seed:demo`** creates the three demo articles, the demo quiz and
+  three demo products with SVG placeholder covers — create-only as well, so a
+  re-run only recreates what was deleted and never resets stock, prices,
+  status or text. Do not run it on production unless you want the demo
+  content there; delete it in the admin when real content lands. It needs
+  the media bucket (it uploads the covers).
+- `pnpm db:seed` runs both halves — the local one-shot for a fresh database.
 - Staff users: `user:create` is idempotent by email (re-running updates
   role/password). Roles: `admin` (everything) / `editor` (content only).
 
@@ -791,14 +797,19 @@ keeps the schema current):
 ```bash
 # from a checkout, with the site's Neon URLs exported:
 DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
-DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm db:seed        # first deploy only
-DATABASE_URL="…-pooler…" pnpm content:init                             # initial content, idempotent
+DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm seed:base      # pillars, pages, settings, initial content
 DATABASE_URL="…-pooler…" pnpm media:blurhash                           # placeholders for imported media
 DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin --password '…'
 ```
 
-`pnpm db:seed` uploads the placeholder product images, so it needs the R2
-credentials too. All of these are idempotent — safe to re-run on later deploys.
+`pnpm seed:base` imports the initial content bundles (`content/common`,
+`content/<site>`), so it needs the R2 credentials too. It is safe to re-run
+on later deploys: pillars and nurture definitions are upserted, everything
+else is create-only — an admin's edits to pages, settings or imported
+content are never reverted (an existing slug is skipped; `pnpm content
+import-dir --overwrite` replaces deliberately). `pnpm content:init` re-runs
+just the content step. `pnpm seed:demo` (demo articles/quiz/products) is for
+dev and staging — do not run it against production (§4).
 
 ### Scheduled jobs
 

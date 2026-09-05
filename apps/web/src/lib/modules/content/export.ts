@@ -1,4 +1,4 @@
-import { eq, inArray, or } from 'drizzle-orm';
+import { asc, eq, inArray, or } from 'drizzle-orm';
 import { pillars } from '../../db/schema/core.ts';
 import type { Db } from '../../db/client.ts';
 import type { Result } from '../../util/result.ts';
@@ -36,10 +36,13 @@ export type ContentResult<T> = Result<T, ContentError>;
 async function collectMedia(db: Db, refs: string[]): Promise<MediaRow[]> {
 	const unique = [...new Set(refs.filter((r) => r.length > 0))];
 	if (!unique.length) return [];
+	// Ordered by key (video embeds, key null, last by id) so the same content
+	// always exports the same file (FIX-15) — diffs and re-imports are stable.
 	const rows = await db
 		.select()
 		.from(media)
-		.where(or(inArray(media.id, unique), inArray(media.key, unique)));
+		.where(or(inArray(media.id, unique), inArray(media.key, unique)))
+		.orderBy(asc(media.key), asc(media.id));
 	// Dedupe: an id ref and a key ref may hit the same row.
 	return [...new Map(rows.map((row) => [row.id, row])).values()];
 }
@@ -59,11 +62,15 @@ async function toDescriptor(
 	return { ok: true, value: mediaToDescriptor(row, dataBase64) };
 }
 
+/** Pillar slugs in canonical `pillars.sort` order, whatever the join-row order (FIX-15). */
 async function pillarSlugsFor(db: Db, ids: number[]): Promise<string[]> {
 	if (!ids.length) return [];
-	const rows = await db.select().from(pillars).where(inArray(pillars.id, ids));
-	const bySlug = new Map(rows.map((r) => [r.id, r.slug]));
-	return ids.map((id) => bySlug.get(id)).filter((s): s is string => !!s);
+	const rows = await db
+		.select({ slug: pillars.slug })
+		.from(pillars)
+		.where(inArray(pillars.id, ids))
+		.orderBy(asc(pillars.sort), asc(pillars.id));
+	return rows.map((r) => r.slug);
 }
 
 /** Export one content item (any status) as a self-contained bundle. */
