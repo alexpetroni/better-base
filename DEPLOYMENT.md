@@ -527,9 +527,34 @@ real customer parcel.
    (`apps/web/src/lib/config/sites/<site>.ts`) — `salut@bettersleep.ro` must
    be under the verified domain.
 
+4. **Bounce/complaint webhook.** In Resend → Webhooks add an endpoint for
+   `https://<site>/api/webhooks/resend` subscribed to `email.bounced` and
+   `email.complained`, and set its signing secret (`whsec_…`) as
+   `RESEND_WEBHOOK_SECRET`. The route verifies the Svix signature over the raw
+   body (`svix-id`/`svix-timestamp`/`svix-signature`, ±5 min window) and
+   withdraws the recipient exactly like an unsubscribe: every consent revoked
+   (source `bounce`/`complaint`), double opt-in cleared, pending nurture
+   cancelled. Without the secret the route answers `503` and nothing is fed
+   back — set it before `EMAIL_DRYRUN=false`. Verify once with a test event
+   from the Resend dashboard: the function log prints
+   `resend-webhook kind=bounce recipients=1 revoked=0|1`.
+5. **One-click unsubscribe headers.** Marketing mail (the `nurture` template)
+   carries `List-Unsubscribe: <https://<site>/unsubscribe/<token>>` and
+   `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058); Gmail and
+   Yahoo require them for bulk senders. Mail clients POST to that URL; the
+   same URL opened by a human shows a confirmation button (GET changes
+   nothing — link scanners must not unsubscribe anyone). Check the headers on
+   a delivered nurture email ("show original") before launch.
+
 With `EMAIL_DRYRUN=true` (the default) every "send" is only recorded in the
 `email_log` table — that is the correct state until DNS is verified. All
 sends are idempotent (unique `idempotency_key`), so retries never double-send.
+A dry-run record is NOT a delivery: once `EMAIL_DRYRUN=false` the same key
+sends for real (the soak never burns a confirm/nurture key). A `sending` claim
+older than 10 minutes (a function killed mid-send) is re-claimable. Resend
+failures are classified — 429/5xx/network retry with backoff, any other 4xx
+parks the send at once with Resend's body — and the nurture drain paces live
+sends at ~2/s.
 
 ## 9. Cron entries
 
@@ -538,7 +563,7 @@ sends are idempotent (unique `idempotency_key`), so retries never double-send.
 | daily, e.g. `15 3 * * *` | `pnpm chat:prune` (repo checkout with the site's env) | Deletes chat sessions older than 30 days (GDPR retention; messages cascade), sweeps expired rate-limit counter rows, and prunes webhook idempotency-ledger rows (`processed_events`) older than 90 days. |
 | hourly, e.g. `7 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync` | Polls the courier for every DUE in-flight AWB (bounded batch per run, oldest-synced first), updates shipment + fulfillment state (`delivered`/`returned`; a courier-side `cancelled` steps the order back to packed) and appends order events. Safe to run twice; a pure no-op while nothing is in flight. A row whose lookup throws is backed off (15 min, doubling, 24 h cap) and flagged on `/admin`; the JSON answer carries `errors` and, on a credentials failure, `"aborted":"auth"` — alert on either (§7 "Sync health"). Runs through the app (it needs the courier adapter), so the machine-cron form IS the curl — set `CRON_SECRET` on adapter-node deployments too. |
 | hourly, e.g. `37 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit` | Drains the e-Factura submission queue (§7): claims a bounded batch of due `invoice_submissions` rows (25/run, `FOR UPDATE SKIP LOCKED` — an overlapping run cannot double-submit), renders the XML into the fiscal bucket and submits through the `EFacturaSubmitter` seam. Failures retry with backoff (15 min doubling, 6 h cap) and park after 5 attempts (`failed`, shown in `/admin/orders` → "De trimis la ANAF"). With no ANAF enrollment (the default no-op submitter) every row is `skipped` and re-checked hourly — the JSON answer then reads `{"claimed":n,"skipped":n,…}` and the manual SPV upload remains the operator's job. |
-| every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: claims a bounded batch of due sends (25/run), re-checks the marketing consent per send, mails through the idempotent email wrapper, retries failures with backoff and parks them after 5 attempts (visible in `/admin/nurture`). Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. Design notes: `src/lib/modules/nurture/README.md`. |
+| every 15 min, e.g. `*/15 * * * *` | `curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send` | Drains the nurture email queue: cancels due rows more than 48 h late as `stale` (a resumed pause never floods the missed steps), claims a bounded batch of due sends (25/run), sends them grouped per enrollment in step order, re-checks the marketing consent per send, mails through the idempotent email wrapper (~500 ms between live sends), retries transient failures with backoff and parks them after 5 attempts — permanent Resend errors (4xx other than 429) park at once. Parked sends stay visible in `/admin/nurture` with a **retry** button; their enrollment stays active until then. Concurrency-safe (`FOR UPDATE SKIP LOCKED` claim), so an overlapping run cannot double-send. A no-op while nothing is due — and while `EMAIL_DRYRUN` is unset it only records to `email_log`. The JSON answer carries `stale`; alert when `parked` > 0. Design notes: `src/lib/modules/nurture/README.md`. |
 
 Where no machine can run scripts (Vercel), the retention job is also
 available over HTTP at `GET /api/cron/chat-prune` — see §12. Both forms call
@@ -686,9 +711,19 @@ Vercel dashboard → New Project → import the repo:
 - **Node version**: 22.x, matching the `runtime` the adapter requests. The Neon
   driver needs a global `WebSocket`.
 
-`apps/web/vercel.json` ships the cron schedule. Function defaults are fine;
-`/api/chat` declares `maxDuration = 60` in its `+server.ts` because the
-assistant streams its reply and would otherwise be cut off at the plan default.
+`apps/web/vercel.json` ships the cron schedule. `/api/chat`, the four cron
+routes (`chat-prune`, `shipment-sync`, `nurture-send`, `efactura-submit`) and
+the Stripe webhook declare `maxDuration = 60` in their `+server.ts`: the
+assistant streams its reply, a cron batch makes one provider round trip per
+row (the nurture drain also paces live sends at ~500 ms), and a paid Stripe
+session issues the invoice and awaits the confirmation email inline — all of
+them would be cut off at the 10 s plan default. 60 s is the ceiling every
+Vercel plan allows, so the export is plan-independent. **Plan requirement:**
+Vercel's Hobby plan runs cron jobs at most **once per day** (and not at a
+guaranteed minute) — the 15-minute nurture drain and the hourly shipment/
+e-Factura polls need the **Pro** plan (or an external scheduler curling the
+routes with the bearer, §9). On Hobby the schedules in `vercel.json` are
+silently coalesced to daily.
 
 ### CI migrations (GitHub Actions)
 
@@ -743,7 +778,7 @@ curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/chat-pr
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/shipment-sync
 # {"polled":0,"updated":0,"errors":0}
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/nurture-send
-# {"claimed":0,"sent":0,"retried":0,"parked":0,"cancelled":0,"completed":0}
+# {"claimed":0,"sent":0,"retried":0,"parked":0,"cancelled":0,"stale":0,"completed":0}
 curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactura-submit
 # {"claimed":0,"submitted":0,"skipped":0,"retried":0,"parked":0}
 ```

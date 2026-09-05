@@ -2954,3 +2954,98 @@ the fiscal bucket too.
 - **`maxDuration` on the cron routes** (audit "Ops & platform") is FIX-13
   territory; `efactura-submit` follows the existing routes (bounded batch,
   no `config` export).
+
+## Remediation FIX-13 (audit 2026-09-03 P1 "Email, CRM & nurture" ×4, P2 nurture queue frozen at enrollment, Ops `maxDuration` — batch 2, phase 5)
+
+Mail and queue semantics. One session, test-first per group (`c924879` →
+`19d90f8` email-log semantics, `7b1b5e9` → `61cea16` drain skipped
+semantics, `a1486e3` migration, `3a871c5` → `02b4960` unsubscribe/confirm/
+consent/CSRF, `fd11206` → `3cca0a3` transport classification + webhook,
+`d2da7ae` → `1009e4d` queue re-planning, then `maxDuration` + docs).
+Migration `0027_mail_queue` (additive, nullable: `email_log.headers` jsonb,
+`nurture_sends.steps_hash` text).
+
+**New env var:** `RESEND_WEBHOOK_SECRET` (Resend endpoint signing secret,
+`whsec_…`; the route answers 503 without it — not required at boot, not a
+launch-check rule; LAUNCH-CHECKLIST carries the step). **New route:**
+`POST /api/webhooks/resend`. **New constants:** `EMAIL_SENDING_STALE_MS`
+(10 min), `NURTURE_SEND_PACE_MS` (500), `NURTURE_STALE_SEND_HOURS` (48),
+`CONSENT_TEXT_VERSIONS`, `RESEND_WEBHOOK_TOLERANCE_SECONDS` (300). **New
+messages:** `newsletter_confirm_prompt/button`, `unsubscribe_confirm_prompt/
+button`, `admin_nurture_retry`; `newsletter_already` removed (the branch was
+the oracle). **Admin audit action:** `nurture-retry`. **Cron JSON:** the
+nurture drain answers a `stale` counter (DEPLOYMENT §9/§12 samples updated).
+
+**Behavior changes the next phase must know:**
+
+- `shouldSkipResend(row, { dryRun, now })` — signature changed (row + sender
+  mode). `EmailSender` exposes `dryRun`; hand-built fakes need the field.
+  `SendEmailOutcome`'s `error` variant carries `retryable`.
+- `RenderedEmail.headers` (optional) flows into `email_log.headers` and the
+  Resend body; only the `nurture` template sets it (`listUnsubscribeHeaders`).
+- `unsubscribeByToken` clears `confirmed_at`; `revokeConsentsByEmail(deps,
+  email, 'bounce' | 'complaint')` does the same for provider feedback.
+  `ConsentRecord` gains optional `ip`/`userAgent`/`consentTextVersion`
+  (jsonb, no migration); `applyConsents(…, evidence?)`, `upsertSubscriber`/
+  `requestNewsletterSignup`/`claimQuizResult` take `evidence`.
+- `/unsubscribe/[token]` and `/newsletter/confirm/[token]` are GET-renders +
+  POST-actions (single `default` action each — kit forbids mixing a default
+  with named actions, and the RFC 8058 POST arrives at the bare URL).
+  e2e/quiz.e2e.ts presses the buttons.
+- **CSRF:** `kit.csrf.checkOrigin` is `false` in `vite.config.ts` (kit
+  2.69 marks it deprecated in favour of `trustedOrigins`, which cannot admit
+  an Origin-less request) and `handleCsrf` in `hooks.server.ts` re-implements
+  the identical rule from `$lib/server/csrf.ts` with ONE exemption,
+  `/unsubscribe/[token]` POST (the token is the credential). Hook-level tests
+  in `hooks.server.spec.ts` cover parity and the exemption. If kit removes
+  `checkOrigin`, the fallback is `trustedOrigins: ['*']` — which STILL blocks
+  Origin-less requests, so the one-click POST would then need its own
+  non-form content type or a `+server.ts` at a path kit does not check.
+- `seedNurtureSequences` now re-plans mismatched pending rows inside a
+  transaction per definition (`stepsHash` = sha256 of canonical JSON; jsonb
+  does not preserve key order, hence canonical). NULL-hash rows (planned
+  before 0027) are left alone — pre-launch there are none in prod.
+- The drain's claim cancels stale rows (`cancelled`, `last_error='stale'`)
+  under the same eligibility as the claim (active sequence + enrollment), so
+  a paused sequence is judged at resume time; `closeEnrollmentIfDone` treats
+  `failed` as open — an enrollment with a parked send stays `active`;
+  `retryParkedSend` re-opens a legacy `completed` one.
+
+**Closed by FIX-13:**
+
+- **P1 `email_log` treats `dryrun`/`sending` as final** — reclaim rule in
+  `shouldSkipResend` AND the reclaim `UPDATE … WHERE` (one winner under
+  concurrency, proven with two concurrent callers); the drain accepts
+  `skipped` only when the log row is `sent` (or `dryrun` while dry);
+  `maxDuration = 60` on the four cron routes and the Stripe webhook.
+- **P1 unsubscribe as GET side effect / no `List-Unsubscribe`** — GET renders,
+  POST revokes (button + one-click), headers on every nurture email (logged in
+  dry run too). Same pattern applied to the DOI confirm link.
+- **P1 unsubscribe keeps `confirmed_at` / "already subscribed" oracle** —
+  cleared on withdrawal (a re-grant sends a fresh DOI); the newsletter action
+  answers `{ status: 'sent' }` for new and confirmed addresses. Consent
+  evidence recorded (ip, UA, copy version).
+- **P1 Resend errors unclassified / no pacing / no bounce feedback** —
+  `EmailTransportError.retryable` (429/5xx/network/timeout retry, other 4xx
+  park with the body), 500 ms pacing between live sends, Svix-verified
+  webhook revoking + cancelling nurture.
+- **P2 nurture queue frozen at enrollment** — stale grace (48 h), (enrollment,
+  step) send order, steps hash + reseed re-plan, admin retry, failed keeps the
+  enrollment active. DEPLOYMENT §12 states the Vercel Pro requirement for
+  sub-daily crons.
+
+**Deferred / not done, on purpose:**
+
+- **`attention` enrollment status** — the plan offered it as an alternative to
+  keeping `active`; `active` was chosen (no enum change, the drain's
+  eligibility is unchanged, `listSequencesWithStats.activeEnrollments`
+  includes enrollments waiting on a retry).
+- **Backfilling `steps_hash`** for rows planned before 0027 — no production
+  rows exist yet; NULL means "leave alone" and is documented in the README.
+- **Launch-check rule for `RESEND_WEBHOOK_SECRET`** — not in the phase; the
+  LAUNCH-CHECKLIST step and the 503 answer cover the gap until a later phase
+  decides whether `EMAIL_DRYRUN=false` should require it.
+- **Recording bounces on `email_log`** (by `providerId`) — the webhook only
+  withdraws + cancels, as specified; a per-message delivery status column is
+  a later phase.
+

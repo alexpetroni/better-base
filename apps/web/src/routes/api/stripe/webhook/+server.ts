@@ -18,6 +18,12 @@ import type { RequestHandler } from './$types';
  * any tampering (or a missing/foreign secret) is a 400 and nothing is
  * processed. Event handling itself is idempotent (see modules/shop/webhook).
  */
+// Serverless budget (audit 2026-09-03 "Ops & platform"): a paid session
+// creates the order, issues the invoice (PDF into the fiscal bucket) and
+// awaits the confirmation email inline — more than Vercel's 10 s default. 60 s
+// is the ceiling every plan allows. adapter-node ignores this export.
+export const config = { maxDuration: 60 };
+
 export const POST: RequestHandler = async ({ request }) => {
 	const signature = request.headers.get('stripe-signature');
 	if (!signature) error(400, 'Missing stripe-signature header');

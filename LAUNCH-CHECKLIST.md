@@ -181,8 +181,19 @@ list applies later to better-life (with its own domain/accounts).
 ## Email (Resend)
 
 - [ ] Domain `bettersleep.ro` verified in Resend (SPF + DKIM records added).
-- [ ] `EMAIL_DRYRUN=false` set only AFTER domain verification.
-- [ ] Test double-opt-in on a real inbox: signup → confirm → unsubscribe.
+- [ ] `EMAIL_DRYRUN=false` set only AFTER domain verification. The dry-run
+      soak before that is harmless: a dry-run record is not a delivery, the
+      same idempotency keys send for real once live (DEPLOYMENT §8).
+- [ ] Resend webhook endpoint `https://<site>/api/webhooks/resend` created
+      for `email.bounced` + `email.complained`, its signing secret set as
+      `RESEND_WEBHOOK_SECRET`, and a dashboard test event answered `200`
+      (`503` means the secret is missing) — DEPLOYMENT §8 step 4.
+- [ ] Test double-opt-in on a real inbox: signup → confirm (the link shows
+      a button; press it) → unsubscribe (same: button). Re-subscribe after
+      the unsubscribe and check a NEW confirm email arrives.
+- [ ] On a delivered nurture email, "show original" contains
+      `List-Unsubscribe` and `List-Unsubscribe-Post` (Gmail/Yahoo bulk-sender
+      requirement); the mail client's own "Unsubscribe" control works.
 - [ ] Deliverability spot-check (Gmail + Yahoo, not in spam).
 
 ## Content
@@ -232,11 +243,13 @@ in the split boxes.
       appears, and `/admin` shows no "sincronizarea eșuează" banner.
 - [ ] Nurture email queue, per target (§9): Vercel — `vercel.json` already
       schedules `GET /api/cron/nurture-send` every 15 minutes (same
-      `CRON_SECRET`); adapter-node — machine cron curls the same route.
-      Verified once by hand: the authorized curl answers `{"claimed":…}`.
-      The seeded sequences are live-checked in `/admin/nurture` (deactivate
-      any you do not want sending at launch — sends only leave while
-      `EMAIL_DRYRUN=false`).
+      `CRON_SECRET`) **and the project is on the Pro plan** (Hobby coalesces
+      every cron to once a day — §12 "Scheduled jobs"); adapter-node —
+      machine cron curls the same route. Verified once by hand: the
+      authorized curl answers `{"claimed":…,"stale":0,…}`. The seeded
+      sequences are live-checked in `/admin/nurture` (deactivate any you do
+      not want sending at launch — sends only leave while
+      `EMAIL_DRYRUN=false`); parked sends show a **retry** button there.
 - [ ] e-Factura submission queue, per target (§9): Vercel — `vercel.json`
       already schedules `GET /api/cron/efactura-submit` hourly (same
       `CRON_SECRET`); adapter-node — machine cron curls the same route

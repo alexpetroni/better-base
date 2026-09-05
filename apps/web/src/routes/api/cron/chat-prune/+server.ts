@@ -11,6 +11,11 @@ import type { RequestHandler } from './$types';
  * `Authorization: Bearer $CRON_SECRET`. Same work as the script — both call
  * `runRetentionSweep`.
  */
+// Serverless budget (audit 2026-09-03 "Ops & platform"): a bounded batch with
+// one provider round trip per row needs more than Vercel's 10 s default; 60 s
+// is the ceiling every plan allows. adapter-node ignores this export.
+export const config = { maxDuration: 60 };
+
 export const GET: RequestHandler = async ({ request }) => {
 	const auth = authorizeCron(request.headers.get('authorization'), env.CRON_SECRET);
 	if (!auth.ok) {
