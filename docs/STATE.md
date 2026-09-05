@@ -2854,3 +2854,103 @@ e8d3e4c → 9fa407a; 515d319 docs.
 
 **New env vars:** none. **New tables:** none. **New migrations:**
 `0023_shipment_lifecycle.sql`.
+
+## Remediation FIX-12 (audit 2026-09-03 P0 #4, P1 "Invoicing & e-Factura" ×6, P2 CSV hygiene / VAT category holes / write-once renders — batch 2, phase 4)
+
+Fiscal content around a ledger that was already sound. Two sessions: the
+first landed the VAT model, CUI checksum, CIUS-RO structured addresses,
+share capital, B2B company seat, payer name, prepaid card payments, the
+exemption-reason column and the golden fixtures (`cf9af7c` → `f61d8b3`,
+`7d767c1` → `3208012`, migrations `0024_vat_model`, `0025_fiscal_content`);
+this session landed SPV submission tracking, the private fiscal bucket
+with renderer-versioned keys, CSV hygiene and the docs (`cecc740` →
+`4e889fd`, `6951374` → `65f6039`, `fea1e2b` → `8659acf`, `2577ac7`,
+`3d796de`; migration `0026_efactura_submissions`).
+
+**New env vars:** `S3_INVOICE_BUCKET` (private fiscal bucket; default
+`<S3_BUCKET>-fiscal` locally, required by `launch:check` under
+`IMAGE_PROVIDER=cloudflare`, must differ from `S3_BUCKET`). **New tables:**
+`invoice_submissions`. **New scripts:** `pnpm storage:fiscal-migrate`
+(`scripts/fiscal-storage-migrate.ts`). **New cron route:**
+`GET /api/cron/efactura-submit` (hourly at :37 in `vercel.json`;
+DEPLOYMENT §9/§12). **New settings** (first session): `company.street`,
+`company.city`, `company.county`, `company.postalCode`,
+`company.shareCapital`, `invoice.vatStandardRates`; `products.vat_rate_bp`,
+`order_items.vat_rate_bp`, the structured issuer/buyer address, capital,
+exemption-reason, order/payment reference, payment method and `paid_at`
+columns on `invoices`. `storage:init` and the e2e global setup now create
+the fiscal bucket too.
+
+**Closed by FIX-12:**
+
+- **P0 #4 fiscal documents in the publicly bound media bucket** — documents
+  live in `S3_INVOICE_BUCKET` (`getInvoiceStorage()`; download route,
+  accountant export, admin re-send, Stripe webhook attachment and the cron
+  all use it); `storage:fiscal-migrate` moves pre-FIX-12 objects out of
+  the media bucket idempotently; `launch:check` refuses a cloudflare deploy
+  without the bucket, refuses `S3_INVOICE_BUCKET == S3_BUCKET`, and probes
+  that `${MEDIA_PUBLIC_BASE_URL}/invoices/…` is not readable (skipped under
+  `--dev`, where the local media bucket is public by design). README and
+  DEPLOYMENT §5/§7 corrected.
+- **P1 one global VAT rate** — `products.vat_rate_bp` (allowlist), snapshot
+  on `order_items` and `invoice_lines`, effective-dated
+  `invoice.vatStandardRates` selected by `order.createdAt`, one
+  `TaxSubtotal` per rate (first session).
+- **P1 CUI shape-only / prefix not reconciled** — `isValidCui` (mod-11),
+  `displayCui` at snapshot, prefix/registration mismatch in
+  `missingIssuerSettings`, fixtures fixed (first session).
+- **P1 XML not valid CIUS-RO for any RO address** — structured addresses,
+  `CountrySubentity`/`PostalZone`, `SECTORn` city names, no buyer
+  `PartyTaxScheme` under O, extended offline validator, two golden
+  fixtures (first session). NOT run through ANAF's public validator from
+  the build — LAUNCH-CHECKLIST carries that step; README/DEPLOYMENT say so.
+- **P1 SPV submission untracked, XML rendered on a customer GET** —
+  `invoice_submissions` written in the issuing transaction for every
+  invoice and storno (backfilled as `pending` by migration 0026);
+  `submitPendingEFactura` claims `FOR UPDATE SKIP LOCKED` with a 15-min
+  lease, renders into the fiscal bucket, submits through the seam:
+  `submitted` terminal with the ANAF index, thrown → doubling backoff
+  (15 min → 6 h) and parked `failed` after 5 attempts, `skipped` (no
+  enrollment) → not an attempt, deferred an hour. `ensureInvoiceDocument`
+  no longer calls the submitter. `/admin/orders` → "De trimis la ANAF"
+  with calendar days left (`efacturaDaysLeft`, Europe/Bucharest; red when
+  negative). DEPLOYMENT §7 now states the duty (B2B 2024, B2C 2025-01-01,
+  5 calendar days) instead of "when required".
+- **P1 share capital** — `company.shareCapital`, `issuer_capital`, printed
+  under Reg. Com. and in BT-33 (first session).
+- **P1 B2B parcel address / B2C parcel name** — company seat in the form
+  and snapshot, `customer_details.name` preferred (first session).
+- **P2 CSV hygiene** — `util/csv.ts` (BOM, `= + - @ TAB CR` prefixed with
+  `'`, delimiter-aware quoting) used by the accountant export (display
+  number, buyer, CUI, storno ref) and the subscribers export; per-rate
+  `baza_<r>`/`tva_<r>` columns; the month window is an indexed `issued_at`
+  range on the Romanian calendar. `OrderReference`, payment reference,
+  `PrepaidAmount`/means code 48 and "Achitat cu cardul la <data>" (first
+  session).
+- **P2 VAT category holes** — exemption reason in its own column; a zero
+  rate on a registered issuer is rejected by the settings validator (first
+  session).
+- **P2 write-once storage freezes defective renders** — keys carry
+  `INVOICE_PDF_RENDERER_VERSION` / `EFACTURA_RENDERER_VERSION` (both 2
+  since FIX-12); submission state lives in the table, not in object
+  existence.
+
+**Deferred / not done, on purpose:**
+
+- **Manual "mark as submitted"** for documents uploaded to SPV by hand: the
+  phase names the queue, the cron, the filter and the seam, not an operator
+  action. Until the real adapter exists every row stays `pending` (the
+  no-op submitter answers `skipped`), so "De trimis la ANAF" is the
+  operator's daily worklist rather than a ledger of what was uploaded. The
+  next fiscal phase should add the action (order page, records the ANAF
+  index) or the adapter — whichever comes first.
+- **AWB labels** (`shipping-labels/`) still live in the media bucket. They
+  are not fiscal documents and the audit finding is about invoices, but they
+  carry a name and address too; the same move (`getInvoiceStorage`-style
+  getter or the fiscal bucket) is a one-file change for a later phase.
+- **ANAF public validator** not called from the runner (no live service
+  from the build); recorded as a LAUNCH-CHECKLIST step for both golden
+  fixtures and for the first real invoice.
+- **`maxDuration` on the cron routes** (audit "Ops & platform") is FIX-13
+  territory; `efactura-submit` follows the existing routes (bounded batch,
+  no `config` export).
