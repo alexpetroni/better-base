@@ -25,7 +25,9 @@ import { createDb } from '../src/lib/db/client.ts';
 import { settingsLaunchProblems } from '../src/lib/modules/settings/server.ts';
 import {
 	imageProbeBlocker,
+	fiscalProbeBlocker,
 	launchCheckProblems,
+	probeFiscalPrivacy,
 	probeImages
 } from '../src/lib/server/launch-check.ts';
 import type { DeployTarget } from '../src/lib/server/env-matrix.ts';
@@ -66,6 +68,16 @@ if (probeBlocker) {
 	notes.push(`image probe skipped: ${probeBlocker}`);
 } else {
 	problems.push(...(await probeImages(env)));
+}
+
+// FIX-12: the public media origin must not serve invoices/. Skipped under
+// --dev on purpose — the local MinIO media bucket is public by design and
+// documents go to the fiscal bucket anyway.
+const fiscalBlocker = noProbe ? '--no-probe' : dev ? '--dev' : fiscalProbeBlocker(env);
+if (fiscalBlocker) {
+	notes.push(`fiscal privacy probe skipped: ${fiscalBlocker}`);
+} else {
+	problems.push(...(await probeFiscalPrivacy(env)));
 }
 
 // Site-settings preflight: launch-required settings must be explicitly saved

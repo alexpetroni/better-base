@@ -3,19 +3,22 @@ import type { Db } from '../../db/client.ts';
 import type { EmailAttachment } from '../email/service.ts';
 import type { Storage } from '../media/storage.ts';
 import type { InvoiceDocFormat } from './access.ts';
-import { renderEFacturaXml } from './efactura.ts';
+import { EFACTURA_RENDERER_VERSION, renderEFacturaXml } from './efactura.ts';
 import { invoiceDocumentFilename, type InvoiceDocumentModel } from './model.ts';
-import { renderInvoicePdf } from './pdf.ts';
+import { INVOICE_PDF_RENDERER_VERSION, renderInvoicePdf } from './pdf.ts';
 import { invoiceLines, invoices } from './schema.ts';
 
 /**
- * Rendered fiscal documents (PDF + e-Factura XML) live in the S3 bucket under
- * a dedicated PRIVATE prefix — never the public media prefix (`uploads/`),
- * which imgproxy serves to anyone. Serverless rule: bytes go straight from
- * render to storage, no filesystem in between. Both renderers are
- * deterministic, so "write once" needs no lock: a concurrent re-render
- * produces the identical bytes and the second PUT is a harmless overwrite,
- * while the stat-first check keeps the steady state read-only.
+ * Rendered fiscal documents (PDF + e-Factura XML) live in the PRIVATE fiscal
+ * bucket (`getInvoiceStorage()`, `S3_INVOICE_BUCKET`) — never the media
+ * bucket, which the default image provider binds to a public domain (audit
+ * P0 #4). Serverless rule: bytes go straight from render to storage, no
+ * filesystem in between. Both renderers are deterministic, so "write once"
+ * needs no lock: a concurrent re-render produces the identical bytes and the
+ * second PUT is a harmless overwrite, while the stat-first check keeps the
+ * steady state read-only. Keys carry the renderer version: a renderer fix
+ * re-renders under a new key instead of freezing a defective file forever,
+ * and the earlier file stays as the record of what was delivered.
  */
 
 export const INVOICE_DOC_PREFIX = 'invoices/';
@@ -25,8 +28,14 @@ const DOC_MIME: Record<InvoiceDocFormat, string> = {
 	xml: 'application/xml'
 };
 
+const RENDERER_VERSION: Record<InvoiceDocFormat, number> = {
+	pdf: INVOICE_PDF_RENDERER_VERSION,
+	xml: EFACTURA_RENDERER_VERSION
+};
+
+/** `invoices/<id>.<rendererVersion>.<pdf|xml>` in the fiscal bucket. */
 export function invoiceDocumentKey(invoiceId: string, format: InvoiceDocFormat): string {
-	return `${INVOICE_DOC_PREFIX}${invoiceId}.${format}`;
+	return `${INVOICE_DOC_PREFIX}${invoiceId}.${RENDERER_VERSION[format]}.${format}`;
 }
 
 export interface InvoiceDocumentDeps {

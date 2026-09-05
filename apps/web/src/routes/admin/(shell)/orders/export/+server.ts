@@ -10,7 +10,7 @@ import {
 	loadInvoiceModel
 } from '$lib/modules/invoice/server';
 import { recordAdminAudit } from '$lib/modules/auth';
-import { getStorage } from '$lib/modules/media/server';
+import { getInvoiceStorage } from '$lib/modules/media/server';
 import { requireAdmin } from '$lib/server/forms';
 import { centsToDecimal } from '$lib/util/money';
 import type { RequestHandler } from './$types';
@@ -52,7 +52,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	const db = getDb();
 	await recordAdminAudit(db, { actor: user.email, action: 'orders-export', target: month });
-	const storage = getStorage();
+	const storage = getInvoiceStorage();
 
 	// Documents are dated in Europe/Bucharest (like the documents themselves),
 	// so the month filter uses the same calendar — filtered here rather than

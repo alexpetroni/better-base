@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { getDb } from '$lib/db';
 import { getEFacturaSubmitter, submitPendingEFactura } from '$lib/modules/invoice/server';
-import { getStorage } from '$lib/modules/media/server';
+import { getInvoiceStorage } from '$lib/modules/media/server';
 import { authorizeCron } from '$lib/server/cron';
 import type { RequestHandler } from './$types';
 
@@ -24,7 +24,7 @@ export const GET: RequestHandler = async ({ request }) => {
 
 	const result = await submitPendingEFactura({
 		db: getDb(),
-		storage: getStorage(),
+		storage: getInvoiceStorage(),
 		efactura: getEFacturaSubmitter()
 	});
 	console.log(

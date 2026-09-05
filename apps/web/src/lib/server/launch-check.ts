@@ -104,6 +104,7 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 	}
 
 	problems.push(...imageProviderProblems(env));
+	problems.push(...fiscalStorageProblems(env));
 
 	// EMAIL_DRYRUN=false is the "this env is live" signal: real emails go out,
 	// so a test-mode Stripe key is a mistake, not a stage.
@@ -173,6 +174,87 @@ export function imageProviderProblems(env: Env): string[] {
 	}
 	if (env.IMGPROXY_KEY && env.IMGPROXY_KEY === env.IMGPROXY_SALT) {
 		problems.push('IMGPROXY_SALT must differ from IMGPROXY_KEY — generate a separate value');
+	}
+	return problems;
+}
+
+/**
+ * Production-only fiscal-storage rules (FIX-12, audit P0 #4). Under the
+ * cloudflare provider the media bucket is bound to a public domain and R2
+ * public access is not prefix-scoped, so fiscal documents need their OWN
+ * bucket, named explicitly — a derived default would silently be a bucket
+ * nobody created or bound correctly. On every target the two must differ.
+ */
+export function fiscalStorageProblems(env: Env): string[] {
+	const problems: string[] = [];
+	const fiscal = env.S3_INVOICE_BUCKET;
+	if (!fiscal && imageProviderNameFromEnv(env) === 'cloudflare') {
+		problems.push(
+			'S3_INVOICE_BUCKET is required when IMAGE_PROVIDER=cloudflare — the media bucket is publicly bound, fiscal documents need a private one (DEPLOYMENT.md §5)'
+		);
+	}
+	if (fiscal && fiscal === env.S3_BUCKET) {
+		problems.push(
+			`S3_INVOICE_BUCKET must not be the media bucket ("${fiscal}") — invoice PDFs/XML would sit behind the public media domain`
+		);
+	}
+	return problems;
+}
+
+/**
+ * Why the fiscal privacy probe cannot run with this env, or null when it
+ * can: it needs storage credentials and a public media origin to test.
+ */
+export function fiscalProbeBlocker(env: Env): string | null {
+	const storage = storageConfigFromEnv(env);
+	if (!storage.endpoint || !storage.accessKey || !storage.secretKey || !storage.bucket) {
+		return 'S3_* incomplete';
+	}
+	if (!env.MEDIA_PUBLIC_BASE_URL)
+		return 'MEDIA_PUBLIC_BASE_URL is not set (no public media origin)';
+	return null;
+}
+
+/** Where the privacy probe object lives while the probe runs; deleted afterwards. */
+export const FISCAL_PROBE_KEY = 'invoices/launch-check-probe.txt';
+
+/**
+ * Live fiscal privacy probe (FIX-12, audit P0 #4): upload a tiny object under
+ * `invoices/` in the MEDIA bucket and prove the public media origin does NOT
+ * serve it. Whatever the bucket layout, a 200 here means a leftover or
+ * misrouted fiscal document would be world-readable. A failed cleanup is
+ * reported, not fatal.
+ */
+export async function probeFiscalPrivacy(env: Env): Promise<string[]> {
+	const storage = createStorage(storageConfigFromEnv(env));
+	const problems: string[] = [];
+	try {
+		await storage.putObject(FISCAL_PROBE_KEY, 'launch-check fiscal privacy probe', 'text/plain');
+	} catch (err) {
+		return [
+			`fiscal privacy probe: could not upload s3://${storage.bucket}/${FISCAL_PROBE_KEY} — S3 endpoint/credentials/bucket broken? (${err instanceof Error ? err.message : err})`
+		];
+	}
+	const url = `${env.MEDIA_PUBLIC_BASE_URL!.replace(/\/$/, '')}/${FISCAL_PROBE_KEY}`;
+	try {
+		const res = await fetch(url);
+		if (res.status === 200) {
+			problems.push(
+				`fiscal privacy probe: ${url} is PUBLICLY readable (200) — the media origin serves invoices/; move documents to S3_INVOICE_BUCKET (pnpm storage:fiscal-migrate) and block /invoices/* on the media host (DEPLOYMENT.md §5)`
+			);
+		}
+	} catch (err) {
+		problems.push(
+			`fiscal privacy probe: ${env.MEDIA_PUBLIC_BASE_URL} is not reachable from here (${err instanceof Error ? (err.cause instanceof Error ? err.cause.message : err.message) : err})`
+		);
+	} finally {
+		try {
+			await storage.deleteObject(FISCAL_PROBE_KEY);
+		} catch {
+			problems.push(
+				`fiscal privacy probe: cleanup failed — delete s3://${storage.bucket}/${FISCAL_PROBE_KEY} by hand`
+			);
+		}
 	}
 	return problems;
 }

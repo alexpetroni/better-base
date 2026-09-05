@@ -7,7 +7,7 @@ import {
 	loadInvoiceModel,
 	verifyInvoiceDocToken
 } from '$lib/modules/invoice/server';
-import { getStorage } from '$lib/modules/media/server';
+import { getInvoiceStorage } from '$lib/modules/media/server';
 import { tokenSecretFrom } from '$lib/server/secrets';
 import type { RequestHandler } from './$types';
 
@@ -19,8 +19,9 @@ import type { RequestHandler } from './$types';
  *   already authenticated the buyer's claim to THIS invoice (order success/
  *   lookup via the unguessable Stripe session id).
  * Anonymous, cross-customer, tampered or expired requests get 403/404 and no
- * bytes. Documents are stored write-once in the private S3 prefix and
- * rendered lazily on first request (see modules/invoice/documents.ts).
+ * bytes. Documents are stored write-once in the PRIVATE fiscal bucket
+ * (renderer-versioned keys, see modules/invoice/documents.ts); a download
+ * only renders and stores — ANAF submission is the cron's job, never a GET's.
  */
 export const GET: RequestHandler = async ({ params, url, locals }) => {
 	const format = params.format;
@@ -43,7 +44,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	const model = await loadInvoiceModel({ db }, params.id);
 	if (!model) error(404);
 
-	const bytes = await ensureInvoiceDocument({ db, storage: getStorage() }, model, format);
+	const bytes = await ensureInvoiceDocument({ db, storage: getInvoiceStorage() }, model, format);
 	return new Response(new Uint8Array(bytes), {
 		headers: {
 			'content-type': format === 'pdf' ? 'application/pdf' : 'application/xml',

@@ -49,6 +49,10 @@ export const ENV_MATRIX: readonly EnvVarSpec[] = [
 	{ name: 'S3_ACCESS_KEY', boot: true, devDefaults: ['better-media'] },
 	{ name: 'S3_SECRET_KEY', boot: true, devDefaults: ['better-media-secret'] },
 	{ name: 'S3_BUCKET', boot: true },
+	// The private fiscal-document bucket (FIX-12). Derived (`<S3_BUCKET>-fiscal`)
+	// when unset; launch-check.ts requires it explicitly under the cloudflare
+	// provider, where the media bucket is publicly bound.
+	{ name: 'S3_INVOICE_BUCKET' },
 	// Image delivery is provider-selected (DEPLOYMENT.md §6), so none of these
 	// can be a flat boot requirement: a Cloudflare deploy has no imgproxy key
 	// and an imgproxy deploy has no public media origin. `boot.ts` validates

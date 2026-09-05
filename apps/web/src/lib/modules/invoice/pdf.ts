@@ -160,6 +160,14 @@ function paymentLine(invoice: InvoiceDocumentModel['invoice']): string {
 }
 
 /** Render the stored snapshot to PDF bytes. Async only because pdf-lib is. */
+/**
+ * Bumped whenever the PDF layout changes: the stored document key carries it
+ * (documents.ts), so a renderer fix re-renders instead of serving a frozen
+ * defective file. 1 = the pre-FIX-12 layout; 2 = FIX-12 (share capital,
+ * structured addresses, "Achitat cu cardul", order/payment references).
+ */
+export const INVOICE_PDF_RENDERER_VERSION = 2;
+
 export async function renderInvoicePdf(model: InvoiceDocumentModel): Promise<Uint8Array> {
 	const { invoice, lines, stornoOf } = model;
 	const isStorno = invoice.kind === 'storno';

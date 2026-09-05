@@ -20,6 +20,24 @@ export function storageConfigFromEnv(source: Record<string, string | undefined>)
 	};
 }
 
+/**
+ * The PRIVATE bucket fiscal documents live in (FIX-12, audit P0 #4). Same
+ * endpoint and credentials as the media bucket, a different bucket: under
+ * the default image provider the media bucket is bound to a public domain,
+ * and R2 public access is not prefix-scoped. `S3_INVOICE_BUCKET` names it;
+ * locally it defaults to `<S3_BUCKET>-fiscal` (launch:check requires the
+ * explicit value on a cloudflare deploy). Never bound to any public domain.
+ */
+export function invoiceStorageConfigFromEnv(
+	source: Record<string, string | undefined>
+): StorageConfig {
+	const media = storageConfigFromEnv(source);
+	return {
+		...media,
+		bucket: source.S3_INVOICE_BUCKET || (media.bucket ? `${media.bucket}-fiscal` : '')
+	};
+}
+
 export function imgproxyConfigFromEnv(source: Record<string, string | undefined>): ImgproxyConfig {
 	return {
 		baseUrl: source.IMGPROXY_URL ?? '',

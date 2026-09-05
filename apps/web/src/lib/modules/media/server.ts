@@ -1,7 +1,7 @@
 // Server module barrel: signing, storage, db schema and services. Importing
 // this from client code fails the build ($env/dynamic/private) — by design.
 import { env } from '$env/dynamic/private';
-import { imageProviderFromEnv, storageConfigFromEnv } from './env.ts';
+import { imageProviderFromEnv, invoiceStorageConfigFromEnv, storageConfigFromEnv } from './env.ts';
 import {
 	imageSources,
 	type ImageProvider,
@@ -27,6 +27,7 @@ export {
 	imageProviderFromEnv,
 	imageProviderNameFromEnv,
 	imgproxyConfigFromEnv,
+	invoiceStorageConfigFromEnv,
 	isImageProviderName,
 	storageConfigFromEnv
 } from './env.ts';
@@ -81,6 +82,7 @@ function requireEnv(names: string[]): void {
 }
 
 let storageInstance: Storage | undefined;
+let invoiceStorageInstance: Storage | undefined;
 let providerInstance: ImageProvider | undefined;
 
 export function getStorage(): Storage {
@@ -89,6 +91,15 @@ export function getStorage(): Storage {
 		storageInstance = createStorage(storageConfigFromEnv(env));
 	}
 	return storageInstance;
+}
+
+/** The private fiscal-document bucket (invoice PDFs + e-Factura XML). */
+export function getInvoiceStorage(): Storage {
+	if (!invoiceStorageInstance) {
+		requireEnv(['S3_ENDPOINT', 'S3_ACCESS_KEY', 'S3_SECRET_KEY', 'S3_BUCKET']);
+		invoiceStorageInstance = createStorage(invoiceStorageConfigFromEnv(env));
+	}
+	return invoiceStorageInstance;
 }
 
 /**

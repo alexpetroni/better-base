@@ -15,7 +15,7 @@ import {
 } from '../src/lib/db/seed.ts';
 import { createAuth } from '../src/lib/modules/auth/auth.ts';
 import { upsertStaffUser } from '../src/lib/modules/auth/staff.ts';
-import { storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
+import { invoiceStorageConfigFromEnv, storageConfigFromEnv } from '../src/lib/modules/media/env.ts';
 import { createStorage } from '../src/lib/modules/media/storage.ts';
 import { E2E_ADMIN, E2E_EDITOR, SITE_DB_NAMES, siteDatabaseUrl } from './env.ts';
 
@@ -29,6 +29,8 @@ export default async function globalSetup() {
 	const storage = createStorage(storageConfigFromEnv(process.env));
 	await storage.ensureBucket();
 	await storage.allowPublicRead();
+	// The private fiscal bucket (invoice documents); never public.
+	await createStorage(invoiceStorageConfigFromEnv(process.env)).ensureBucket();
 
 	for (const siteId of Object.keys(SITE_DB_NAMES) as Array<keyof typeof SITE_DB_NAMES>) {
 		const db = createDb(siteDatabaseUrl(siteId));

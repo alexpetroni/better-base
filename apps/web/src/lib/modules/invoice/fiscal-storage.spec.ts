@@ -73,8 +73,10 @@ describe('moving legacy documents out of the media bucket (integration)', () => 
 		for (const key of legacy) await media.putObject(key, `legacy ${key}`, 'application/pdf');
 		await media.putObject('uploads/mig-keep.txt', 'not fiscal', 'text/plain');
 
+		// A long-lived dev bucket may hold other pre-FIX-12 renders too (e2e,
+		// earlier specs): they move as well, so the count is a lower bound.
 		const first = await migrateFiscalObjects({ from: media, to: fiscal });
-		expect(first).toEqual({ moved: 3, alreadyThere: 0 });
+		expect(first.moved).toBeGreaterThanOrEqual(3);
 
 		expect(await media.listKeys(INVOICE_DOC_PREFIX)).toEqual([]);
 		expect((await fiscal.listKeys(INVOICE_DOC_PREFIX)).filter((k) => k.includes('mig-'))).toEqual(

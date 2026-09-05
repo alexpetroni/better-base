@@ -19,6 +19,12 @@ import type { InvoiceLineRow, InvoiceRow } from './schema.ts';
  * (efactura-submitter.ts) and requires human enrollment — see DEPLOYMENT.md.
  */
 
+/**
+ * Bumped whenever the XML output changes (same role as the PDF's): 1 = the
+ * pre-FIX-12 output (rejected by CIUS-RO for any RO address); 2 = FIX-12.
+ */
+export const EFACTURA_RENDERER_VERSION = 2;
+
 export const EFACTURA_CUSTOMIZATION_ID =
 	'urn:cen.eu:en16931:2017#compliant#urn:efactura.mfinante.ro:CIUS-RO:1.0.1';
 

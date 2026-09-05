@@ -5,6 +5,7 @@ import {
 	GetObjectCommand,
 	HeadBucketCommand,
 	HeadObjectCommand,
+	ListObjectsV2Command,
 	PutBucketPolicyCommand,
 	PutObjectCommand,
 	S3Client
@@ -166,6 +167,20 @@ export function createStorage(cfg: StorageConfig) {
 
 		async deleteObject(key: string): Promise<void> {
 			await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+		},
+
+		/** Every key under `prefix`, sorted (paginated; tooling and probes only). */
+		async listKeys(prefix: string): Promise<string[]> {
+			const keys: string[] = [];
+			let token: string | undefined;
+			do {
+				const page = await client.send(
+					new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token })
+				);
+				for (const object of page.Contents ?? []) if (object.Key) keys.push(object.Key);
+				token = page.IsTruncated ? page.NextContinuationToken : undefined;
+			} while (token);
+			return keys.sort();
 		}
 	};
 }

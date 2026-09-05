@@ -3,7 +3,7 @@ import { env as publicEnv } from '$env/dynamic/public';
 import { getDb } from '$lib/db';
 import { getEmailSender } from '$lib/modules/email/server';
 import { invoicePdfAttachmentForOrder } from '$lib/modules/invoice/server';
-import { getStorage } from '$lib/modules/media/server';
+import { getInvoiceStorage } from '$lib/modules/media/server';
 import {
 	getCourierProvider,
 	getStripeWebhookSecret,
@@ -35,10 +35,10 @@ export const POST: RequestHandler = async ({ request }) => {
 			db: getDb(),
 			email: getEmailSender(),
 			siteName: getSite().name,
-			// getStorage() resolves inside the callback: a missing S3 config
+			// getInvoiceStorage() resolves inside the callback: a missing S3 config
 			// surfaces as a caught attachment failure, never a dead webhook.
 			invoiceAttachment: (orderId) =>
-				invoicePdfAttachmentForOrder({ db: getDb(), storage: getStorage() }, orderId),
+				invoicePdfAttachmentForOrder({ db: getDb(), storage: getInvoiceStorage() }, orderId),
 			publicBaseUrl: publicEnv.PUBLIC_SITE_URL,
 			// Refunds cancel a not-yet-picked-up AWB with the courier (best effort).
 			courier: getCourierProvider()

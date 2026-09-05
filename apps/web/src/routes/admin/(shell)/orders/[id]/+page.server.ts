@@ -8,7 +8,7 @@ import {
 	issuePartialStornoForOrder,
 	listInvoicesForOrder
 } from '$lib/modules/invoice/server';
-import { getStorage } from '$lib/modules/media/server';
+import { getInvoiceStorage } from '$lib/modules/media/server';
 import { isFulfillmentStatus } from '$lib/modules/shop';
 import {
 	createShipmentForOrder,
@@ -182,7 +182,10 @@ export const actions: Actions = {
 		if (!found) error(404);
 		if (!found.order.email) return fail(400, { resendError: 'no-email' as const });
 
-		const info = await invoicePdfAttachmentForOrder({ db, storage: getStorage() }, params.id);
+		const info = await invoicePdfAttachmentForOrder(
+			{ db, storage: getInvoiceStorage() },
+			params.id
+		);
 		if (!info) return fail(400, { resendError: 'no-invoice' as const });
 
 		const outcome = await getEmailSender().send({

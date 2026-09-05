@@ -23,6 +23,7 @@
 		"launch:check": "node scripts/launch-check.ts",
 		"db:seed": "node scripts/seed.ts",
 		"storage:init": "node scripts/storage-init.ts",
+		"storage:fiscal-migrate": "node scripts/fiscal-storage-migrate.ts",
 		"chat:prune": "node scripts/chat-prune.ts",
 		"media:blurhash": "node scripts/media-blurhash.ts",
 		"content": "node scripts/content.ts",
