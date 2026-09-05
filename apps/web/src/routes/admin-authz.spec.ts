@@ -55,7 +55,7 @@ const MANIFEST: Record<string, ManifestRow> = {
 		actions: { updateAlt: 'staff', delete: 'staff' }
 	},
 	'./admin/(shell)/media/upload/+server.ts': { methods: { POST: 'staff' } },
-	'./admin/(shell)/nurture/+page.server.ts': { actions: { toggle: 'admin' } },
+	'./admin/(shell)/nurture/+page.server.ts': { actions: { toggle: 'admin', retry: 'admin' } },
 	'./admin/(shell)/orders/+page.server.ts': {},
 	'./admin/(shell)/orders/[id]/+page.server.ts': {
 		actions: {
