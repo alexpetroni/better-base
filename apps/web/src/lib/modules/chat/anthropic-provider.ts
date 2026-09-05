@@ -18,9 +18,26 @@ export const ANTHROPIC_MAX_RETRIES = 1;
 /**
  * A stream that emits nothing for this long is dead (a healthy reply emits
  * tokens continuously); abort it instead of holding the request open until
- * the platform kills it with no frame sent.
+ * the platform kills it with no frame sent. Armed only once the first event
+ * has arrived (FIX-17): before that the SDK's own `timeout` × attempts is
+ * the budget, and an inactivity abort merged into the request signal would
+ * cancel a slow attempt before the SDK could time it out and retry.
  */
 export const ANTHROPIC_INACTIVITY_MS_DEFAULT = 15_000;
+
+/**
+ * Hard cap on time-to-first-event: every SDK attempt may time out, plus
+ * `inactivityMs` of slack for the retry backoff and a response whose headers
+ * arrived but whose body never yields a frame (the SDK does not watch that).
+ * With the defaults 20 s × 2 + 15 s = 55 s, under the route's `maxDuration`.
+ */
+export function firstEventTimeoutMs(input: {
+	timeoutMs: number;
+	maxRetries: number;
+	inactivityMs: number;
+}): number {
+	return input.timeoutMs * (input.maxRetries + 1) + input.inactivityMs;
+}
 
 export interface AnthropicProviderOptions {
 	timeoutMs?: number;
@@ -47,30 +64,28 @@ export function createAnthropicChatProvider(
 	options: AnthropicProviderOptions = {}
 ): ChatProvider {
 	if (!apiKey) throw new Error('AnthropicChatProvider requires a non-empty API key');
-	const client = new Anthropic({
-		apiKey,
-		timeout: options.timeoutMs ?? ANTHROPIC_TIMEOUT_MS_DEFAULT,
-		maxRetries: options.maxRetries ?? ANTHROPIC_MAX_RETRIES,
-		fetch: options.fetchFn
-	});
+	const timeoutMs = options.timeoutMs ?? ANTHROPIC_TIMEOUT_MS_DEFAULT;
+	const maxRetries = options.maxRetries ?? ANTHROPIC_MAX_RETRIES;
+	const client = new Anthropic({ apiKey, timeout: timeoutMs, maxRetries, fetch: options.fetchFn });
 	const inactivityMs = options.inactivityMs ?? ANTHROPIC_INACTIVITY_MS_DEFAULT;
+	const firstEventMs = firstEventTimeoutMs({ timeoutMs, maxRetries, inactivityMs });
 	return {
 		kind: 'anthropic',
 		async *stream(
 			messages: ChatMessage[],
 			{ system, maxTokens, signal }: ChatStreamOptions
 		): AsyncIterable<ChatStreamEvent> {
-			const inactivity = new AbortController();
+			// Two-phase watchdog (FIX-17): until the first event, the SDK owns
+			// the budget (timeout × attempts, retries included) and this only
+			// caps the whole thing; from the first event on, inactivity.
+			const watchdog = new AbortController();
 			let timer: ReturnType<typeof setTimeout> | undefined;
-			const armInactivity = () => {
+			const arm = (ms: number, reason: string) => {
 				clearTimeout(timer);
-				timer = setTimeout(
-					() => inactivity.abort(new Error(`chat stream inactive for ${inactivityMs} ms`)),
-					inactivityMs
-				);
+				timer = setTimeout(() => watchdog.abort(new Error(reason)), ms);
 			};
 			try {
-				armInactivity();
+				arm(firstEventMs, `chat stream produced no event within ${firstEventMs} ms`);
 				const stream = client.messages.stream(
 					{
 						model: ANTHROPIC_CHAT_MODEL,
@@ -79,11 +94,11 @@ export function createAnthropicChatProvider(
 						thinking: { type: 'disabled' },
 						messages: messages.map(({ role, content }) => ({ role, content }))
 					},
-					{ signal: signal ? AbortSignal.any([signal, inactivity.signal]) : inactivity.signal }
+					{ signal: signal ? AbortSignal.any([signal, watchdog.signal]) : watchdog.signal }
 				);
 				let stop: ChatStreamEvent | undefined;
 				for await (const event of stream) {
-					armInactivity();
+					arm(inactivityMs, `chat stream inactive for ${inactivityMs} ms`);
 					if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
 						yield { delta: event.delta.text };
 					} else if (event.type === 'message_delta') {
@@ -96,7 +111,7 @@ export function createAnthropicChatProvider(
 				// The client going away is not a provider failure — and nobody is
 				// left to receive a frame anyway.
 				if (signal?.aborted) throw error;
-				const failure = inactivity.signal.aborted ? (inactivity.signal.reason as Error) : error;
+				const failure = watchdog.signal.aborted ? (watchdog.signal.reason as Error) : error;
 				logProviderError(failure);
 				throw failure;
 			} finally {

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	ANTHROPIC_INACTIVITY_MS_DEFAULT,
 	ANTHROPIC_MAX_RETRIES,
 	ANTHROPIC_TIMEOUT_MS_DEFAULT,
-	createAnthropicChatProvider
+	createAnthropicChatProvider,
+	firstEventTimeoutMs
 } from './anthropic-provider.ts';
 import { createMockChatProvider, mockReplyFor } from './mock-provider.ts';
 import type { ChatStreamEvent } from './provider.ts';
@@ -323,6 +325,14 @@ describe('AnthropicChatProvider', () => {
 		it('keeps the worst-case SDK budget under the route maxDuration (60 s)', () => {
 			expect(ANTHROPIC_MAX_RETRIES).toBe(1);
 			expect(ANTHROPIC_TIMEOUT_MS_DEFAULT * (ANTHROPIC_MAX_RETRIES + 1)).toBeLessThan(60_000);
+			// …and so does the first-event cap that sits above it (FIX-17).
+			expect(
+				firstEventTimeoutMs({
+					timeoutMs: ANTHROPIC_TIMEOUT_MS_DEFAULT,
+					maxRetries: ANTHROPIC_MAX_RETRIES,
+					inactivityMs: ANTHROPIC_INACTIVITY_MS_DEFAULT
+				})
+			).toBeLessThan(60_000);
 		});
 	});
 });
