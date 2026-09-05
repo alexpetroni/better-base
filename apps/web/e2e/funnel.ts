@@ -57,9 +57,11 @@ export function defineFunnelSpec(siteId: keyof typeof SITE_DB_NAMES) {
 				// --- Ops: the health endpoint answers 200 with both checks green.
 				const health = await page.request.get('/api/health');
 				expect(health.status()).toBe(200);
+				// FIX-14: the payload names the chat provider — the e2e stack is on the mock.
 				expect(await health.json()).toEqual({
 					status: 'ok',
-					checks: { db: 'ok', storage: 'ok' }
+					checks: { db: 'ok', storage: 'ok' },
+					chatProvider: 'mock'
 				});
 
 				// --- Home: brand, pillars from config, cookie-consent banner.
