@@ -112,6 +112,8 @@ jobs:
         # Placeholder values with the SHAPE of production: the rules (https
         # origin matching the site domain, no dev defaults, a Stripe key, the
         # neon driver, a private fiscal bucket) are what is under test here.
+        # --allow-mock-providers acknowledges the dry-run email below (FIX-18:
+        # a production env on EMAIL_DRYRUN=true is otherwise a problem).
         env:
           SITE_ID: sleep
           DB_DRIVER: neon
@@ -133,7 +135,7 @@ jobs:
           CRON_SECRET: ci-placeholder-cron-secret-0123456789abcdef
           ERROR_REPORT_URL: https://sink.example.com/ci-placeholder
           EMAIL_DRYRUN: 'true'
-        run: pnpm launch:check --target=vercel --no-probe
+        run: pnpm launch:check --target=vercel --no-probe --allow-mock-providers
 
   e2e:
     # Advisory on PRs: the browser suite is slower and flakier than the gate

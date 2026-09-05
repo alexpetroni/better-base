@@ -87,7 +87,10 @@ no committed dev default anywhere (secrets, MinIO/compose credentials,
 Stripe webhook dev value), `PUBLIC_SITE_URL` https and matching the
 `SITE_ID`'s domain, live-mode implications (`EMAIL_DRYRUN=false` ⇒
 `RESEND_API_KEY`, no `sk_test_…` key, no mock chat/courier provider unless
-`--allow-mock-providers` acknowledges it), the Vercel extras
+`--allow-mock-providers` acknowledges it), a production env still on dry-run
+email (`EMAIL_DRYRUN=true` or unset sends nothing — a problem outside `--dev`
+unless the same `--allow-mock-providers` acknowledges a rehearsal), the
+Vercel extras
 (`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live image probe: it uploads a
 1×1 PNG with the app's S3 credentials and then asks the selected provider for
 a derivative of it. Under `cloudflare` that means the public origin must

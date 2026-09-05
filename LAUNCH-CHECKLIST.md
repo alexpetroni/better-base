@@ -138,7 +138,9 @@ list applies later to better-life (with its own domain/accounts).
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
       decision to launch with the widget off / mock). `pnpm launch:check`
       refuses a live env (`EMAIL_DRYRUN=false`) still on the mock chat or
-      courier provider unless `--allow-mock-providers` is passed; the boot
+      courier provider — and, since FIX-18, a production env still on
+      dry-run email (`EMAIL_DRYRUN=true`/unset) — unless
+      `--allow-mock-providers` is passed for a deliberate rehearsal; the boot
       log prints `chat provider: <kind>` and `GET /api/health` returns it as
       `chatProvider`, so verify the deployed kind there.
 - [ ] `COURIER_PROVIDER=sameday` + `SAMEDAY_USERNAME`/`SAMEDAY_PASSWORD`/

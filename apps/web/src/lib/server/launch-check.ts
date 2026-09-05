@@ -40,7 +40,8 @@ export interface LaunchCheckOptions {
 	/**
 	 * `--allow-mock-providers`: launching a live env (EMAIL_DRYRUN=false) on
 	 * the mock chat and/or courier provider is a deliberate decision, not a
-	 * mistake (FIX-14).
+	 * mistake (FIX-14); likewise a production env still on dry-run email is a
+	 * rehearsal, not the launch (FIX-18).
 	 */
 	allowMockProviders?: boolean;
 }
@@ -136,6 +137,16 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 	if (env.STRIPE_SECRET_KEY?.startsWith('sk_test_') && env.EMAIL_DRYRUN === 'false') {
 		problems.push(
 			'STRIPE_SECRET_KEY is a TEST key (sk_test_…) in a live env (EMAIL_DRYRUN=false) — set the live key, or keep EMAIL_DRYRUN=true until launch'
+		);
+	}
+
+	// Dry-run email in production is the silent failure (review 2026-09-05
+	// #3): paid orders, issued invoices, and every send a `dryrun` log row that
+	// nobody receives. Unset means dry-run too (email/server.ts). A rehearsal
+	// on purpose passes the same acknowledgement as the mock providers.
+	if (env.EMAIL_DRYRUN !== 'false' && !opts.allowMockProviders) {
+		problems.push(
+			`EMAIL_DRYRUN is "${env.EMAIL_DRYRUN ?? '(unset)'}" — defaults to true: this deploy would send NO email (order confirmations, invoices, shipping notices, nurture); set EMAIL_DRYRUN=false + RESEND_API_KEY, or pass --allow-mock-providers to rehearse on dry-run email on purpose`
 		);
 	}
 

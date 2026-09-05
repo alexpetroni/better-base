@@ -18,7 +18,9 @@
 //               DEPLOY_TARGET=vercel is set, node otherwise)
 //   --allow-mock-providers
 //               acknowledge launching a live env (EMAIL_DRYRUN=false) on the
-//               mock chat and/or courier provider (FIX-14)
+//               mock chat and/or courier provider (FIX-14), or rehearsing a
+//               production env on dry-run email (EMAIL_DRYRUN=true — refused
+//               otherwise outside --dev, FIX-18)
 //
 // Warnings (`warning: …` lines) are advisory: driver/target mismatches, an
 // oversized pool on the neon driver, no error sink. They never fail the run.
@@ -45,7 +47,8 @@ const USAGE =
 const args = new Set(process.argv.slice(2));
 const dev = args.delete('--dev');
 const noProbe = args.delete('--no-probe');
-// A live env on the mock chat/courier provider is refused unless acknowledged.
+// A live env on the mock chat/courier provider, or a production env still on
+// dry-run email, is refused unless acknowledged.
 const allowMockProviders = args.delete('--allow-mock-providers');
 let target: DeployTarget | undefined;
 for (const arg of [...args]) {
