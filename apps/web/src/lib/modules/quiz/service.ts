@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import type { FormConfig } from 'formcomp';
 import type { Db } from '../../db/client.ts';
 import { pillars } from '../../db/schema/core.ts';
@@ -286,6 +286,8 @@ export async function submitQuiz(
 export interface ResultWithQuiz {
 	result: QuizResultRow;
 	quiz: QuizRow;
+	/** The quiz's pillar slug (null when untagged) — the result page gates on it like the quiz page. */
+	pillarSlug: string | null;
 }
 
 export async function getResultWithQuiz(
@@ -293,11 +295,29 @@ export async function getResultWithQuiz(
 	resultId: string
 ): Promise<ResultWithQuiz | null> {
 	const [row] = await deps.db
-		.select({ result: quizResults, quiz: quizzes })
+		.select({ result: quizResults, quiz: quizzes, pillarSlug: pillars.slug })
 		.from(quizResults)
 		.innerJoin(quizzes, eq(quizResults.quizId, quizzes.id))
+		.leftJoin(pillars, eq(quizzes.pillarId, pillars.id))
 		.where(eq(quizResults.id, resultId));
 	return row ?? null;
+}
+
+/**
+ * Published quizzes visible on a site (tagged to one of its active pillars),
+ * for sitemap.xml (FIX-15 — quizzes were missing from it).
+ */
+export async function listPublishedQuizzesForSitemap(
+	deps: QuizDeps,
+	pillarSlugs: string[]
+): Promise<Array<{ slug: string; updatedAt: Date }>> {
+	if (pillarSlugs.length === 0) return [];
+	return deps.db
+		.select({ slug: quizzes.slug, updatedAt: quizzes.updatedAt })
+		.from(quizzes)
+		.innerJoin(pillars, eq(quizzes.pillarId, pillars.id))
+		.where(and(eq(quizzes.status, 'published'), inArray(pillars.slug, pillarSlugs)))
+		.orderBy(asc(quizzes.slug));
 }
 
 /** Latest results with the (optional) claiming subscriber's email — admin view. */

@@ -8,8 +8,10 @@ import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const site = getSite();
-	// Published only: drafts 404 publicly.
-	const found = await getBySlug({ db: getDb() }, params.slug);
+	// Published only, and only when tagged to a pillar this site activates —
+	// the same predicate as the listing and the sitemap: drafts and
+	// de-pillared articles 404 publicly.
+	const found = await getBySlug({ db: getDb() }, params.slug, { pillarSlugs: site.pillars });
 	if (!found) error(404);
 
 	const { article, cover } = found;

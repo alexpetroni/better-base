@@ -1,9 +1,11 @@
+import { error } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
 import { listPublished } from '$lib/modules/blog/server';
 import type { ImageSources } from '$lib/modules/media';
 import { imgSources } from '$lib/modules/media/server';
 import { canonicalUrl } from '$lib/seo';
 import { getSite } from '$lib/server/site';
+import { parsePageParam, pastLastPage } from '$lib/util/page';
 import type { PageServerLoad } from './$types';
 
 export interface BlogCard {
@@ -16,8 +18,10 @@ export interface BlogCard {
 
 export const load: PageServerLoad = async ({ url }) => {
 	const site = getSite();
-	const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+	const page = parsePageParam(url.searchParams.get('page'));
 	const list = await listPublished({ db: getDb() }, { pillarSlugs: site.pillars, page });
+	// Past the end is not a page: 404 instead of an empty listing with its own canonical.
+	if (pastLastPage(page, list.pageCount)) error(404);
 
 	const cards: BlogCard[] = list.items.map(({ article, cover }) => ({
 		slug: article.slug,

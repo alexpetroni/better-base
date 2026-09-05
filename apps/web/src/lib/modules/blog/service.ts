@@ -164,20 +164,24 @@ export async function getArticle(deps: BlogDeps, id: string): Promise<ArticleWit
 	};
 }
 
-/** Fetch by slug. Public callers get published articles only (the default). */
+/**
+ * Fetch by slug. Public callers get published articles only (the default)
+ * and pass the site's active pillars: an article tagged to none of them is
+ * null here exactly as it is absent from `listPublished` and the sitemap
+ * (FIX-15 — the detail page used to answer 200 for de-pillared content).
+ * Admin callers omit `pillarSlugs` and see everything.
+ */
 export async function getBySlug(
 	deps: BlogDeps,
 	slug: string,
-	opts: { includeDrafts?: boolean } = {}
+	opts: { includeDrafts?: boolean; pillarSlugs?: string[] } = {}
 ): Promise<ArticleWithPillars | null> {
 	const [article] = await deps.db.select().from(articles).where(eq(articles.slug, slug));
 	if (!article) return null;
 	if (article.status !== 'published' && !opts.includeDrafts) return null;
-	return {
-		article,
-		pillarSlugs: await pillarSlugsFor(deps.db, ARTICLE_PILLARS, article.id),
-		cover: await coverFor(deps.db, article)
-	};
+	const pillarSlugs = await pillarSlugsFor(deps.db, ARTICLE_PILLARS, article.id);
+	if (opts.pillarSlugs && !pillarSlugs.some((s) => opts.pillarSlugs!.includes(s))) return null;
+	return { article, pillarSlugs, cover: await coverFor(deps.db, article) };
 }
 
 export interface PublishedList {

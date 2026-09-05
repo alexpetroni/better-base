@@ -9,7 +9,17 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const found = await getResultWithQuiz({ db: getDb() }, params.resultId);
-	if (!found || found.quiz.slug !== params.slug || found.quiz.status !== 'published') error(404);
+	// Same gate as the quiz page: published AND tagged to a pillar this site
+	// activates (FIX-15) — a result is not a back door to a hidden quiz.
+	if (
+		!found ||
+		found.quiz.slug !== params.slug ||
+		found.quiz.status !== 'published' ||
+		!found.pillarSlug ||
+		!getSite().pillars.includes(found.pillarSlug)
+	) {
+		error(404);
+	}
 	return {
 		quizTitle: found.quiz.title,
 		quizSlug: found.quiz.slug,
