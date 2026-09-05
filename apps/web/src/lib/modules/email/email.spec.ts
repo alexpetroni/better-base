@@ -5,7 +5,12 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createDb, type Db } from '../../db/client.ts';
 import { createResendTransport } from './resend.ts';
 import { emailLog } from './schema.ts';
-import { createEmailSender, shouldSkipResend, type EmailMessage } from './service.ts';
+import {
+	createEmailSender,
+	EMAIL_SENDING_STALE_MS,
+	shouldSkipResend,
+	type EmailMessage
+} from './service.ts';
 import { renderEmailTemplate } from './templates.ts';
 
 /** A fetch whose request never completes, but that honors its abort signal. */
@@ -97,14 +102,35 @@ describe('email templates', () => {
 });
 
 describe('shouldSkipResend', () => {
-	it('treats delivered, dry-run and in-flight rows as final', () => {
-		expect(shouldSkipResend('sent')).toBe(true);
-		expect(shouldSkipResend('dryrun')).toBe(true);
-		expect(shouldSkipResend('sending')).toBe(true);
+	const now = new Date('2026-09-05T10:00:00Z');
+	const row = (status: 'sent' | 'dryrun' | 'sending' | 'error', ageMs = 0) => ({
+		status,
+		updatedAt: new Date(now.getTime() - ageMs)
+	});
+
+	it('treats delivered rows as final in both modes', () => {
+		expect(shouldSkipResend(row('sent'), { dryRun: true, now })).toBe(true);
+		expect(shouldSkipResend(row('sent'), { dryRun: false, now })).toBe(true);
+	});
+
+	it('treats a dry-run record as final only while the sender runs dry (audit: not a delivery)', () => {
+		expect(shouldSkipResend(row('dryrun'), { dryRun: true, now })).toBe(true);
+		expect(shouldSkipResend(row('dryrun'), { dryRun: false, now })).toBe(false);
+	});
+
+	it('treats an in-flight claim as final until it goes stale', () => {
+		expect(shouldSkipResend(row('sending'), { dryRun: false, now })).toBe(true);
+		expect(
+			shouldSkipResend(row('sending', EMAIL_SENDING_STALE_MS - 1), { dryRun: false, now })
+		).toBe(true);
+		expect(shouldSkipResend(row('sending', EMAIL_SENDING_STALE_MS), { dryRun: false, now })).toBe(
+			false
+		);
 	});
 
 	it('allows retrying failed rows', () => {
-		expect(shouldSkipResend('error')).toBe(false);
+		expect(shouldSkipResend(row('error'), { dryRun: false, now })).toBe(false);
+		expect(shouldSkipResend(row('error'), { dryRun: true, now })).toBe(false);
 	});
 });
 

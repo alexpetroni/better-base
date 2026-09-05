@@ -1,6 +1,6 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, lte, or } from 'drizzle-orm';
 import type { Db } from '../../db/client.ts';
-import { emailLog, type EmailStatus } from './schema.ts';
+import { emailLog, type EmailLogRow, type EmailStatus } from './schema.ts';
 import { renderEmailTemplate, type TemplateData, type TemplateKey } from './templates.ts';
 
 /**
@@ -55,15 +55,39 @@ export type SendEmailOutcome =
 	| { status: 'error'; logId: string; error: string };
 
 export interface EmailSender {
+	/** Callers that reason about email_log rows need to know whether `dryrun` means delivered here. */
+	readonly dryRun: boolean;
 	send<K extends TemplateKey>(input: SendEmailInput<K>): Promise<SendEmailOutcome>;
 }
 
 /**
- * Idempotency decision for an already-logged key: only rows that failed may
- * be retried; delivered, dry-run and in-flight rows are final.
+ * A `sending` claim older than this is presumed dead (a serverless kill
+ * between the claim and the transport) and may be re-claimed. Comfortably
+ * above any transport timeout, so a slow-but-alive delivery is never raced.
  */
-export function shouldSkipResend(status: EmailStatus): boolean {
-	return status === 'sent' || status === 'dryrun' || status === 'sending';
+export const EMAIL_SENDING_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Idempotency decision for an already-logged key (audit 2026-09-03 P1):
+ * - `sent` is final; `error` may always be retried;
+ * - `dryrun` is a RECORD, not a delivery — final only while the sender itself
+ *   runs dry (the documented dry-run soak must not burn the key for launch);
+ * - `sending` is in flight and final until the claim goes stale.
+ */
+export function shouldSkipResend(
+	row: Pick<EmailLogRow, 'status' | 'updatedAt'>,
+	ctx: { dryRun: boolean; now?: Date }
+): boolean {
+	switch (row.status) {
+		case 'sent':
+			return true;
+		case 'error':
+			return false;
+		case 'dryrun':
+			return ctx.dryRun;
+		case 'sending':
+			return (ctx.now ?? new Date()).getTime() - row.updatedAt.getTime() < EMAIL_SENDING_STALE_MS;
+	}
 }
 
 export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
@@ -78,10 +102,12 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 	}
 
 	return {
+		dryRun: cfg.dryRun,
 		async send(input) {
 			// Lowercased once here so the log row AND the transport agree, and
 			// GDPR erasure matches whatever casing the caller passed through.
 			const to = input.to.trim().toLowerCase();
+			const now = new Date();
 			const rendered = renderEmailTemplate(input.template, input.data);
 			const claimStatus: EmailStatus = cfg.dryRun ? 'dryrun' : 'sending';
 
@@ -118,15 +144,27 @@ export function createEmailSender(cfg: EmailSenderConfig): EmailSender {
 					.select()
 					.from(emailLog)
 					.where(eq(emailLog.idempotencyKey, input.idempotencyKey));
-				if (!existing || shouldSkipResend(existing.status)) {
+				if (!existing || shouldSkipResend(existing, { dryRun: cfg.dryRun, now })) {
 					return { status: 'skipped', logId: existing?.id ?? '' };
 				}
-				// A previous attempt failed — re-claim it. The status guard keeps
-				// concurrent retries from both winning.
+				// Re-claim it. The guard repeats shouldSkipResend's rule IN the
+				// UPDATE, so of two concurrent retries only one wins: the loser
+				// re-evaluates the WHERE after the winner's row lock releases and
+				// finds a fresh `sending`/`dryrun` row.
+				const staleCutoff = new Date(now.getTime() - EMAIL_SENDING_STALE_MS);
 				const [reclaimed] = await cfg.db
 					.update(emailLog)
-					.set({ status: claimStatus, error: null, updatedAt: new Date() })
-					.where(and(eq(emailLog.id, existing.id), eq(emailLog.status, 'error')))
+					.set({ status: claimStatus, error: null, updatedAt: now })
+					.where(
+						and(
+							eq(emailLog.id, existing.id),
+							or(
+								eq(emailLog.status, 'error'),
+								and(eq(emailLog.status, 'sending'), lte(emailLog.updatedAt, staleCutoff)),
+								cfg.dryRun ? undefined : eq(emailLog.status, 'dryrun')
+							)
+						)
+					)
 					.returning();
 				if (!reclaimed) return { status: 'skipped', logId: existing.id };
 				claimed = reclaimed;

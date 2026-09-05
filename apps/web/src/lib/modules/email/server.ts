@@ -12,6 +12,7 @@ export { createResendTransport, RESEND_TIMEOUT_MS_DEFAULT } from './resend.ts';
 export { emailLog, type EmailLogRow, type EmailStatus } from './schema.ts';
 export {
 	createEmailSender,
+	EMAIL_SENDING_STALE_MS,
 	shouldSkipResend,
 	type EmailMessage,
 	type EmailSender,
