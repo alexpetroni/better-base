@@ -93,6 +93,8 @@ async function runHandle(input: {
 	rawPath: string;
 	routeId: string | null;
 	headers?: Record<string, string>;
+	/** Observe the event the hooks mutate (locals set by handle). */
+	onEvent?: (event: { locals: App.Locals }) => void;
 }): Promise<HarnessOutcome> {
 	const url = new URL(`http://localhost${input.rawPath}`);
 	const tracing = { enabled: false, root: noopSpan, current: noopSpan };
@@ -112,6 +114,7 @@ async function runHandle(input: {
 		isDataRequest: false,
 		tracing
 	};
+	input.onEvent?.(event);
 	const state = {
 		tracing: {
 			record_span: <T>({ fn }: { fn: (span: typeof noopSpan) => T }) => fn(noopSpan)
@@ -311,5 +314,35 @@ describe('handleSecurityHeaders (audit 2026-09-03: no security headers / CSP any
 		const s3Origin = new URL(process.env.S3_ENDPOINT!).origin;
 		expect(csp).toContain(s3Origin);
 		expect(csp).toMatch(/connect-src [^;]*'self'/);
+	});
+});
+
+/**
+ * FIX-16 (audit "Ops & platform"): every response carries a request id that
+ * the error log line also carries, so one grep matches a user's report to
+ * the server-side record. On Vercel it is the platform's own `x-vercel-id`;
+ * elsewhere a UUID minted per request.
+ */
+describe('request id round-trip (FIX-16)', () => {
+	it('echoes the x-vercel-id as x-request-id and exposes it to the route via locals', async () => {
+		let event: { locals: App.Locals } | undefined;
+		const outcome = await runHandle({
+			rawPath: '/blog',
+			routeId: '/(public)/blog',
+			headers: { 'x-vercel-id': 'fra1::abcde-1725000000000-0123456789ab' },
+			onEvent: (e) => (event = e)
+		});
+		expect(outcome.resolved).toBe(true);
+		expect(outcome.response!.headers.get('x-request-id')).toBe(
+			'fra1::abcde-1725000000000-0123456789ab'
+		);
+		expect(event?.locals.requestId).toBe('fra1::abcde-1725000000000-0123456789ab');
+	});
+
+	it('mints a UUID when no platform id is present', async () => {
+		const outcome = await runHandle({ rawPath: '/blog', routeId: '/(public)/blog' });
+		expect(outcome.response!.headers.get('x-request-id')).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+		);
 	});
 });
