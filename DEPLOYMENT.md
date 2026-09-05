@@ -168,7 +168,8 @@ pnpm db:migrate            # applies apps/web/drizzle/*.sql (additive, committed
 pnpm seed:base             # pillars for SITE_ID, legal pages, placeholder settings,
                            #   nurture sequences, initial content from content/
 pnpm seed:demo             # demo article/quiz/products — dev and staging only
-pnpm user:create -- --email you@site.ro --password '…min 12 chars…' --role admin
+pnpm user:create -- --email you@site.ro --role admin        # prompts for the password (no echo)
+# non-interactive: printf '%s\n' "$ADMIN_PASSWORD" | pnpm user:create -- --email you@site.ro --role admin --password-stdin
 ```
 
 Notes:
@@ -799,7 +800,7 @@ keeps the schema current):
 DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
 DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm seed:base      # pillars, pages, settings, initial content
 DATABASE_URL="…-pooler…" pnpm media:blurhash                           # placeholders for imported media
-DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin --password '…'
+DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin   # prompts for the password
 ```
 
 `pnpm seed:base` imports the initial content bundles (`content/common`,

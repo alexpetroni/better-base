@@ -80,7 +80,7 @@ say "Seeding demo content for SITE_ID=${SITE_ID}"; pnpm db:seed
 # --- 3. optional admin user (idempotent) ---
 if [ -n "${ADMIN_EMAIL:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
   say "Upserting admin ${ADMIN_EMAIL}"
-  pnpm user:create -- --email "$ADMIN_EMAIL" --password "$ADMIN_PASSWORD" --role admin --name "${ADMIN_NAME:-Admin}" || true
+  printf '%s\n' "$ADMIN_PASSWORD" | pnpm user:create -- --email "$ADMIN_EMAIL" --password-stdin --role admin --name "${ADMIN_NAME:-Admin}" || true
 fi
 
 # --- 4. build ---
