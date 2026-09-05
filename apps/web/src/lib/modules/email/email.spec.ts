@@ -166,11 +166,45 @@ describe('resend transport request shape', () => {
 			subject: 's',
 			html: '<p>h</p>',
 			text: 't',
+			idempotencyKey: 'shape-1',
 			headers: { 'List-Unsubscribe': '<https://example.ro/unsubscribe/t>' }
 		});
 		const body = JSON.parse(fetchFn.mock.calls[0][1]!.body as string);
 		expect(body.headers).toEqual({ 'List-Unsubscribe': '<https://example.ro/unsubscribe/t>' });
 	});
+
+	// Review 2026-09-05 #4: a timeout AFTER Resend accepted the message was
+	// retried as a brand-new request — a real duplicate customer email. The
+	// local email_log key travels as Resend's Idempotency-Key, so the retry of
+	// the same row is the same request to Resend.
+	it('sends the email_log key as Idempotency-Key, identical across a timeout retry', async () => {
+		let calls = 0;
+		const fetchFn = vi.fn<typeof fetch>((url, init) => {
+			calls += 1;
+			if (calls === 1) return hangingFetch(url, init);
+			return Promise.resolve(Response.json({ id: 're_accepted' }));
+		});
+		const transport = createResendTransport('re_key_not_real', fetchFn, 50);
+		const message: EmailMessage = {
+			from: 'a@b.ro',
+			to: 'x@y.ro',
+			subject: 'Comanda ta',
+			html: '<p>h</p>',
+			text: 't',
+			idempotencyKey: 'order-confirm:cs_abc'
+		};
+		await expect(transport.send(message)).rejects.toThrow(/timeout/i);
+		await expect(transport.send(message)).resolves.toEqual({ providerId: 're_accepted' });
+
+		const headerOf = (call: number) =>
+			(fetchFn.mock.calls[call][1]!.headers as Record<string, string>)['Idempotency-Key'];
+		expect(headerOf(0)).toBe('order-confirm:cs_abc');
+		expect(headerOf(1)).toBe('order-confirm:cs_abc');
+
+		await transport.send({ ...message, idempotencyKey: 'order-confirm:cs_def' });
+		expect(headerOf(2)).toBe('order-confirm:cs_def');
+		expect(headerOf(2)).not.toBe(headerOf(1));
+	}, 3_000);
 });
 
 // Audit 2026-09-03 P1: Resend errors were unclassified — a 403/422 (bad
@@ -181,7 +215,8 @@ describe('resend transport error classification', () => {
 		to: 'x@y.ro',
 		subject: 's',
 		html: '<p>h</p>',
-		text: 't'
+		text: 't',
+		idempotencyKey: 'classify-1'
 	};
 	const respond = (status: number, body = `{"message":"status ${status}"}`) =>
 		(async () => new Response(body, { status })) as unknown as typeof fetch;
@@ -230,7 +265,8 @@ describe('resend transport timeout', () => {
 				to: 'x@y.ro',
 				subject: 's',
 				html: '<p>h</p>',
-				text: 't'
+				text: 't',
+				idempotencyKey: 'timeout-1'
 			})
 		).rejects.toThrow(/timeout/i);
 	}, 3_000);
@@ -480,6 +516,34 @@ describe('sendEmail idempotency (integration)', () => {
 		expect(transport.send).not.toHaveBeenCalled();
 		expect((await rowsFor('fresh-1'))[0].status).toBe('sending');
 	});
+
+	it('the retry of a timed-out row repeats the SAME Idempotency-Key to Resend (a duplicate before the fix)', async () => {
+		let calls = 0;
+		const fetchFn = vi.fn<typeof fetch>((url, init) => {
+			calls += 1;
+			if (calls === 1) return hangingFetch(url, init);
+			return Promise.resolve(Response.json({ id: 're_accepted' }));
+		});
+		const sender = createEmailSender({
+			db,
+			dryRun: false,
+			from: 'a@b.ro',
+			transport: createResendTransport('re_key_not_real', fetchFn, 50)
+		});
+		// Resend accepted the first request but the socket timed out on our side…
+		expect((await sender.send(input('idem-retry-1'))).status).toBe('error');
+		// …so the next drain tick retries the same email_log row.
+		expect((await sender.send(input('idem-retry-1'))).status).toBe('sent');
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+		const keys = fetchFn.mock.calls.map(
+			(call) => (call[1]!.headers as Record<string, string>)['Idempotency-Key']
+		);
+		expect(keys).toEqual(['idem-retry-1', 'idem-retry-1']);
+		expect((await rowsFor('idem-retry-1'))[0]).toMatchObject({
+			status: 'sent',
+			providerId: 're_accepted'
+		});
+	}, 3_000);
 
 	it('a hung Resend socket becomes a retryable error row, not a pinned request (hung before the fix)', async () => {
 		const sender = createEmailSender({
