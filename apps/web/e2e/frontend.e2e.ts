@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 // hreflang alternates, double-submit protection on public forms and the
 // cookie banner not occluding the chat widget on mobile. Runs on both sites.
 
-test('home page ships full SEO metadata and hreflang alternates', async ({ page }) => {
+test('home page ships full SEO metadata and no dishonest hreflang alternates', async ({ page }) => {
 	await page.goto('/');
 
 	const head = page.locator('head');
@@ -13,14 +13,14 @@ test('home page ships full SEO metadata and hreflang alternates', async ({ page 
 	await expect(head.locator('meta[property="og:title"]')).toHaveAttribute('content', /.+/);
 	await expect(head.locator('meta[property="og:type"]')).toHaveAttribute('content', 'website');
 
-	// hreflang: one alternate per locale + x-default, as real <link> tags
-	// (the old display:none anchor hack advertised nothing to crawlers).
-	await expect(head.locator('link[rel="alternate"][hreflang="ro"]')).toHaveCount(1);
-	await expect(head.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute(
-		'href',
-		/\/en\/?$/
-	);
-	await expect(head.locator('link[rel="alternate"][hreflang="x-default"]')).toHaveCount(1);
+	// hreflang (FIX-15, audit P1): the sites are single-locale (`ro`) and
+	// paraglide does not resolve the locale from the URL, so NO alternates are
+	// emitted — the old assertion required an `hreflang="en"` pointing at
+	// `/en/…`, a Romanian page with a canonical back to `/`, i.e. a crawlable
+	// duplicate tree with conflicting signals. Alternates come back only when
+	// a site config lists more than one locale AND the `url` strategy is on.
+	await expect(head.locator('link[rel="alternate"][hreflang]')).toHaveCount(0);
+	expect(await page.content()).not.toMatch(/hreflang="en"|href="[^"]*\/en\/?"/);
 });
 
 test('newsletter submit disables while the POST is in flight (no double-submit)', async ({
