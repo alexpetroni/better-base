@@ -11,7 +11,8 @@ import {
 	type SettingJsonValue,
 	type SettingKey
 } from '$lib/modules/settings';
-import { loadSettingsForAdmin, saveSettings } from '$lib/modules/settings/server';
+import { recordAdminAudit } from '$lib/modules/auth';
+import { loadSettings, loadSettingsForAdmin, saveSettings } from '$lib/modules/settings/server';
 import { failResult, formStr, requireAdmin } from '$lib/server/forms';
 import { formatCents } from '$lib/util/money';
 import type { Actions, PageServerLoad } from './$types';
@@ -76,8 +77,38 @@ export const actions: Actions = {
 		}
 		if (Object.keys(errors).length) return fail(400, { group, errors, values });
 
+		// Read-before-write so the audit row can name what actually changed
+		// (FIX-18): the row lists the changed keys, and for the bank details
+		// printed on every invoice the old and new values too.
+		const before = await loadSettings({ db: getDb() });
 		const result = await saveSettings({ db: getDb() }, entries, user.id);
 		if (!result.ok) return failResult(result, { group, errors, values });
+
+		const changed = (Object.keys(entries) as SettingKey[]).filter(
+			(key) => entries[key] !== before[key]
+		);
+		if (changed.length) {
+			await recordAdminAudit(getDb(), {
+				actor: user.email,
+				action: 'settings-save',
+				target: settingsSaveAuditTarget(group, changed, before, entries)
+			});
+		}
 		return { saved: true, group };
 	}
 };
+
+/** Keys whose old → new values the audit row spells out (FIX-18). */
+const AUDITED_VALUE_KEYS: readonly SettingKey[] = ['company.iban', 'company.bank'];
+
+function settingsSaveAuditTarget(
+	group: string,
+	changed: SettingKey[],
+	before: Record<SettingKey, unknown>,
+	entries: Partial<Record<SettingKey, SettingJsonValue>>
+): string {
+	const details = changed
+		.filter((key) => AUDITED_VALUE_KEYS.includes(key))
+		.map((key) => `${key}: ${JSON.stringify(before[key])} → ${JSON.stringify(entries[key])}`);
+	return `${group}: ${changed.join(', ')}${details.length ? ` (${details.join('; ')})` : ''}`;
+}

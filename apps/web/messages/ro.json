@@ -366,6 +366,7 @@
 	"admin_settings_err_email": "Adresă de email invalidă.",
 	"admin_settings_err_number": "Număr invalid.",
 	"admin_settings_err_cui": "CUI invalid (ex. RO12345678).",
+	"admin_settings_err_iban": "IBAN invalid — cifra de control nu corespunde (verifică dacă un caracter e greșit sau inversat).",
 	"admin_settings_err_value": "Valoare invalidă.",
 	"consent_aria_label": "Consimțământ cookie-uri",
 	"consent_text": "Folosim cookie-uri strict necesare pentru funcționarea site-ului. Cookie-urile de analiză se activează doar cu acordul tău.",

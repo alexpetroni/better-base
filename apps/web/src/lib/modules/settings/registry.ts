@@ -1,4 +1,5 @@
 import { cuiPrefixMismatch, isValidCui } from '../../util/cui.ts';
+import { ibanMod97, normalizeIban } from '../../util/iban.ts';
 import { parseLeiToCents } from '../../util/money.ts';
 import { BUCHAREST_COUNTY_CODE, bucharestSector, isRoCountyCode } from '../../util/ro-counties.ts';
 import { parseVatRateSchedule } from '../../util/vat-rates.ts';
@@ -31,6 +32,7 @@ export type SettingErrorCode =
 	| 'invalid-email'
 	| 'invalid-number'
 	| 'invalid-cui'
+	| 'invalid-iban'
 	| 'invalid-vat-rate'
 	| 'invalid-county'
 	| 'too-long';
@@ -72,6 +74,8 @@ export type SettingSpec = BaseSpec &
 				maxLength?: number;
 				/** Rule beyond a regex, on the trimmed non-empty value; returns the error code or null. */
 				validate?: (value: string) => SettingErrorCode | null;
+				/** Canonical stored form of the trimmed input (the IBAN: upper case, no spaces). */
+				normalize?: (value: string) => string;
 		  }
 		| { kind: 'url' | 'email'; default: string }
 		| { kind: 'boolean'; default: boolean }
@@ -188,7 +192,16 @@ export const SETTINGS_REGISTRY = {
 		clientSafe: true,
 		placeholder: ph('telefonul de contact')
 	},
-	'company.iban': { kind: 'text', default: '', launchRequired: false, clientSafe: false },
+	// Printed on every invoice/PDF and carried as the e-Factura
+	// PayeeFinancialAccount — checksummed like the CUI (FIX-18).
+	'company.iban': {
+		kind: 'text',
+		default: '',
+		launchRequired: false,
+		clientSafe: false,
+		validate: (value) => (ibanMod97(value) ? null : 'invalid-iban'),
+		normalize: normalizeIban
+	},
 	'company.bank': { kind: 'text', default: '', launchRequired: false, clientSafe: false },
 
 	// --- legal.* — consumer-protection links the footer must carry ----------
@@ -511,7 +524,10 @@ export function parseSettingInput(key: SettingKey, raw: string | boolean): Parse
 			return value === null ? { ok: false, code: 'invalid-number' } : { ok: true, value };
 		}
 		default:
-			return { ok: true, value: trimmed };
+			return {
+				ok: true,
+				value: 'normalize' in spec && spec.normalize && trimmed ? spec.normalize(trimmed) : trimmed
+			};
 	}
 }
 

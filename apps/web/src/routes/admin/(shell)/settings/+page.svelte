@@ -53,6 +53,7 @@
 		'invalid-email': m.admin_settings_err_email,
 		'invalid-number': m.admin_settings_err_number,
 		'invalid-cui': m.admin_settings_err_cui,
+		'invalid-iban': m.admin_settings_err_iban,
 		'invalid-vat-rate': m.admin_settings_err_vat_rate,
 		'invalid-county': m.admin_settings_err_county,
 		'too-long': m.admin_settings_err_too_long

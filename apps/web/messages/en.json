@@ -366,6 +366,7 @@
 	"admin_settings_err_email": "Invalid email address.",
 	"admin_settings_err_number": "Invalid number.",
 	"admin_settings_err_cui": "Invalid CUI (e.g. RO12345678).",
+	"admin_settings_err_iban": "Invalid IBAN — the checksum does not match (check for a mistyped or transposed character).",
 	"admin_settings_err_value": "Invalid value.",
 	"consent_aria_label": "Cookie consent",
 	"consent_text": "We use strictly necessary cookies to run this site. Analytics cookies are enabled only with your consent.",

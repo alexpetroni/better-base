@@ -15,7 +15,8 @@ export type AdminAuditAction =
 	| 'nurture-toggle'
 	| 'nurture-retry'
 	| 'efactura-requeue'
-	| 'legal-page-save';
+	| 'legal-page-save'
+	| 'settings-save';
 
 export async function recordAdminAudit(
 	db: Db,
