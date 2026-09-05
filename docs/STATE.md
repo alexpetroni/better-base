@@ -3163,3 +3163,133 @@ specs pass on the same build (2 passed) and the full run was 91 passed,
 `chat provider: mock` boot line. The touched DB specs (chat, retention,
 nurture: 54 tests) also pass under `DB_DRIVER=neon` over the local proxy;
 `DEPLOY_TARGET=vercel pnpm build` succeeds. No migration in this phase.
+
+## Remediation FIX-15 (audit 2026-09-03 P1 "Media, content & blog" ×3, P1 hreflang, P2 quiz / content / media-ref / `?page=` — batch 2, phase 7)
+
+Quarantine confirm, safe re-seed, pillar-gated detail pages + sitemap,
+locale truth, quiz safety, media refs + paginated library. One session,
+test-first per group (`4c11236` → `ba3443a` quarantine + finalize + SVG allowlist,
+`5c6404d` → `b3d98ee` create-only seed / import overwrite / atomic import /
+deterministic export / strict parseBundle, `454e435` → `fc9ead3` visibility +
+sitemap + `?page=`, `af66ecf` → `22b33cf` hreflang, `9bfc0df` → `9af3f28` quiz
+safety, `7a40a03` → `38bf61e` media refs + pagination). **No migration.**
+
+**New scripts:** `pnpm seed:base` (pillars, legal pages, placeholder
+settings, nurture definitions, initial content — safe on a live site),
+`pnpm seed:demo` (demo articles/quiz/products, create-only), `pnpm db:seed`
+= both (`scripts/seed.ts base|demo|all`). `pnpm content import|import-dir
+--overwrite` replaces existing slugs (default: skip). **New env / flags:**
+none. **New constants:** `PENDING_PREFIX = 'pending/'` + `pendingKeyFor`
+(media/validation), `IMMUTABLE_CACHE_CONTROL` (`src/lib/server/media-objects.ts`),
+`MEDIA_PAGE_SIZE = 48`, `DEFAULT_NUMERIC_BOUND = 1000` (quiz scoring).
+**New files:** `src/lib/server/media-objects.ts` (`finalizeMediaObject`,
+framework-free so the seed/content CLIs run it), `src/lib/util/page.ts`
+(`parsePageParam`, `pastLastPage`), `src/lib/modules/quiz/media-ref.ts`,
+`src/routes/admin/(shell)/media/library/+server.ts` (picker pages),
+`src/lib/messages.spec.ts` (ro/en key parity), route specs
+`src/routes/(public)/blog/blog-routes.spec.ts` and
+`src/routes/(public)/quiz/quiz-routes.spec.ts` (real loads as the sleep
+site, `$lib/db` + `$lib/server/site` mocked like the sitemap spec).
+`packages/formcomp` gains a `./conditions` subpath export (the pure
+`evaluateCondition`), so the scoring engine evaluates conditions without
+pulling `.svelte` into node.
+
+**Storage layout (documented in DEPLOYMENT.md §5 and the media README):**
+`pending/<uuid>.<ext>` — presigned uploads, NEVER served (MinIO bucket
+policy now carries an explicit `Deny s3:GetObject` on `pending/*`; on R2 a
+WAF rule on the media host, LAUNCH-CHECKLIST has the curl check);
+`uploads/<yyyy>/<mm>/<slug>-<8 hex>.<ext>` — served originals minted by
+confirm; `seed/…` — demo covers. Every served image goes through
+`finalizeMediaObject`: rasters are a `CopyObject` (`MetadataDirective:
+REPLACE`) from the pending key with `Cache-Control: public,
+max-age=31536000, immutable`; SVGs are re-written sanitized with
+`Content-Disposition: attachment` (+ the cache header); the pending object
+is deleted. `storage.putObject(key, body, mime, headers?)` and the new
+`storage.copyObject(from, to, mime, headers?)` replace
+`setContentDisposition` (gone).
+
+**Behavior changes the next phase must know:**
+
+- `requestUpload` returns a `pending/` key; `confirmUpload` returns a row
+  whose `key` DIFFERS from the ticket key (the browser client already used
+  the returned row). An "SVG" upload that is not an SVG document is refused
+  (`invalid-mime`, detail `not an SVG`) instead of stored. `sanitizeSvg`
+  drops `<style>` and any attribute whose value has `@import` or a non-`#`
+  `url(…)`; `fill="url(#g)"` survives. `media.spec`'s fake transformer is
+  keyed by the filename slug the served key embeds (the key is minted at
+  confirm).
+- Demo seeds are create-only and return the number CREATED (0 on re-run);
+  `seedDemoQuiz` still returns the slug. `importContent` returns `action:
+  'skipped'` for an existing slug (no media written) unless
+  `options.overwrite`; the row + join rows are written in one
+  `db.transaction`; `exportContent` orders media by key then id and pillars
+  by `pillars.sort`; `parseBundle` rejects unknown keys at every level
+  (allowed keys derived from the drizzle tables minus
+  `BUNDLE_EXCLUDED_COLUMNS`, so a new column still round-trips). `init.ts`
+  prints `–` lines for skipped files. Three old assertions that encoded
+  overwrite-by-default (`init.spec` site-overrides-common and idempotent
+  re-run, `content.spec` quiz/product second import) now expect `skipped`
+  and assert `updated` under `overwrite` — commit messages say so.
+- `getBySlug(deps, slug, { pillarSlugs })` returns null when the article
+  is tagged to none of them (admin callers omit it); `/blog/[slug]` passes
+  the site's pillars. `getResultWithQuiz` returns `pillarSlug` and the
+  result page gates on it like the quiz page. `listPublishedQuizzesForSitemap`
+  feeds `/quiz/<slug>` entries into sitemap.xml. `/blog?page=` and
+  `/admin/media?page=` go through `parsePageParam` (non-integers → 1) and
+  404 past the last page.
+- `SiteConfig.locales` is `['ro']` on both sites and is the single source
+  for the subscriber locale AND hreflang: `hreflangAlternates` (`$lib/seo`,
+  pure) emits entries only for >1 locale AND `'url'` in paraglide's runtime
+  `strategy` — today nothing. The root layout load passes `site.locales`.
+  `e2e/frontend.e2e.ts` now asserts zero `link[rel=alternate][hreflang]`
+  and no `/en/` href (the old `/en/` assertion was the audit's bug).
+- Quiz: `updateQuiz` on a PUBLISHED quiz validates the merged form +
+  scoring with `validateForPublish` → `not-publishable` (admin editor
+  renders it); `validateFormSchema` rejects unknown question types
+  (`QUESTION_TYPES satisfies Record<QuestionType, true>`); `scoreQuiz`
+  evaluates step/group/question conditions to a fixpoint
+  (`visibleQuestions`) — hidden questions neither score nor count in
+  `maxScore`; map answers coerced by type (arrays only for multi-select,
+  each value once; arrays/objects elsewhere → 0); numerics accept
+  numbers/numeric strings, clamped to `[min ?? -1000, max ?? 1000]`
+  before multiplier and cap (`maxScore` stays `null` for an unbounded
+  numeric — the bound is a safety cap, not a semantic max).
+- Media refs: `mediaRefPattern(ref)` (`$lib/util/media-refs`) is a
+  Postgres/JS regex used with `~` by the articles, products and (new)
+  quizzes checks — titled refs `![a](media:ID "t")` count, `ID2` does not.
+  `MEDIA_REFERENCE_CHECKS` = articles, products, quizzes (spec pins it).
+  `listMedia(deps, { page, pageSize })` returns `MediaPage`;
+  `loadLibraryImages(page)` returns `LibraryPage`; `MediaPicker` takes
+  `library` (page 1) and fetches `/admin/media/library?page=N`;
+  `imageSources`/`imgSources` accept `placeholder: false` (library and
+  picker thumbs skip the blurhash decode); the product editor's cover and
+  gallery thumbs come from `getProduct`'s own media rows (`productThumbs`).
+
+**Closed by FIX-15:**
+
+- P1 media "SVG sanitize at rest is bypassable; import/seed never
+  sanitize" — closed (quarantine + finalize + allowlist; integration tests
+  for the re-PUT after confirm, the pending 403, the cache header, the
+  imported and seeded SVGs; svg unit spec).
+- P1 media "`db:seed` / `content:init` overwrite live data" — closed
+  (create-only demo seed, `seed:base`/`seed:demo`, import skip +
+  `--overwrite`, DEPLOYMENT §4/§12 corrected).
+- P1 media "Blog detail ignores pillar activity" (+ quiz result pages,
+  quizzes absent from the sitemap) — closed.
+- P1 "hreflang `en` points at Romanian pages" — closed with the honest
+  option (no alternates on a single-locale site; policy in DEPLOYMENT §12).
+- P2 quiz (publish-state save, scoring shape, hidden questions in
+  `maxScore`, `?page=1.5` → 500) — closed.
+- P2 content (import not atomic, export order, unknown bundle keys) — closed.
+- P2 media refs (titled refs, quiz intros), unbounded admin library +
+  per-row blurhash decode, missing `Cache-Control` on originals — closed.
+
+**Deferred / not done, on purpose:**
+
+- A launch-check probe for the `pending/` rule on the media host — the
+  phase asks for documentation (DEPLOYMENT §5 + a LAUNCH-CHECKLIST curl);
+  a probe would be the natural next step next to the fiscal privacy probe.
+- Sweeping abandoned `pending/` objects (an R2 lifecycle rule is documented;
+  locally they are harmless orphans).
+- "Write-once storage freezes defective renders" from the same P2 bullet
+  belongs to the invoice module (FIX-12 territory), not this phase.
