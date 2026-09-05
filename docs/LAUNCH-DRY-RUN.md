@@ -9,6 +9,15 @@ actually executed; outputs are quoted from the run. Steps the walk proved
 wrong or missing in the documents were fixed in the same commit (list at the
 end).
 
+> **Not rehearsed since (FIX-16 note, 2026-09-05):** this walk ran on the
+> `imgproxy` image provider, which was the default at the time. The default
+> is now `IMAGE_PROVIDER=cloudflare` (DEPLOYMENT.md §6) and that provider
+> has NOT been exercised locally — it needs a real zone with Image
+> Transformations enabled, so its first proof is the production
+> `launch:check` image probe and step 3 of §11. Also since this run:
+> `/api/health` split into liveness + `/api/health/ready`, `db:migrate`
+> wrapped in the advisory-lock script, `user:create` prompts for the password.
+
 **Environment**: local docker compose (Postgres 16 on host port 5433, MinIO,
 imgproxy, neon-proxy), adapter-node build served by `vite preview` on
 4173 (sleep) / 4174 (life), mock Stripe / mock chat / mock courier,
@@ -83,7 +92,7 @@ reload restore, a11y and CLS/perf assertions.
 | Gate | Command | Result |
 | --- | --- | --- |
 | adapter-node build | `pnpm build` | green (serves the walk above) |
-| Vercel build | `DEPLOY_TARGET=vercel pnpm build` | green (see STATE.md NEXT-10 gate record) |
+| Vercel build | `DEPLOY_TARGET=vercel pnpm build` | green (see docs/CHANGELOG.md, NEXT-10 entry) |
 | pg driver | `pnpm lint && pnpm check && pnpm test:unit` | green |
 | neon driver | `docker compose --profile neon up -d` + `pnpm test:neon` | green |
 

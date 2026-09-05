@@ -19,8 +19,9 @@ list applies later to better-life (with its own domain/accounts).
       start early). A different courier means implementing another
       `CourierProvider` adapter first (DEPLOYMENT.md §7 "Shipping").
 - [ ] Deploy target decided and provisioned: a VPS/PaaS + Postgres 16
-      (adapter-node, DEPLOYMENT.md §3–§4) or Vercel + Neon (§12); automated
-      database backups enabled and restore tested once.
+      (adapter-node, DEPLOYMENT.md §3–§4) or Vercel + Neon (§12); a SECOND
+      storage provider + its bucket for the nightly backups
+      (`.github/workflows/backup.yml` secrets, `docs/RESTORE.md`).
 - [ ] Image provider decided: `IMAGE_PROVIDER=cloudflare` needs no extra
       account or box (the default — §6). Only if you deliberately choose
       `imgproxy` instead: a Fly.io account, or the adapter-node VPS hosting it
@@ -218,7 +219,7 @@ list applies later to better-life (with its own domain/accounts).
       admin_audit order by at desc`) as part of any incident response.
       Editors can no longer open `/admin/pages` (legal pages are admin-only)
       or see subscriber emails in the quiz editor. TOTP for admins is NOT
-      shipped yet — planned next batch (see STATE.md, FIX-9 section).
+      shipped yet — planned next batch (see docs/CHANGELOG.md, FIX-9 entry).
 
 ## Ops
 
@@ -229,7 +230,7 @@ in the split boxes.
 - [ ] GitHub Actions repository secret `DIRECT_DATABASE_URL` set (repo →
       Settings → Secrets and variables → Actions) and the `migrate` workflow
       run green once by hand (Actions → migrate → Run workflow) — its log
-      prints the applied migration list (§12 "CI migrations").
+      prints the applied migration list (§12 "Ordered deploy").
 - [ ] First-deploy setup ran from a checkout with the prod env:
       `pnpm seed:base` (pillars, pages, settings, initial content — safe to
       re-run, never reverts admin edits), `pnpm media:blurhash` (image
@@ -278,12 +279,23 @@ in the split boxes.
       (DEPLOYMENT.md §7 "Shipping" step 5) and every observed `statusId`
       added to `SAMEDAY_STATUS_BY_ID`; no "Sameday status unknown" warn line
       in the logs afterwards.
-- [ ] Uptime monitor pointed at `https://bettersleep.ro/api/health`
-      (alert on non-200).
+- [ ] Uptime monitor pointed at `https://bettersleep.ro/api/health/ready`
+      (readiness: db + storage; alert on non-200). `/api/health` is liveness
+      only and never fails on a dependency.
 - [ ] Log collection captures the app's stderr JSON lines (Vercel: a log
-      drain on the project); someone is notified on `level:error` spikes.
-- [ ] Database backup + restore drill done ONCE before launch (Neon: a
-      point-in-time restore tried once from the console).
+      drain on the project) and/or `ERROR_REPORT_URL` points at a sink;
+      someone is notified on `level:error` spikes. Every line carries the
+      `requestId` the error page shows.
+- [ ] Backups green for 7 consecutive nights (Actions → backup, one run per
+      site in `deploy/sites.json`) AND one verified restore done per
+      `docs/RESTORE.md` (dump → fresh Neon branch → `db:status` current →
+      `launch:check` clean → an invoice downloaded from the restored site).
+      Date and dump file name: ____________
+- [ ] Ordered deploy wired (DEPLOYMENT.md §12 "Ordered deploy"): Vercel
+      automatic production deploys OFF (previews on, on Neon branches), Build
+      Command `pnpm db:status && pnpm build`, GitHub secrets set, branch
+      protection requires `ci / gate`; the first Actions run on `main` was
+      watched end to end (gate → migrate → deploy) by a human.
 
 ## Final smoke (on production, after everything above)
 

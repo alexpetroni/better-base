@@ -56,7 +56,7 @@ export default defineConfig(
 	},
 	{
 		// Inside a module, a `../<sibling>/…` import reaches into ANOTHER module's
-		// internals. Allowed cross-module coupling (see docs/STATE.md):
+		// internals. Allowed cross-module coupling (see docs/ARCHITECTURE.md):
 		//   - `../<module>/schema.ts` at runtime — FK relations/joins in one shared
 		//     db make table objects unavoidable;
 		//   - `import type` of anything — erased at runtime, rename-safe via tsc.

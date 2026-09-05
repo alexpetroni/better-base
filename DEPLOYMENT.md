@@ -150,10 +150,15 @@ adapter-node's trust explicitly (env vars, read at runtime):
   to a header your edge does not strip/overwrite from client requests —
   that turns the rate limiter keys client-spoofable.
 
-Health: `GET /api/health` returns `200 {status:'ok', chatProvider:'anthropic'|'mock'}` when the database and
+Health (FIX-16): `GET /api/health` is LIVENESS — `200 {status:'ok', site,
+commit, chatProvider}` with no I/O, so a storage blip never drains an
+instance that can still serve pages; `GET /api/health/ready` is READINESS —
+`200 {status:'ok', checks:{db,storage}, chatProvider}` when the database and
 the bucket are reachable, `503` otherwise — point your uptime checks and load
-balancer at it. Unhandled errors are logged to stderr as one JSON object per
-line (`ts`, `level`, `errorId`, `status`, `method`, `path`, `message`,
+balancer at `/ready`. Every response carries `x-request-id` (Vercel's
+`x-vercel-id`, else a UUID) and the error page shows it. Unhandled errors are
+logged to stderr as one JSON object per line (`ts`, `level`, `errorId`,
+`requestId`, `status`, `method`, `path`, `message`,
 `stack`); the user-facing error page shows the matching `errorId`.
 
 ## 4. Database: create, migrate, seed
@@ -644,7 +649,9 @@ Content shared between sites travels via `pnpm content export/import` (§9).
 Rehearsed end-to-end against the local stack on 2026-08-08 — the executed
 walk, with commands and outputs, is `docs/LAUNCH-DRY-RUN.md`.
 
-1. `curl https://<site>/api/health` → `200 {"status":"ok",…}`.
+1. `curl https://<site>/api/health` → `200 {"status":"ok","site":"sleep","commit":"<sha>",…}`
+   (liveness: the build you expect) and `curl https://<site>/api/health/ready`
+   → `200 {"status":"ok","checks":{"db":"ok","storage":"ok"},…}` (readiness).
 2. Open `/` — pillars render, cookie banner appears, footer links to the
    legal pages work and (once `/admin/settings` is filled) the footer shows
    the company identification + ANPC SAL/SOL links.
@@ -734,7 +741,11 @@ one host, which is exactly the coupling this seam removed.
 | `DATABASE_URL` | Neon **pooled** URL (`…-pooler.…neon.tech/db?sslmode=require`) | Functions are short-lived; the pooler absorbs their connection churn. |
 | `DIRECT_DATABASE_URL` | Neon **unpooled** URL | Migrations only. DDL through PgBouncer's transaction mode is unreliable; `drizzle.config.ts` prefers this and falls back to `DATABASE_URL`. |
 | `CRON_SECRET` | `openssl rand -hex 32` | Guards the four cron routes below. Vercel Cron sends it as `Authorization: Bearer …` automatically. |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | `15000` | A suspended Neon compute takes seconds to wake; the 5 s default sheds the first request after an idle period as a pool timeout. |
+| `ERROR_REPORT_URL` | optional | Sink for the structured error lines (posted via `waitUntil` after the response). `launch:check` warns when unset; a Vercel log drain is the alternative. |
 | `ADDRESS_HEADER`, `XFF_DEPTH` | **leave unset** | Vercel resolves the client IP itself. Setting them here would let a caller spoof `getClientAddress()` and defeat every rate limit. |
+| `NODE_ENV` | **leave unset** | Vercel sets it for the build and the runtime. Setting `production` in the project env breaks the root `prepare` (formcomp's devDependencies are skipped and the build cannot resolve `formcomp`). |
+| `ENABLE_EXPERIMENTAL_COREPACK` | `1` | Makes Vercel honor `packageManager` (pnpm 11.10.0) instead of a pnpm derived from the lockfile version. |
 
 Everything else — `SITE_ID`, `PUBLIC_SITE_URL`, the S3/R2 block, the image
 provider block, Stripe, Resend, chat — is identical to §2. Boot validation is unchanged,
@@ -750,11 +761,24 @@ Vercel dashboard → New Project → import the repo:
   install must run at the repo root so pnpm builds `packages/formcomp` via its
   `prepare` script. Its `dist/` is gitignored, so an install scoped to
   `apps/web` produces a build that cannot resolve `formcomp`.
-- **Build Command**: `pnpm build` (the adapter switches itself: Vercel sets
-  `VERCEL=1`; `vite.config.ts` picks `adapter-vercel`, otherwise `adapter-node`)
+- **Build Command**: `pnpm db:status && pnpm build` — belt and braces: a
+  build ahead of the schema (a migration still pending on the target database)
+  refuses to build instead of shipping code that 500s until the migration
+  lands (`scripts/migrate-status.ts` exits non-zero while anything is
+  pending). The adapter switches itself: Vercel sets `VERCEL=1`;
+  `vite.config.ts` picks `adapter-vercel`, otherwise `adapter-node`.
 - **Output**: `.vercel/output` (detected automatically)
-- **Node version**: 22.x, matching the `runtime` the adapter requests. The Neon
-  driver needs a global `WebSocket`.
+- **Node version**: 22.x — the same `.node-version` CI uses and the `runtime`
+  the adapter requests (the Neon driver needs a global `WebSocket`; root
+  `package.json` `engines` allows `>=22.18 <23 || >=24`).
+- **Git → Production Branch**: `main`, and **Automatic deployments for the
+  production branch: OFF** — production is promoted by the `deploy` job in
+  `.github/workflows/ci.yml` AFTER the migration job (below). Keep preview
+  deployments ON for pull requests.
+- **Preview environment**: its `DATABASE_URL`/`DIRECT_DATABASE_URL` point at a
+  **Neon branch** (Neon → Branches → create from `main`; or the Neon–Vercel
+  integration's per-preview branches), never at the production database.
+  Set `EMAIL_DRYRUN=true`, mock chat/courier and a test Stripe key there.
 
 `apps/web/vercel.json` ships the cron schedule. `/api/chat`, the four cron
 routes (`chat-prune`, `shipment-sync`, `nurture-send`, `efactura-submit`) and
@@ -770,24 +794,55 @@ e-Factura polls need the **Pro** plan (or an external scheduler curling the
 routes with the bearer, §9). On Hobby the schedules in `vercel.json` are
 silently coalesced to daily.
 
-### CI migrations (GitHub Actions)
+### Ordered deploy (GitHub Actions: gate → migrate → deploy)
 
 Migrations do **not** run during the build — a build is not a deploy, and
-Vercel may run several concurrently. Their home is
-`.github/workflows/migrate.yml`: it applies `apps/web/drizzle/*.sql` on every
-push to `main` (so the schema is current before Vercel promotes that same
-push) and on manual dispatch (Actions → migrate → Run workflow). The job is a
-no-op when the database is already current, serializes concurrent runs, and
-ends by printing the applied-migration list (`pnpm db:status` — runnable from
-any checkout too; it exits non-zero while migrations are pending).
+Vercel may run several concurrently — and production is **not** promoted by
+Vercel's Git integration, because nothing would order that promotion after
+the migration. `.github/workflows/ci.yml` does both, in order, per site:
 
-Wire it once: GitHub repo → Settings → Secrets and variables → Actions → New
-repository secret, name `DIRECT_DATABASE_URL`, value = the site's **unpooled**
-Neon URL (`postgres://…neon.tech/better_sleep?sslmode=require` — not the
-`-pooler` host; DDL through PgBouncer's transaction mode is unreliable).
-Without the secret the workflow fails closed on its first step, before
-installing anything. It deliberately never seeds and never creates users —
-those are one-off human steps below.
+| Job | When | What |
+| --- | --- | --- |
+| `gate` | every PR and push | Postgres 16 + MinIO; lint → check → `db:migrate` on a fresh database → `db:check` → `test:unit` → both builds → `launch:check --target=vercel` against a prod-shaped env. |
+| `e2e` | PRs, non-blocking | `pnpm test:e2e` (report uploaded as an artifact). |
+| `migrate` | `main` only, `needs: gate`, environment `production` | One matrix entry per site in `deploy/sites.json`; `pnpm install --ignore-scripts --filter web`; `pnpm db:migrate` (advisory lock, SQL files, concurrent indexes); `pnpm db:role-timeout`; `pnpm db:status` printed. Fails closed without the site's secret. Never seeds. |
+| `deploy` | `needs: migrate`, per site | `vercel pull --environment=production` → `vercel build --prod` → `vercel deploy --prebuilt --prod`. |
+
+Wire it once (a human):
+
+1. **GitHub secrets** (repo → Settings → Secrets and variables → Actions):
+   `VERCEL_TOKEN` (a Vercel account token), `VERCEL_ORG_ID` (team id), and
+   per site the names `deploy/sites.json` declares — for better-sleep
+   `DIRECT_DATABASE_URL_SLEEP` (the **unpooled** Neon URL,
+   `postgres://…neon.tech/better_sleep?sslmode=require`, not the `-pooler`
+   host: DDL and session locks through PgBouncer are unreliable) and
+   `VERCEL_PROJECT_ID_SLEEP` (project → Settings → General).
+2. **GitHub environment** `production` (repo → Settings → Environments):
+   create it; optionally require a reviewer — then every migrate/deploy waits
+   for a click.
+3. **Branch protection** on `main`: require the `ci / gate` status check and
+   a linear history; pushes to `main` that skip the gate cannot deploy.
+4. **Vercel project**: automatic production deploys OFF (Settings → Git);
+   Build Command `pnpm db:status && pnpm build` (above); Node 22.x;
+   `ENABLE_EXPERIMENTAL_COREPACK=1`; no `NODE_ENV` in the env.
+5. **Watch the first run** end to end (Actions → ci → the push to `main`):
+   gate green → migrate prints the applied list → deploy prints the
+   production URL → `curl /api/health` shows the new commit. The sandbox that
+   built this cannot observe GitHub, so this run is the first real proof.
+
+Adding better-life: one more entry in `deploy/sites.json` (`id`, the two
+secret names, its media and fiscal bucket names) plus those secrets. The
+matrix, the backup workflow and the concurrency groups follow from the file.
+
+**Neon role timeout.** The app's per-connection `SET statement_timeout` is
+not a session guarantee behind Neon's PgBouncer. The migrate job runs
+`pnpm db:role-timeout` (`ALTER ROLE current_user SET statement_timeout =
+'30s'`, idempotent, only the role it connects as); run it yourself once
+after creating the project, and again if you rotate the role.
+
+`pnpm db:status` is runnable from any checkout (non-zero while migrations
+are pending); `pnpm db:migrate` from a checkout is safe alongside CI — both
+take the same advisory lock (`docs/MIGRATIONS.md`).
 
 ### Deploy order
 
@@ -798,6 +853,7 @@ keeps the schema current):
 ```bash
 # from a checkout, with the site's Neon URLs exported:
 DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:migrate
+DIRECT_DATABASE_URL="postgres://…neon.tech/better_sleep?sslmode=require" pnpm db:role-timeout
 DATABASE_URL="…-pooler…" S3_ENDPOINT=… S3_BUCKET=… pnpm seed:base      # pillars, pages, settings, initial content
 DATABASE_URL="…-pooler…" pnpm media:blurhash                           # placeholders for imported media
 DATABASE_URL="…-pooler…" pnpm user:create -- --email you@x.ro --role admin   # prompts for the password
@@ -838,8 +894,9 @@ curl -sS -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/efactur
 §11 applies unchanged. Two additions worth doing on the first serverless
 deploy, because they exercise what this target actually changes:
 
-1. `/api/health` → `{"db":"ok","storage":"ok"}` proves the Neon driver and R2
-   from inside a function.
+1. `/api/health/ready` → `{"status":"ok","checks":{"db":"ok","storage":"ok"},…}`
+   proves the Neon driver and R2 from inside a function; `/api/health`
+   names the commit that is live.
 2. Send a chat message and watch it stream token by token — that proves the
    Node runtime, response streaming and `maxDuration` together.
 

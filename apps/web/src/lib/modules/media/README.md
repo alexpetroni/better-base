@@ -8,7 +8,7 @@ the test suite, so neither needs a transformer container). Pages only ever see
 `ImageSources`, which is identical across all three. See DEPLOYMENT.md §6.
 
 Two barrels: `index.ts` (universal — `<Img>`, validation, types) and `server.ts`
-(providers, storage, services — server-only). See docs/STATE.md § Media.
+(providers, storage, services — server-only). See docs/ARCHITECTURE.md § Media.
 
 Storage layout (`storage.ts`, `validation.ts`, `$lib/server/media-objects.ts`):
 

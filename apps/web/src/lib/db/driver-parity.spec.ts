@@ -12,7 +12,7 @@ import { pillars } from './schema/core.ts';
 // behind the `as unknown as Db` cast in client.ts — the compile-time
 // assertions there guarantee the SURFACE matches; this spec guarantees the
 // BEHAVIOR does. It answers the three unknowns recorded when the neon branch
-// shipped unverified (docs/STATE.md): the `SET statement_timeout` issued on
+// shipped unverified (docs/CHANGELOG.md, NEXT-1): the `SET statement_timeout` issued on
 // connect is honored, interactive transactions (commit AND rollback) work
 // over the WebSocket transport, and the two drivers expose the same runtime
 // API. Plus the pooled-connection reality check: parallel work through the

@@ -1,42 +1,21 @@
-# sv
+# apps/web
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The better-base application (SvelteKit 2, Svelte 5 runes, TypeScript
+strict). Run it from the repo root — the root `README.md` has the
+quickstart, `docs/RUNBOOK.md` every command.
 
-## Creating a project
+- `src/lib/config/` — site configs (`sites/sleep.ts`, `sites/life.ts`), pillars.
+- `src/lib/modules/<name>/` — one folder per feature (schema, services,
+  components) behind `index.ts` / `server.ts` barrels.
+- `src/lib/server/` — cross-cutting server code: hooks helpers, env matrix,
+  launch preflight rules, logging, health, security headers.
+- `src/routes/` — thin routes; `/admin` is the CMS; `/api/cron/*` the
+  scheduled jobs; `/api/health` liveness, `/api/health/ready` readiness.
+- `drizzle/` — committed migrations (`docs/MIGRATIONS.md`).
+- `scripts/` — CLI entry points (`node scripts/<name>.ts`; every one loads
+  the root `.env` through `scripts/env.ts`).
+- `e2e/` — playwright specs against the built preview servers.
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-npx sv@0.16.2 create --template minimal --types ts --add prettier eslint vitest="usages:unit" playwright tailwindcss="plugins:none" sveltekit-adapter="adapter:node" paraglide="languageTags:ro,en+demo:no" --no-download-check --no-install apps/web
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+`vite.config.ts` picks the adapter (`adapter-node` by default, `adapter-vercel`
+when `VERCEL` or `DEPLOY_TARGET=vercel` is set) and bakes the git commit into
+the build for `/api/health`.
