@@ -324,25 +324,36 @@ describe('handleSecurityHeaders (audit 2026-09-03: no security headers / CSP any
  * elsewhere a UUID minted per request.
  */
 describe('request id round-trip (FIX-16)', () => {
-	it('echoes the x-vercel-id as x-request-id and exposes it to the route via locals', async () => {
+	it('mints a UUID, echoes it as x-request-id and exposes it to the route via locals', async () => {
 		let event: { locals: App.Locals } | undefined;
 		const outcome = await runHandle({
 			rawPath: '/blog',
 			routeId: '/(public)/blog',
-			headers: { 'x-vercel-id': 'fra1::abcde-1725000000000-0123456789ab' },
 			onEvent: (e) => (event = e)
 		});
 		expect(outcome.resolved).toBe(true);
-		expect(outcome.response!.headers.get('x-request-id')).toBe(
-			'fra1::abcde-1725000000000-0123456789ab'
-		);
-		expect(event?.locals.requestId).toBe('fra1::abcde-1725000000000-0123456789ab');
+		const echoed = outcome.response!.headers.get('x-request-id');
+		expect(echoed).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+		expect(event?.locals.requestId).toBe(echoed);
 	});
 
-	it('mints a UUID when no platform id is present', async () => {
-		const outcome = await runHandle({ rawPath: '/blog', routeId: '/(public)/blog' });
+	// FIX-17 (FIX-16 review, medium): this process is not a Vercel function
+	// (no VERCEL env), so an x-vercel-id on the request is client-supplied and
+	// must not become our correlation key. Adopting it is Vercel-only —
+	// `resolveRequestId` is unit-tested for that branch.
+	it('ignores a client-supplied x-vercel-id off Vercel (mints a UUID instead)', async () => {
+		let event: { locals: App.Locals } | undefined;
+		const outcome = await runHandle({
+			rawPath: '/blog',
+			routeId: '/(public)/blog',
+			headers: { 'x-vercel-id': 'spoofed-by-client' },
+			onEvent: (e) => (event = e)
+		});
+		expect(outcome.resolved).toBe(true);
+		expect(outcome.response!.headers.get('x-request-id')).not.toBe('spoofed-by-client');
 		expect(outcome.response!.headers.get('x-request-id')).toMatch(
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 		);
+		expect(event?.locals.requestId).toBe(outcome.response!.headers.get('x-request-id'));
 	});
 });
