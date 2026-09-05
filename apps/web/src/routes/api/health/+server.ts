@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { getDb } from '$lib/db';
+import { getChatProvider } from '$lib/modules/chat/server';
 import { getStorage } from '$lib/modules/media/server';
 import { checkHealth } from '$lib/server/health';
 import type { RequestHandler } from './$types';
@@ -17,14 +18,22 @@ function tryConstruct<T>(construct: () => T): T | null {
 	}
 }
 
-/** Ops probe: 200 when db + storage are reachable, 503 otherwise. */
+/**
+ * Ops probe: 200 when db + storage are reachable, 503 otherwise. Also names
+ * the chat provider kind (FIX-14) — the barrel already selected it at boot,
+ * so this cannot throw here.
+ */
 export const GET: RequestHandler = async () => {
 	const report = await checkHealth({
 		db: tryConstruct(getDb),
 		storage: tryConstruct(getStorage)
 	});
 	return json(
-		{ status: report.healthy ? 'ok' : 'degraded', checks: report.checks },
+		{
+			status: report.healthy ? 'ok' : 'degraded',
+			checks: report.checks,
+			chatProvider: getChatProvider().kind
+		},
 		{ status: report.healthy ? 200 : 503, headers: { 'cache-control': 'no-store' } }
 	);
 };

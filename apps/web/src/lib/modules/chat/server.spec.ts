@@ -16,7 +16,9 @@ describe('chat server barrel boot line', () => {
 		const barrel = await import('./server.ts');
 		expect(barrel.getChatProvider().kind).toBe('mock');
 		barrel.getChatProvider();
-		const lines = logSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('chat provider:'));
+		const lines = logSpy.mock.calls
+			.map((c) => String(c[0]))
+			.filter((l) => l.startsWith('chat provider:'));
 		expect(lines).toEqual(['chat provider: mock']);
 	});
 });

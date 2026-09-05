@@ -62,6 +62,9 @@ export function getChatProvider(): ChatProvider {
 						timeoutMs: positiveIntEnv(env.ANTHROPIC_TIMEOUT_MS, ANTHROPIC_TIMEOUT_MS_DEFAULT)
 					})
 				: createMockChatProvider();
+		// One boot line so a mock provider in production is visible in the logs
+		// (FIX-14); /api/health carries the same kind.
+		console.log(`chat provider: ${providerInstance.kind}`);
 	}
 	return providerInstance;
 }

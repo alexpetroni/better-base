@@ -37,6 +37,12 @@ export interface LaunchCheckOptions {
 	 * conditional requirements are still enforced.
 	 */
 	dev?: boolean;
+	/**
+	 * `--allow-mock-providers`: launching a live env (EMAIL_DRYRUN=false) on
+	 * the mock chat and/or courier provider is a deliberate decision, not a
+	 * mistake (FIX-14).
+	 */
+	allowMockProviders?: boolean;
 }
 
 /** Every problem found in `env` for the given target; empty means launch-worthy. */
@@ -112,6 +118,23 @@ export function launchCheckProblems(env: Env, opts: LaunchCheckOptions): string[
 		problems.push(
 			'STRIPE_SECRET_KEY is a TEST key (sk_test_…) in a live env (EMAIL_DRYRUN=false) — set the live key, or keep EMAIL_DRYRUN=true until launch'
 		);
+	}
+
+	// A mock provider in production is otherwise undetectable (audit P2,
+	// FIX-14): the canned assistant answers, the fake courier issues AWBs.
+	if (env.EMAIL_DRYRUN === 'false' && !opts.allowMockProviders) {
+		const chat = env.CHAT_PROVIDER?.trim() || 'mock';
+		if (chat !== 'anthropic') {
+			problems.push(
+				`CHAT_PROVIDER is "${chat}" in a live env (EMAIL_DRYRUN=false) — set anthropic + ANTHROPIC_API_KEY, or pass --allow-mock-providers to launch with the canned assistant on purpose`
+			);
+		}
+		const courier = env.COURIER_PROVIDER?.trim() || 'mock';
+		if (courier !== 'sameday') {
+			problems.push(
+				`COURIER_PROVIDER is "${courier}" in a live env (EMAIL_DRYRUN=false) — set sameday + its credentials, or pass --allow-mock-providers to launch with FAKE AWBs on purpose`
+			);
+		}
 	}
 
 	return problems;

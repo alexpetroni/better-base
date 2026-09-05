@@ -86,7 +86,8 @@ cannot drift — and adds the launch-only rules a running app cannot judge:
 no committed dev default anywhere (secrets, MinIO/compose credentials,
 Stripe webhook dev value), `PUBLIC_SITE_URL` https and matching the
 `SITE_ID`'s domain, live-mode implications (`EMAIL_DRYRUN=false` ⇒
-`RESEND_API_KEY`, no `sk_test_…` key), the Vercel extras
+`RESEND_API_KEY`, no `sk_test_…` key, no mock chat/courier provider unless
+`--allow-mock-providers` acknowledges it), the Vercel extras
 (`DIRECT_DATABASE_URL`, `CRON_SECRET`), and a live image probe: it uploads a
 1×1 PNG with the app's S3 credentials and then asks the selected provider for
 a derivative of it. Under `cloudflare` that means the public origin must
@@ -149,7 +150,7 @@ adapter-node's trust explicitly (env vars, read at runtime):
   to a header your edge does not strip/overwrite from client requests —
   that turns the rate limiter keys client-spoofable.
 
-Health: `GET /api/health` returns `200 {status:'ok'}` when the database and
+Health: `GET /api/health` returns `200 {status:'ok', chatProvider:'anthropic'|'mock'}` when the database and
 the bucket are reachable, `503` otherwise — point your uptime checks and load
 balancer at it. Unhandled errors are logged to stderr as one JSON object per
 line (`ts`, `level`, `errorId`, `status`, `method`, `path`, `message`,

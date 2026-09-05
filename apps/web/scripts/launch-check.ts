@@ -1,4 +1,4 @@
-// Launch preflight — `pnpm launch:check [--dev] [--no-probe] [--target=node|vercel]`.
+// Launch preflight — `pnpm launch:check [--dev] [--no-probe] [--allow-mock-providers] [--target=node|vercel]`.
 //
 // Run it with the TARGET environment's variables exported (exported vars win
 // over the root .env, which is loaded for the local-dev case). It prints a
@@ -16,6 +16,9 @@
 //               database read) for an env-only check, e.g. from CI
 //   --target=…  override the deploy target (default: vercel when VERCEL or
 //               DEPLOY_TARGET=vercel is set, node otherwise)
+//   --allow-mock-providers
+//               acknowledge launching a live env (EMAIL_DRYRUN=false) on the
+//               mock chat and/or courier provider (FIX-14)
 //
 // The env rules live in src/lib/server/launch-check.ts (variable list from the
 // same env-matrix.ts declaration the boot validator uses); the site-settings
@@ -32,11 +35,14 @@ import {
 } from '../src/lib/server/launch-check.ts';
 import type { DeployTarget } from '../src/lib/server/env-matrix.ts';
 
-const USAGE = 'Usage: pnpm launch:check [--dev] [--no-probe] [--target=node|vercel]';
+const USAGE =
+	'Usage: pnpm launch:check [--dev] [--no-probe] [--allow-mock-providers] [--target=node|vercel]';
 
 const args = new Set(process.argv.slice(2));
 const dev = args.delete('--dev');
 const noProbe = args.delete('--no-probe');
+// A live env on the mock chat/courier provider is refused unless acknowledged.
+const allowMockProviders = args.delete('--allow-mock-providers');
 let target: DeployTarget | undefined;
 for (const arg of [...args]) {
 	if (!arg.startsWith('--target=')) continue;
@@ -58,7 +64,7 @@ const env = process.env;
 const resolvedTarget: DeployTarget =
 	target ?? (env.VERCEL || env.DEPLOY_TARGET === 'vercel' ? 'vercel' : 'node');
 
-const problems = launchCheckProblems(env, { target: resolvedTarget, dev });
+const problems = launchCheckProblems(env, { target: resolvedTarget, dev, allowMockProviders });
 
 const notes: string[] = [];
 const probeBlocker = noProbe ? '--no-probe' : imageProbeBlocker(env);

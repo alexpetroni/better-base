@@ -133,7 +133,11 @@ list applies later to better-life (with its own domain/accounts).
       invoice was issued before this bucket existed, run
       `pnpm storage:fiscal-migrate` once with the prod env.
 - [ ] `CHAT_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` set (or a conscious
-      decision to launch with the widget off / mock).
+      decision to launch with the widget off / mock). `pnpm launch:check`
+      refuses a live env (`EMAIL_DRYRUN=false`) still on the mock chat or
+      courier provider unless `--allow-mock-providers` is passed; the boot
+      log prints `chat provider: <kind>` and `GET /api/health` returns it as
+      `chatProvider`, so verify the deployed kind there.
 - [ ] `COURIER_PROVIDER=sameday` + `SAMEDAY_USERNAME`/`SAMEDAY_PASSWORD`/
       `SAMEDAY_PICKUP_POINT` set from the courier contract (DEPLOYMENT.md §2,
       §7 "Shipping"). The mock default generates FAKE AWBs — fine for
